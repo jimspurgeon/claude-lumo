@@ -17,13 +17,13 @@ The status line always shows which one you're on: `[CLAUDE] Opus 5.5` or `[LUMO]
 On **Windows** (PowerShell — no bash or Git needed first):
 
 ```powershell
-irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.ps1 | iex
 ```
 
 On **macOS / Linux** (any terminal):
 
 ```bash
-curl -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/main/install.sh | bash
+curl -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.sh | bash
 ```
 
 Both installers check for and auto-install any missing prerequisite (Git,
@@ -106,12 +106,12 @@ claude-lumo -p "reply with pong"
 Easy way — grab the uninstaller from this repo:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/main/uninstall.sh | bash
+curl -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/uninstall.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/main/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/uninstall.ps1 | iex
 ```
 
 Or run `bash uninstall.sh` / `powershell -File uninstall.ps1` from a clone of the repo.
@@ -135,7 +135,9 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | `claude-lumo: command not found` after install | Close and reopen your terminal (PATH refresh), or add `$HOME/.local/bin` / `$APPDATA/npm` to PATH manually. |
 | `ECONNREFUSED` mid-response | Proxy or LiteLLM crashed. Run any `claude-lumo` command again — it restarts both automatically. |
 | 401 from Lumo | Log in again at lumo.proton.me in your browser; the proxy picks up the fresh cookie by itself. |
-| "Slow thinking" or stuck at 5 min | Normal on lumo-max (~16 tok/s, minutes-long reasoning). Not a hang. |
+| "Slow thinking" or stuck at 5 min | Normal on lumo-max (~16 tok/s, minutes-long reasoning). Not a hang if requests keep finishing: `proxy/proxy.log` logs each one, and `curl 127.0.0.1:8790/v1/debug/live` shows what is in flight. `LUMO_CAPTURE=1` on the proxy saves raw requests and streams to `proxy/debug/`. |
+| "Invalid tool parameters" on parallel tool calls | Fixed in the proxy (it splits tool calls LiteLLM would merge). If it returns after a LiteLLM upgrade, check `splitToolCallChunks` in `proxy/proxy.mjs`. |
+| Edit blocked with "Closest text is lines ..." | The edit hook caught an old_string that is not in the file; the model should retry with the text it shows. |
 | `python` / `python3` not found | Install Python 3.12+. On Windows, make sure it's added to PATH during installation. |
 | "No Lumo login found" | Log in at lumo.proton.me in a supported browser, or use the manual `login.json` fallback above. |
 | `NODE_ENV` warning | Ignore harmless warnings about NODE_ENV from LiteLLM. |
@@ -166,13 +168,27 @@ re-running the installer is always safe (it skips what already exists).
 | `uninstall.sh` | Removes everything claude-lumo added; plain `claude` untouched |
 | `uninstall.ps1` | Windows entry-point for the uninstaller |
 | `claude-lumo.sh` | Launcher: starts proxy and LiteLLM if down, then runs Claude Code |
-| `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution |
-| `LUMO.md` | Appended to the system prompt: brief routing notes for Lumo models |
-| `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line |
-| `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair |
+| `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, edit hook, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
+| `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
+| `hooks/edit-assist.py` | When an Edit's old text is not in the file, blocks it and shows the model the closest real text, so the retry copies it instead of guessing again |
+| `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; chains to `statusline-next.sh` from your personal additions if present |
+| `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair (splits multi-tool-call chunks that LiteLLM would merge), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
 | `proxy/creds.mjs` | Reads Lumo login from any browser's cookies (Firefox, Chrome, Edge, Brave, Vivaldi, Opera) |
 | `proxy/litellm.yaml` | LiteLLM route table |
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 
 Runtime state (not in the repo): `~/.claude-lumo/` holds the LiteLLM venv, a random
-local key, and logs.
+local key, logs, and the settings and system prompt rendered at each launch.
+
+## Personal additions
+
+Keep your own Lumo-only instructions out of this repo, in `~/.claude/lumo-local/` (or the
+folder named by `CLAUDE_LUMO_LOCAL`). claude-lumo picks up, if present:
+
+| File | Effect |
+|---|---|
+| `LUMO.md` | Appended to the system prompt after this repo's `LUMO.md` (your agent names, project rules) |
+| `statusline-next.sh` | Run with the same status-line JSON after `[LUMO]` is printed, for tools that read the status line (for example Orca); its output is ignored |
+
+Instructions for every session, Claude or Lumo, belong in `~/.claude/CLAUDE.md` as usual.
+The uninstaller leaves this folder alone.

@@ -4,7 +4,15 @@
 # Needs: Git, Node 22.13+, Python 3.12+ (`python` or `python3`), Firefox/Chrome/Edge/Safari
 # logged in to lumo.proton.me. Auto-installs Claude Code if missing.
 set -e
-SRC="$(cd "$(dirname "$0")" && pwd)"
+# SRC is the folder this script came from, but only when that folder really is claude-lumo. When
+# piped (`curl ... | bash`) there is no such folder: $0 is "bash" and dirname would be the current
+# directory, so SRC stays empty and the repo is cloned below instead of copying the cwd.
+SRC=""
+_self="${BASH_SOURCE[0]:-}"
+if [ -n "$_self" ] && [ -f "$(dirname "$_self")/claude-lumo.sh" ]; then
+  SRC="$(cd "$(dirname "$_self")" && pwd)"
+fi
+REPO_URL="https://github.com/jimspurgeon/claude-lumo"
 D="$HOME/.claude/lumo"; S="$HOME/.claude-lumo"; VENV="$S/litellm-venv"
 
 PY="python"
@@ -83,20 +91,22 @@ echo "Prerequisites check complete."
 
 mkdir -p "$S" "$BIN"
 
-# Copy this folder's files into ~/.claude/lumo (skip the .git dir if run from a clone).
-if [ "$SRC" != "$D" ]; then
-  mkdir -p "$D"
-  cp -r "$SRC"/. "$D"/
-  rm -rf "$D/.git"
-fi
-
-# Self-update: if the installed copy is a git clone, pull the latest before rebuilding.
-# (Fresh installs via the curl one-liner always get the latest; this makes
-# `bash ~/.claude/lumo/install.sh` an updater too.)
+# Get the files into ~/.claude/lumo. The recommended install is a git clone there, so
+# `git -C ~/.claude/lumo pull` (or re-running this script) updates it.
 if [ -d "$D/.git" ]; then
-  git -C "$D" pull --ff-only 2>/dev/null || echo "Note: could not update from git (offline?); installing current files."
-elif [ "$SRC" = "$D" ]; then
-  echo "Tip: to update, re-run the install one-liner from the README (this copy has no git history)."
+  # Already a clone: update it, never overwrite it from another folder.
+  git -C "$D" pull --ff-only 2>/dev/null || echo "Note: could not update from git (offline, or local changes); installing current files."
+elif [ -z "$SRC" ]; then
+  # Piped install: clone.
+  if [ -e "$D" ] && [ -n "$(ls -A "$D" 2>/dev/null)" ]; then
+    echo "$D exists and is not a git clone. Move it aside, then re-run." >&2; exit 1
+  fi
+  git clone -q "$REPO_URL" "$D"
+elif [ "$SRC" != "$D" ]; then
+  # Run from an unzipped release or another clone: copy the files (not .git).
+  mkdir -p "$D"
+  (cd "$SRC" && tar --exclude=.git -cf - .) | (cd "$D" && tar -xf -)
+  echo "Tip: for easy updates, install as a clone instead: git clone $REPO_URL ~/.claude/lumo"
 fi
 
 if [ ! -x "$LITELLM" ]; then
@@ -105,14 +115,8 @@ if [ ! -x "$LITELLM" ]; then
 fi
 [ -s "$S/master.key" ] || "$PY" -c "import secrets;print('sk-lumo-'+secrets.token_hex(24))" > "$S/master.key"
 
-# Point the status line at this machine's install path (forward slashes work everywhere).
-"$PY" - "$D" <<'PY'
-import json, sys
-p = sys.argv[1].replace("\\", "/") + "/settings-lumo.json"
-with open(p) as f: cfg = json.load(f)
-cfg["statusLine"]["command"] = "python " + sys.argv[1].replace("\\", "/") + "/statusline.py"
-with open(p, "w") as f: json.dump(cfg, f, indent=2)
-PY
+# No per-machine edits to tracked files: claude-lumo.sh fills in this machine's paths at launch
+# (into ~/.claude-lumo/settings.json), so a git clone stays clean and `git pull` keeps working.
 
 # Put claude-lumo on PATH. In a bash shell:
 printf '#!/bin/sh\nexec bash "$HOME/.claude/lumo/claude-lumo.sh" "$@"\n' > "$BIN/claude-lumo"

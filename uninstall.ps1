@@ -31,7 +31,7 @@ if (Test-Path (Join-Path $PSScriptRoot 'uninstall.sh')) {
   $script = Join-Path $PSScriptRoot 'uninstall.sh'
   & $gitExe -lc '"$0" "$@"' $script "$args"
 } else {
-  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/main/uninstall.sh | & $gitExe -
+  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/uninstall.sh | & $gitExe -
 }
 
 Write-Host ''

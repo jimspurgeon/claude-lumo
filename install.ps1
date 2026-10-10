@@ -36,7 +36,7 @@ if (Test-Path (Join-Path $PSScriptRoot 'install.sh')) {
   & $gitExe -lc '"$0" "$@"' $script "$args"
 } else {
   # Bootstrap the latest install.sh from GitHub
-  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/main/install.sh | & $gitExe -
+  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.sh | & $gitExe -
 }
 
 Write-Host ''

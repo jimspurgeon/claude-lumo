@@ -4,9 +4,11 @@
 # format) -> lumo proxy :8790 -> Lumo. Plain `claude` is untouched.
 # Works on Windows (Git Bash), macOS and Linux.
 D="$HOME/.claude/lumo"; PROXY="$HOME/.claude/lumo/proxy"; S="$HOME/.claude-lumo"; VENV="$S/litellm-venv"
+# Optional personal additions, kept outside this repo (see README, "Personal additions").
+LOCAL="${CLAUDE_LUMO_LOCAL:-$HOME/.claude/lumo-local}"
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) LITELLM="$VENV/Scripts/litellm.exe";;
-  *) LITELLM="$VENV/bin/litellm";;
+  MINGW*|MSYS*|CYGWIN*) LITELLM="$VENV/Scripts/litellm.exe"; PY=python; native() { cygpath -m "$1"; };;
+  *) LITELLM="$VENV/bin/litellm"; PY=$(command -v python3 >/dev/null && echo python3 || echo python); native() { echo "$1"; };;
 esac
 up() { curl -s -o /dev/null -m 2 -w '%{http_code}' "$1" 2>/dev/null | grep -q 200; }
 if ! up http://127.0.0.1:8790/v1/health; then
@@ -19,5 +21,15 @@ if ! up http://127.0.0.1:4000/health/liveliness; then
   for i in $(seq 1 45); do up http://127.0.0.1:4000/health/liveliness && break; sleep 1; done
   up http://127.0.0.1:4000/health/liveliness || { echo "claude-lumo: LiteLLM did not start, see $S/litellm.log" >&2; exit 1; }
 fi
-export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1
-exec claude --settings "$D/settings-lumo.json" --append-system-prompt-file "$D/LUMO.md" "$@"
+
+# Render this machine's settings and system prompt into ~/.claude-lumo, so the tracked files in
+# this repo are never modified (a clean clone keeps `git pull` working). Written to a temp file
+# and moved, because several sessions may start at once.
+mkdir -p "$S"
+sed -e "s#{{LUMO_DIR}}#$(native "$D")#g" -e "s#{{PYTHON}}#$PY#g" "$D/settings-lumo.json" > "$S/settings.json.$$" \
+  && mv -f "$S/settings.json.$$" "$S/settings.json"
+{ cat "$D/LUMO.md"; [ -f "$LOCAL/LUMO.md" ] && { printf '\n\n'; cat "$LOCAL/LUMO.md"; }; } > "$S/system-prompt.md.$$" \
+  && mv -f "$S/system-prompt.md.$$" "$S/system-prompt.md"
+
+export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL"
+exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "$@"
