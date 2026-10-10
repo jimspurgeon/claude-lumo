@@ -1,13 +1,21 @@
-// Reads the live Lumo login (AUTH-<uid> cookie) from Firefox, like pi-lumo does.
+// Reads the live Lumo login (AUTH-<uid> cookie) from Firefox (or LibreWolf).
 // Copies cookies.sqlite (+ -wal) to a temp dir so Firefox's lock is never touched.
+// Works on Windows, macOS and Linux.
 import { DatabaseSync } from "node:sqlite";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, homedir, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const roots = [process.env.LUMO_FIREFOX_PROFILE,
+  // Windows
   process.env.APPDATA && join(process.env.APPDATA, "Mozilla", "Firefox", "Profiles"),
-  process.env.APPDATA && join(process.env.APPDATA, "LibreWolf", "Profiles")].filter(Boolean);
+  process.env.APPDATA && join(process.env.APPDATA, "LibreWolf", "Profiles"),
+  // macOS
+  join(homedir(), "Library", "Application Support", "Firefox", "Profiles"),
+  join(homedir(), "Library", "Application Support", "LibreWolf", "Profiles"),
+  // Linux
+  join(homedir(), ".mozilla", "firefox"),
+  join(homedir(), ".librewolf")].filter(Boolean);
 
 function databases() {
   const out = [];
