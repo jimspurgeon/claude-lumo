@@ -1,0 +1,26 @@
+{
+  "model": "lumo-max",
+  "autoCompactWindow": 100000,
+  "env": {
+    "CLAUDE_LUMO": "1",
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+    "ANTHROPIC_MODEL": "lumo-max",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "lumo-max",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "lumo-lite",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "lumo-lite",
+    "ANTHROPIC_SMALL_FAST_MODEL": "lumo-lite",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "lumo-lite",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python statusline.py"
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeCoAuthoredBy": false
+}

@@ -1,0 +1,18 @@
+# Anthropic-format gateway for Claude Code on Lumo (claude-lumo launcher).
+# Claude Code -> LiteLLM :4000 (/v1/messages) -> lumo proxy :8790 (OpenAI format) -> Lumo.
+# Every model name Claude Code asks for (opus, sonnet, fable pins, subagents) maps to Lumo;
+# names containing "haiku" or "lite" go to lumo-lite.
+model_list:
+  - model_name: lumo-lite
+    litellm_params: { model: hosted_vllm/lumo-lite, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+  - model_name: "*haiku*"
+    litellm_params: { model: hosted_vllm/lumo-lite, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+  - model_name: lumo-max
+    litellm_params: { model: hosted_vllm/lumo-max, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+  - model_name: "*"
+    litellm_params: { model: hosted_vllm/lumo-max, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+litellm_settings:
+  drop_params: true
+  request_timeout: 900
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
