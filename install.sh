@@ -90,6 +90,15 @@ if [ "$SRC" != "$D" ]; then
   rm -rf "$D/.git"
 fi
 
+# Self-update: if the installed copy is a git clone, pull the latest before rebuilding.
+# (Fresh installs via the curl one-liner always get the latest; this makes
+# `bash ~/.claude/lumo/install.sh` an updater too.)
+if [ -d "$D/.git" ]; then
+  git -C "$D" pull --ff-only 2>/dev/null || echo "Note: could not update from git (offline?); installing current files."
+elif [ "$SRC" = "$D" ]; then
+  echo "Tip: to update, re-run the install one-liner from the README (this copy has no git history)."
+fi
+
 if [ ! -x "$LITELLM" ]; then
   "$PY" -m venv "$VENV"
   "$VP" -m pip install -q -r "$D/requirements.txt"
