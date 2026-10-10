@@ -18,20 +18,6 @@
     "type": "command",
     "command": "{{PYTHON}} {{LUMO_DIR}}/statusline.py"
   },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/edit-assist.py",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  },
   "attribution": {
     "commit": "",
     "pr": ""

@@ -37,8 +37,8 @@ retry it on lite.
   failed edits on one spot, rewrite the whole function.
 - Never rebuild old_string from memory of what you wrote earlier, even a few steps ago: after
   your own Write or Edit to a file, Read the lines again before the next Edit there.
-- If an Edit is blocked with "Closest text is lines ...", copy old_string from between the
-  <<< >>> markers in that message.
+- If a failed Edit carries a "[claude-lumo]" note with the closest text, copy old_string from
+  between the <<< >>> markers in that note.
 - Write on a file that already exists (including one made with Bash: cp, mv, git, a heredoc)
   fails until you Read it in this session. Read it first, or use Edit.
 - Tool input must be valid JSON. If a tool call is rejected as invalid, send the calls

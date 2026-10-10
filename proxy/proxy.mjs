@@ -5,10 +5,12 @@
 //   (default 240s), before any bytes are streamed (2 retries, backoff).
 // - Logs time-to-first-byte and duration of every chat request to proxy.log.
 // - Streams responses (SSE) through, splitting multi-tool-call chunks (see splitToolCallChunks). Listens on 127.0.0.1 only.
+// - Adds the closest real text to failed Edit results, so the retry copies it (see edit-hints.mjs).
 import http from "node:http";
 import { appendFileSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readLumoCredentials } from "./creds.mjs";
+import { addEditHints } from "./edit-hints.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
@@ -100,7 +102,8 @@ http.createServer(async (req, res) => {
   }
   if (path === "/health") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: true, creds: !!creds })); }
   const chunks = []; for await (const c of req) chunks.push(c);
-  const body = chunks.length ? Buffer.concat(chunks) : undefined;
+  let body = chunks.length ? Buffer.concat(chunks) : undefined;
+  if (body && path.startsWith("/chat")) body = addEditHints(body);
   const headers = {}; for (const h of ["content-type", "accept"]) if (req.headers[h]) headers[h] = req.headers[h];
   const t0 = Date.now(); let tFirst = 0, bytes = 0;
   try {

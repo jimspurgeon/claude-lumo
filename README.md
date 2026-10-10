@@ -137,7 +137,7 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | 401 from Lumo | Log in again at lumo.proton.me in your browser; the proxy picks up the fresh cookie by itself. |
 | "Slow thinking" or stuck at 5 min | Normal on lumo-max (~16 tok/s, minutes-long reasoning). Not a hang if requests keep finishing: `proxy/proxy.log` logs each one, and `curl 127.0.0.1:8790/v1/debug/live` shows what is in flight. `LUMO_CAPTURE=1` on the proxy saves raw requests and streams to `proxy/debug/`. |
 | "Invalid tool parameters" on parallel tool calls | Fixed in the proxy (it splits tool calls LiteLLM would merge). If it returns after a LiteLLM upgrade, check `splitToolCallChunks` in `proxy/proxy.mjs`. |
-| Edit blocked with "Closest text is lines ..." | The edit hook caught an old_string that is not in the file; the model should retry with the text it shows. |
+| Failed Edit with a "[claude-lumo]" note | The proxy added the closest real text to an Edit whose old text was not in the file; the model should retry with the text between the markers. |
 | `python` / `python3` not found | Install Python 3.12+. On Windows, make sure it's added to PATH during installation. |
 | "No Lumo login found" | Log in at lumo.proton.me in a supported browser, or use the manual `login.json` fallback above. |
 | `NODE_ENV` warning | Ignore harmless warnings about NODE_ENV from LiteLLM. |
@@ -168,12 +168,12 @@ re-running the installer is always safe (it skips what already exists).
 | `uninstall.sh` | Removes everything claude-lumo added; plain `claude` untouched |
 | `uninstall.ps1` | Windows entry-point for the uninstaller |
 | `claude-lumo.sh` | Launcher: starts proxy and LiteLLM if down, then runs Claude Code |
-| `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, edit hook, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
+| `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
 | `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
-| `hooks/edit-assist.py` | When an Edit's old text is not in the file, blocks it and shows the model the closest real text, so the retry copies it instead of guessing again |
 | `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours |
 | `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; chains to `statusline-next.sh` from your personal additions if present |
 | `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair (splits multi-tool-call chunks that LiteLLM would merge), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
+| `proxy/edit-hints.mjs` | Adds the closest real text to a failed Edit (and a reminder to Read before Edit or Write), so the retry copies it instead of guessing again. Claude Code checks edits before any hook runs, so this has to live in the proxy |
 | `proxy/creds.mjs` | Reads Lumo login from any browser's cookies (Firefox, Chrome, Edge, Brave, Vivaldi, Opera) |
 | `proxy/litellm.yaml` | LiteLLM route table |
 | `requirements.txt` | Just `litellm[proxy]` pinned |
