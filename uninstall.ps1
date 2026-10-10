@@ -27,9 +27,10 @@ if (-not (Test-Path $gitExe)) {
 Write-Host ''
 Write-Host 'Running uninstall.sh (bash)...'
 
-if (Test-Path (Join-Path $PSScriptRoot 'uninstall.sh')) {
-  $script = Join-Path $PSScriptRoot 'uninstall.sh'
-  & $gitExe -lc '"$0" "$@"' $script "$args"
+# ($PSScriptRoot is empty when piped through `irm ... | iex`, and Join-Path '' would throw.)
+$localSh = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'uninstall.sh' } else { $null }
+if ($localSh -and (Test-Path $localSh)) {
+  & $gitExe -lc '"$0" "$@"' $localSh "$args"
 } else {
   curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/uninstall.sh | & $gitExe -
 }

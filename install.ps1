@@ -30,10 +30,11 @@ if (-not (Test-Path $gitExe)) {
 Write-Host ''
 Write-Host 'Running install.sh (bash)...'
 
-# If this script lives inside a repo clone, run the local install.sh
-if (Test-Path (Join-Path $PSScriptRoot 'install.sh')) {
-  $script = Join-Path $PSScriptRoot 'install.sh'
-  & $gitExe -lc '"$0" "$@"' $script "$args"
+# If this script lives inside a repo clone, run the local install.sh.
+# ($PSScriptRoot is empty when piped through `irm ... | iex`, and Join-Path '' would throw.)
+$localSh = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'install.sh' } else { $null }
+if ($localSh -and (Test-Path $localSh)) {
+  & $gitExe -lc '"$0" "$@"' $localSh "$args"
 } else {
   # Bootstrap the latest install.sh from GitHub
   curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.sh | & $gitExe -
