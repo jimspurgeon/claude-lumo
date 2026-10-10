@@ -22,14 +22,16 @@ if ! up http://127.0.0.1:4000/health/liveliness; then
   up http://127.0.0.1:4000/health/liveliness || { echo "claude-lumo: LiteLLM did not start, see $S/litellm.log" >&2; exit 1; }
 fi
 
-# Render this machine's settings and system prompt into ~/.claude-lumo, so the tracked files in
-# this repo are never modified (a clean clone keeps `git pull` working). Written to a temp file
-# and moved, because several sessions may start at once.
-mkdir -p "$S"
-sed -e "s#{{LUMO_DIR}}#$(native "$D")#g" -e "s#{{PYTHON}}#$PY#g" "$D/settings-lumo.json" > "$S/settings.json.$$" \
-  && mv -f "$S/settings.json.$$" "$S/settings.json"
-{ cat "$D/LUMO.md"; [ -f "$LOCAL/LUMO.md" ] && { printf '\n\n'; cat "$LOCAL/LUMO.md"; }; } > "$S/system-prompt.md.$$" \
-  && mv -f "$S/system-prompt.md.$$" "$S/system-prompt.md"
+# Render this machine's settings and system prompt into ~/.claude-lumo, merging the optional
+# personal additions in $LOCAL over ours (see render.py). Tracked files here are only read, so a
+# clone stays clean and `git pull` keeps working.
+"$PY" "$(native "$D")/render.py" "$(native "$D")" "$(native "$S")" "$(native "$LOCAL")" "$PY" \
+  || { echo "claude-lumo: could not build settings (render.py failed)" >&2; exit 1; }
+
+# Personal changes belong in $LOCAL, not here: a pull would conflict with or overwrite them.
+if [ -d "$D/.git" ] && [ -n "$(git -C "$D" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  echo "claude-lumo: note: $D has local edits; updates may conflict. Put personal changes in $LOCAL instead." >&2
+fi
 
 export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL"
 exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "$@"

@@ -171,6 +171,7 @@ re-running the installer is always safe (it skips what already exists).
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, edit hook, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
 | `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
 | `hooks/edit-assist.py` | When an Edit's old text is not in the file, blocks it and shows the model the closest real text, so the retry copies it instead of guessing again |
+| `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours |
 | `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; chains to `statusline-next.sh` from your personal additions if present |
 | `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair (splits multi-tool-call chunks that LiteLLM would merge), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
 | `proxy/creds.mjs` | Reads Lumo login from any browser's cookies (Firefox, Chrome, Edge, Brave, Vivaldi, Opera) |
@@ -182,13 +183,17 @@ local key, logs, and the settings and system prompt rendered at each launch.
 
 ## Personal additions
 
-Keep your own Lumo-only instructions out of this repo, in `~/.claude/lumo-local/` (or the
-folder named by `CLAUDE_LUMO_LOCAL`). claude-lumo picks up, if present:
+Keep your own changes out of this repo, in `~/.claude/lumo-local/` (or the folder named by
+`CLAUDE_LUMO_LOCAL`). Never edit the files in `~/.claude/lumo` itself: they belong to this repo,
+and an update would conflict with or overwrite them (the launcher warns when that clone has local
+edits). claude-lumo only reads the personal folder; installing, updating and uninstalling never
+write to it or delete it. Everything is optional, and your files win over ours:
 
 | File | Effect |
 |---|---|
+| `settings.json` | Merged over `settings-lumo.json` at each launch: objects merge key by key, lists are appended (your hooks and permissions add to ours), anything else is replaced. Invalid JSON is skipped with a warning |
 | `LUMO.md` | Appended to the system prompt after this repo's `LUMO.md` (your agent names, project rules) |
 | `statusline-next.sh` | Run with the same status-line JSON after `[LUMO]` is printed, for tools that read the status line (for example Orca); its output is ignored |
 
+Keep that folder under your own version control (a private repo) if you want it backed up.
 Instructions for every session, Claude or Lumo, belong in `~/.claude/CLAUDE.md` as usual.
-The uninstaller leaves this folder alone.
