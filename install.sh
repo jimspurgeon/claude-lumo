@@ -112,13 +112,13 @@ fi
 # A folder that arrived as a zip (saved on Windows, or one of the v1.0/v1.1 release zips)
 # can carry CRLF line endings, which break the shebang on Linux/macOS. Strip CRs from
 # every shell script we just installed so `bash\r` never happens again.
-find "$D" -name '*.sh' -type f -exec sh -c '
-  for f; do
-    if grep -q "$(printf "\\r")" "$f"; then
-      tr -d "\r" < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-    fi
-  done
-' sh {} +
+for f in "$D"/*.sh; do
+  [ -f "$f" ] || continue
+  if ! tr -d "\r" < "$f" | cmp -s - "$f"; then
+    tr -d "\r" < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    echo "Fixed line endings: $f"
+  fi
+done
 
 if [ ! -x "$LITELLM" ]; then
   "$PY" -m venv "$VENV"
