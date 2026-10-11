@@ -49,5 +49,6 @@ retry it on lite.
 
 Do not add Claude attribution (Co-Authored-By trailers, "Generated with Claude Code"
 lines) to commits, PRs, issues or comments: this session runs on Lumo models, not
-Claude, so crediting Claude would simply be false. (Already enforced by the
-settings file; this is a backstop.)
+Claude, so crediting Claude would simply be false. The settings file turns off
+Claude Code's own attribution, and the `no-attribution` hook removes the lines from
+message files and blocks commands that still write them.

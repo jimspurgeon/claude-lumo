@@ -18,6 +18,20 @@
     "type": "command",
     "command": "{{PYTHON}} {{LUMO_DIR}}/statusline.py"
   },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/no-attribution.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
   "attribution": {
     "commit": "",
     "pr": ""
