@@ -4,13 +4,16 @@
 // - Retries connection errors, 429 (honouring Retry-After, max 30s), 5xx, and requests with no response within LUMO_FIRST_BYTE_MS
 //   (default 240s), before any bytes are streamed (2 retries, backoff).
 // - Logs time-to-first-byte and duration of every chat request to proxy.log.
-// - Streams responses (SSE) through, splitting multi-tool-call chunks (see splitToolCallChunks). Listens on 127.0.0.1 only.
+// - Streams responses (SSE) through, re-emitting tool calls one per chunk (see splitToolCallChunks). Listens on 127.0.0.1 only.
+// - Holds tool calls until the stream ends and checks them; a lost or broken call is repaired or
+//   retried once, else the turn ends with a visible message (see tool-guard.mjs, issue #11).
 // - Adds the closest real text to failed Edit results, so the retry copies it (see edit-hints.mjs).
 import http from "node:http";
 import { appendFileSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readLumoCredentials } from "./creds.mjs";
 import { addEditHints } from "./edit-hints.mjs";
+import { createToolGuard } from "./tool-guard.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
@@ -68,26 +71,29 @@ async function upstream(path, method, body, headers) {
 
 // Lumo can stream several parallel tool calls in one SSE chunk. LiteLLM's OpenAI->Anthropic
 // translation reads only one tool call per chunk and glues the rest onto it ({..}{..}), which
-// Claude Code rejects as invalid tool input. Re-emit such chunks as one tool call per chunk.
+// Claude Code rejects as invalid tool input. The tool guard holds tool calls back and re-emits
+// them at the end of the stream, one complete call per chunk.
 // Also tallies each stream (reasoning/content size, tool calls, finish reason) for the log line.
 function splitToolCallChunks() {
   let buf = "";
   const stats = { reasoning: "", content: 0, tools: 0, finish: "" };
+  const guard = createToolGuard();
   const fix = (line) => {
-    if (!line.startsWith("data:") || line.startsWith("data:[DONE]")) return line;
+    if (!line.startsWith("data:") || line.startsWith("data:[DONE]")) return guard.line(line);
     let d; try { d = JSON.parse(line.slice(5)); } catch { return line; }
     const c = d.choices?.[0], calls = c?.delta?.tool_calls;
     if (c?.delta?.reasoning) stats.reasoning += c.delta.reasoning;
     if (c?.delta?.content) stats.content += c.delta.content.length;
     if (Array.isArray(calls)) stats.tools += calls.filter((x) => x.id).length;
     if (c?.finish_reason) stats.finish = c.finish_reason;
-    if (!Array.isArray(calls) || calls.length < 2) return line;
-    return calls.map((tc, i) => "data:" + JSON.stringify({ ...d, choices: [{ ...c, delta: { ...c.delta, content: i ? null : c.delta.content, tool_calls: [tc] }, finish_reason: i === calls.length - 1 ? c.finish_reason : null }] })).join("\n\n");
+    return guard.line(line);
   };
   return {
     push(text) { buf += text; const i = buf.lastIndexOf("\n"); if (i < 0) return ""; const done = buf.slice(0, i + 1); buf = buf.slice(i + 1); return done.split("\n").map(fix).join("\n"); },
     end() { const rest = fix(buf); buf = ""; return rest; },
+    finish: (retry) => guard.end(retry),
     stats,
+    guard: guard.stats,
   };
 }
 
@@ -119,12 +125,16 @@ http.createServer(async (req, res) => {
       if (up.body) for await (const c of up.body) { if (!tFirst) tFirst = Date.now(); bytes += c.length; row.bytes = bytes; row.last = Date.now(); if (process.env.LUMO_CAPTURE) row.raw = (row.raw || "") + (row.dec2 ||= new TextDecoder()).decode(c, { stream: true }); res.write(sse ? sse.push(dec.decode(c, { stream: true })) : c); }
     } finally { live.delete(row.id); }
     if (process.env.LUMO_CAPTURE && sse) { try { mkdirSync(DEBUG, { recursive: true }); writeFileSync(join(DEBUG, `cap-${row.id}.req.json`), body); writeFileSync(join(DEBUG, `cap-${row.id}.sse`), row.raw || ""); } catch {} }
-    if (sse) res.write(sse.end() + dec.decode());
+    if (sse) {
+      res.write(sse.end() + dec.decode());
+      // A lost tool call is retried with the same request; only its tool calls are forwarded.
+      res.write(await sse.finish(async () => { const r = await upstream(path, req.method, body, headers); return r.ok ? await r.text() : ""; }));
+    }
     res.end();
     let extra = "";
     if (sse) {
       const s = sse.stats; let req = {}; try { req = JSON.parse(body); } catch {}
-      extra = ` model=${req.model} max_tokens=${req.max_tokens ?? req.max_completion_tokens ?? "-"} reasoning=${s.reasoning.length}c content=${s.content}c tools=${s.tools} finish=${s.finish || "none"}`;
+      extra = ` model=${req.model} max_tokens=${req.max_tokens ?? req.max_completion_tokens ?? "-"} reasoning=${s.reasoning.length}c content=${s.content}c tools=${s.tools} finish=${s.finish || "none"} dropped_tool=${sse.guard.dropped} repaired_tool=${sse.guard.repaired} tool_retry=${sse.guard.retry}`;
       if (s.reasoning.length > 30000) {
         const f = join(DEBUG, `${new Date().toISOString().replace(/[:.]/g, "-")}.txt`);
         try { mkdirSync(DEBUG, { recursive: true }); writeFileSync(f, s.reasoning); extra += ` dump=${f}`; } catch {}
