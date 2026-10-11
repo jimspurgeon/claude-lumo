@@ -159,6 +159,17 @@ lumo.proton.me.
 Nothing is stored in the repo or sent anywhere else: no credentials in any file, and
 re-running the installer is always safe (it skips what already exists).
 
+## Hook tombstone policy
+
+Hook scripts referenced in `settings-lumo.json` are part of the interface for running
+sessions. When retiring a hook, leave a tombstone that reads stdin and exits 0 silently
+(see `hooks/edit-assist.py` as an example). This prevents sessions started before the
+update from failing when they re-read their hook configuration.
+
+Before each release, run `python scripts/check-hook-tombstones.py` to verify that all
+hook files ever referenced in git history still exist (either as active hooks or
+tombstones).
+
 ## Files
 
 | File | What it does |
@@ -177,6 +188,7 @@ re-running the installer is always safe (it skips what already exists).
 | `proxy/creds.mjs` | Reads Lumo login from any browser's cookies (Firefox, Chrome, Edge, Brave, Vivaldi, Opera) |
 | `proxy/litellm.yaml` | LiteLLM route table |
 | `requirements.txt` | Just `litellm[proxy]` pinned |
+| `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 
 Runtime state (not in the repo): `~/.claude-lumo/` holds the LiteLLM venv, a random
 local key, logs, and the settings and system prompt rendered at each launch.
