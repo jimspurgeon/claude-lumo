@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Opt-in pre-push hook: runs the hook tombstone check before pushing.
+#
+# Install (from a clone of this repo, in the work tree):
+#   ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
+# (or copy the file there on systems without working symlinks)
+#
+# Git runs pre-push with the cwd set to the work-tree top level, so locate
+# the check through the repo root rather than $0 (which points into .git/hooks).
+
+set -u
+top=$(git rev-parse --show-toplevel) || {
+  echo "pre-push: not a git repo?" >&2
+  exit 1
+}
+exec "${PYTHON:-python}" "$top/scripts/check-hook-tombstones.py"
