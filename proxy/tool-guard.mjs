@@ -15,6 +15,13 @@ const LOST_TEXT = "\n\n[claude-lumo] Your tool call was lost in transit (Lumo an
 
 const sse = (obj) => "data:" + JSON.stringify(obj) + "\n\n";
 
+// LiteLLM ends the whole stream as soon as a line merely contains "[DONE]" (issue #13), so a tool
+// call or text that mentions it (an SSE test fixture, say) was cut off and the turn ended silently.
+// Inside a JSON data line, "[" decodes to "[", so the content arrives unchanged. Run this on
+// everything sent to LiteLLM, after any re-encoding; the real "data:[DONE]" terminator is left alone.
+const DONE_TEXT = /\[DONE\]/g;
+export const escapeDone = (text) => text.split("\n").map((l) => (l.startsWith("data:{") ? l.replace(DONE_TEXT, "\\u005bDONE]") : l)).join("\n");
+
 // GLM sometimes emits arguments as <arg_key>k</arg_key><arg_value>v</arg_value> pairs instead of JSON.
 const TAG_PAIR = /<arg_key>([\s\S]*?)<\/arg_key>\s*<arg_value>([\s\S]*?)<\/arg_value>/g;
 const repairTags = (s) => {

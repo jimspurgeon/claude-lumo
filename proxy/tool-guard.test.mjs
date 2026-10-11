@@ -1,7 +1,7 @@
 // Run: node --test proxy/tool-guard.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createToolGuard } from "./tool-guard.mjs";
+import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 
 const chunk = (delta, finish = null) => "data:" + JSON.stringify({ id: "c1", object: "chat.completion.chunk", model: "m", choices: [{ index: 0, delta, finish_reason: finish }] });
 const call = (index, id, name, args) => ({ index, id, type: "function", function: { name, arguments: args } });
@@ -76,4 +76,18 @@ test("if the retry fails too, the turn ends with a visible message", async () =>
 test("a retry that throws still ends the turn visibly", async () => {
   const { events } = await run([chunk({}, "tool_calls")], async () => { throw new Error("down"); });
   assert.match(text(events), /lost in transit/);
+});
+
+// Issue #13: LiteLLM ends the stream on any line that merely contains the marker.
+const MARK = "[" + "DONE]";
+test("the end-of-stream marker inside text or tool arguments is escaped, the terminator is not", async () => {
+  const g = createToolGuard();
+  const args = JSON.stringify({ file_path: "t.mjs", content: `data: ${MARK}\n` });
+  const lines = [chunk({ content: `says ${MARK}` }), chunk({ tool_calls: [call(0, "t1", "Write", args)] }), chunk({}, "tool_calls"), "data:" + MARK];
+  const out = escapeDone(lines.map((l) => g.line(l)).filter(Boolean).join("\n\n") + "\n\n") + escapeDone(await g.end());
+  const dataLines = out.split("\n").filter((l) => l.startsWith("data:"));
+  assert.deepEqual(dataLines.filter((l) => l.includes(MARK)), ["data:" + MARK]);
+  const events = dataLines.slice(0, -1).map((l) => JSON.parse(l.slice(5)));
+  assert.equal(text(events), `says ${MARK}`);
+  assert.equal(toolCalls(events)[0].function.arguments, args);
 });
