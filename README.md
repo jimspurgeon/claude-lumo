@@ -162,13 +162,26 @@ re-running the installer is always safe (it skips what already exists).
 ## Hook tombstone policy
 
 Hook scripts referenced in `settings-lumo.json` are part of the interface for running
-sessions. When retiring a hook, leave a tombstone that reads stdin and exits 0 silently
-(see `hooks/edit-assist.py` as an example). This prevents sessions started before the
-update from failing when they re-read their hook configuration.
+sessions: a session keeps the hook commands it started with, so after an update removes
+a hook file, that session's Edit calls fail until it is restarted. When retiring a hook,
+leave a tombstone that reads stdin and exits 0 silently (see `hooks/edit-assist.py` as
+an example) instead of deleting the script.
 
-Before each release, run `python scripts/check-hook-tombstones.py` to verify that all
-hook files ever referenced in git history still exist (either as active hooks or
-tombstones).
+**Before every release**, run the check:
+
+```bash
+python scripts/check-hook-tombstones.py
+```
+
+It scans the current branch's history of `settings-lumo.json` and fails if any hook file
+it ever referenced is missing from `hooks/` (a tombstone counts as present). It must pass
+before a release is cut.
+
+For the same check on every push, install the opt-in pre-push hook:
+
+```bash
+ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
+```
 
 ## Files
 
@@ -189,6 +202,8 @@ tombstones).
 | `proxy/litellm.yaml` | LiteLLM route table |
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
+| `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |
+| `scripts/pre-push` | Opt-in git pre-push hook running the tombstone check |
 
 Runtime state (not in the repo): `~/.claude-lumo/` holds the LiteLLM venv, a random
 local key, logs, and the settings and system prompt rendered at each launch.
