@@ -26,7 +26,9 @@ if (-not (Test-Path $gitExe)) {
   Write-Host 'Git Bash found: '$gitExe
 }
 
-# --- delegate to the canonical install.sh (always pulls latest if run via curl, or local if this folder is a clone) ---
+# --- delegate to the canonical install.sh (always installs the latest release tag if run via
+# curl; set CLAUDE_LUMO_CHANNEL=master to follow master instead, or local if this folder is a
+# clone) ---
 Write-Host ''
 Write-Host 'Running install.sh (bash)...'
 

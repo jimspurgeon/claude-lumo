@@ -42,6 +42,11 @@ If you get a `pong` reply, you're done. Use `claude-lumo` anywhere you'd use `cl
 Both installers are idempotent — safe to re-run any time — and always set up the
 latest version. Re-running either one-liner above is how you update.
 
+By default the installer checks out the newest `v*` release tag (so you never get
+unreleased changes). To follow the `master` branch instead — for development — set
+`CLAUDE_LUMO_CHANNEL=master` before re-running it. If the clone has local changes,
+or the checkout fails (e.g. offline), it is left as is with a note.
+
 ---
 
 ## Manual install (step by step, per OS)
