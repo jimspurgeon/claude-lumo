@@ -13,7 +13,7 @@ import { appendFileSync, mkdirSync, renameSync, statSync, writeFileSync } from "
 import { join } from "node:path";
 import { readLumoCredentials } from "./creds.mjs";
 import { addEditHints } from "./edit-hints.mjs";
-import { createToolGuard } from "./tool-guard.mjs";
+import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
@@ -89,9 +89,9 @@ function splitToolCallChunks() {
     return guard.line(line);
   };
   return {
-    push(text) { buf += text; const i = buf.lastIndexOf("\n"); if (i < 0) return ""; const done = buf.slice(0, i + 1); buf = buf.slice(i + 1); return done.split("\n").map(fix).join("\n"); },
-    end() { const rest = fix(buf); buf = ""; return rest; },
-    finish: (retry) => guard.end(retry),
+    push(text) { buf += text; const i = buf.lastIndexOf("\n"); if (i < 0) return ""; const done = buf.slice(0, i + 1); buf = buf.slice(i + 1); return escapeDone(done.split("\n").map(fix).join("\n")); },
+    end() { const rest = fix(buf); buf = ""; return escapeDone(rest); },
+    finish: async (retry) => escapeDone(await guard.end(retry)),
     stats,
     guard: guard.stats,
   };
