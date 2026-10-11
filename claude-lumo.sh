@@ -24,11 +24,11 @@ fi
 
 # Render this machine's settings and system prompt into ~/.claude-lumo, merging the optional
 # personal additions in $LOCAL over ours (see render.py). Tracked files here are only read, so a
-# clone stays clean and `git pull` keeps working.
+# clone stays clean and updates (re-running install.sh) keep working.
 "$PY" "$(native "$D")/render.py" "$(native "$D")" "$(native "$S")" "$(native "$LOCAL")" "$PY" \
   || { echo "claude-lumo: could not build settings (render.py failed)" >&2; exit 1; }
 
-# Personal changes belong in $LOCAL, not here: a pull would conflict with or overwrite them.
+# Personal changes belong in $LOCAL, not here: an update would conflict with or overwrite them.
 if [ -d "$D/.git" ] && [ -n "$(git -C "$D" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
   echo "claude-lumo: note: $D has local edits; updates may conflict. Put personal changes in $LOCAL instead." >&2
 fi

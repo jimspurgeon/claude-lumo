@@ -3,7 +3,7 @@
     python render.py <lumo dir> <state dir> <personal dir> <python command>
 
 Writes <state dir>/settings.json and <state dir>/system-prompt.md. Tracked files in this repo are
-only read, so a clone stays clean and `git pull` keeps working.
+only read, so a clone stays clean and updates keep working.
 
 Personal additions (the personal dir, default ~/.claude/lumo-local) are optional, only read, and
 always win:

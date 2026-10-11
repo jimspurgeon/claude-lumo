@@ -92,16 +92,34 @@ echo "Prerequisites check complete."
 mkdir -p "$S" "$BIN"
 
 # Get the files into ~/.claude/lumo. The recommended install is a git clone there, so
-# `git -C ~/.claude/lumo pull` (or re-running this script) updates it.
+# re-running this script updates it to the latest release tag.
+# Channel: CLAUDE_LUMO_CHANNEL=release (default) checks out the newest v* tag; =master
+# follows the master branch (for development).
+CHANNEL="${CLAUDE_LUMO_CHANNEL:-release}"
+
 if [ -d "$D/.git" ]; then
   # Already a clone: update it, never overwrite it from another folder.
-  git -C "$D" pull --ff-only 2>/dev/null || echo "Note: could not update from git (offline, or local changes); installing current files."
+  if [ -n "$(git -C "$D" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    echo "Note: $D has local changes; leaving it as is. Put personal changes in the lumo-local folder instead."
+  elif [ "$CHANNEL" = "master" ]; then
+    git -C "$D" checkout -q master 2>/dev/null \
+      && git -C "$D" pull --ff-only 2>/dev/null \
+      || echo "Note: could not update from master (offline); keeping current files."
+  else
+    git -C "$D" fetch --tags 2>/dev/null \
+      && git -C "$D" checkout -q "$(git -C "$D" tag -l 'v*' --sort=-v:refname | head -n 1)" 2>/dev/null \
+      || echo "Note: could not update to the latest release tag (offline); keeping current files."
+  fi
 elif [ -z "$SRC" ]; then
   # Piped install: clone.
   if [ -e "$D" ] && [ -n "$(ls -A "$D" 2>/dev/null)" ]; then
     echo "$D exists and is not a git clone. Move it aside, then re-run." >&2; exit 1
   fi
   git clone -q "$REPO_URL" "$D"
+  if [ "$CHANNEL" != "master" ]; then
+    git -C "$D" fetch --tags -q && git -C "$D" checkout -q "$(git -C "$D" tag -l 'v*' --sort=-v:refname | head -n 1)" \
+      || echo "Note: could not check out the latest release tag; staying on master."
+  fi
 elif [ "$SRC" != "$D" ]; then
   # Run from an unzipped release or another clone: copy the files (not .git).
   mkdir -p "$D"
@@ -127,7 +145,7 @@ fi
 [ -s "$S/master.key" ] || "$PY" -c "import secrets;print('sk-lumo-'+secrets.token_hex(24))" > "$S/master.key"
 
 # No per-machine edits to tracked files: claude-lumo.sh fills in this machine's paths at launch
-# (into ~/.claude-lumo/settings.json), so a git clone stays clean and `git pull` keeps working.
+# (into ~/.claude-lumo/settings.json), so a git clone stays clean and updates keep working.
 
 # Put claude-lumo on PATH. In a bash shell:
 printf '#!/bin/sh\nexec bash "$HOME/.claude/lumo/claude-lumo.sh" "$@"\n' > "$BIN/claude-lumo"
