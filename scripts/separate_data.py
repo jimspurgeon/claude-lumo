@@ -59,17 +59,37 @@ def is_link(path):
 
 
 def make_link(src, dst):
-    """Link dst -> src. Junction on Windows (no admin needed), symlink elsewhere."""
-    if os.name == "nt":
-        if _winapi is not None:
+    """Link dst -> src; returns the method used.
+
+    Directories: junction on Windows (no admin needed), symlink elsewhere. Files: a
+    junction on a file is a reparse point Win32 cannot read, so files get a real
+    symlink when the privilege allows it, then a hardlink (same volume, no admin),
+    then a copy with a warning. Copies are refreshed by each setup run (the launcher
+    runs setup at every launch), but changes made to them inside a Lumo session do
+    not flow back to the shared store.
+    """
+    if os.path.isdir(src):
+        if os.name == "nt" and _winapi is not None:
             try:
                 _winapi.CreateJunction(str(src), str(dst))
-                return
+                return "junction"
             except OSError:
                 pass  # Fall through to a real symlink if possible
         os.symlink(str(src), str(dst), target_is_directory=True)
-    else:
+        return "symlink"
+    try:
         os.symlink(str(src), str(dst))
+        return "symlink"
+    except OSError:
+        pass
+    try:
+        os.link(str(src), str(dst))
+        return "hardlink"
+    except OSError as e:
+        shutil.copyfile(str(src), str(dst))
+        warn(f"copied {dst} instead of linking it ({e}); it is refreshed by each setup "
+             f"run, but changes made to it inside a Lumo session do not flow back")
+        return "copy"
 
 
 def move(src, dst):
@@ -153,6 +173,24 @@ def split_history(history_file, session_ids):
     return keep, moved
 
 
+COPIES_MANIFEST = "copies.json"
+
+
+def load_copies(data_dir):
+    path = Path(data_dir) / COPIES_MANIFEST
+    if not path.is_file():
+        return set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            return set(json.load(f))
+    except (ValueError, OSError):
+        return set()
+
+
+def save_copies(data_dir, names):
+    write_atomic(str(Path(data_dir) / COPIES_MANIFEST), [json.dumps(sorted(names)) + "\n"])
+
+
 def setup_links(shared_dir, data_dir):
     """Create the idempotent link layout: shared items linked, data items real."""
     data = Path(data_dir)
@@ -166,21 +204,39 @@ def setup_links(shared_dir, data_dir):
         elif not item.endswith("/") and not path.exists():
             path.touch()
 
-    # Shared items: link when the source exists, skip existing links, warn on real items.
+    # Shared items: link when the source exists. Real items are only ever our own file
+    # copies (recorded in copies.json so they can be refreshed); anything else is warned
+    # about and left alone.
+    copies = load_copies(data_dir)
     for item in SHARED_ITEMS:
         name = item.rstrip("/")
         src = Path(shared_dir) / name
         dst = data / name
         if not src.exists() and not is_link(src):
+            copies.discard(name)
             continue
         if dst.exists() or is_link(dst):
-            if not is_link(dst):
-                warn(f"{name} already exists as a real item in {data}; not linking over it")
+            if is_link(dst):
+                continue
+            if os.path.isfile(dst) and os.path.isfile(src) \
+                    and os.path.samefile(str(dst), str(src)):
+                continue  # hardlink to the source; already fine
+            if name in copies and os.path.isfile(src) and os.path.isfile(dst):
+                shutil.copy2(str(src), str(dst))
+                info(f"refreshed: {name}")
+            else:
+                warn(f"{name} already exists as a real item in {data}; not touching it")
             continue
         try:
-            make_link(src, dst)
+            method = make_link(src, dst)
+            info(f"linked: {name} ({method})")
+            if method == "copy":
+                copies.add(name)
+            else:
+                copies.discard(name)
         except OSError as e:
             warn(f"could not link {name}: {e}")
+    save_copies(data_dir, copies)
 
 
 def plan_moves(session_list, target_projects):

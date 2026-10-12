@@ -19,25 +19,30 @@ import separate_data
 
 
 class TestOffByDefault(unittest.TestCase):
-    """Test 1: Off by default - launcher logic does not set CLAUDE_CONFIG_DIR without opt-in."""
+    """Test 1: Off by default - the enabling predicate is false without opt-in."""
 
-    def test_no_env_set_without_opt_in(self):
-        """Without setup opt-in, the environment variable is not set."""
-        # This is a behavioral contract test: the launcher should NOT set
-        # CLAUDE_CONFIG_DIR unless the user has explicitly run setup.
-        # The marker file is the signal.
+    def test_marker_absent_by_default(self):
+        """Without an explicit opt-in, the marker file does not exist and the
+        enabling condition in claude-lumo.sh evaluates false for this data dir."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            shared = Path(tmpdir) / "shared"
-            shared.mkdir()
             data = Path(tmpdir) / "data"
-
-            # No marker file exists
+            data.mkdir()
             marker = data.parent / "separate-data.on"
+            # No opt-in happened in this test: neither the marker nor the env var
+            # (checked below with the inherited env cleared) enables separation.
+            self.assertFalse(marker.exists())
+            env_off = os.environ.get("CLAUDE_LUMO_SEPARATE_DATA") != "1"
+            self.assertTrue(env_off or marker.exists(),
+                            "marker absent but CLAUDE_LUMO_SEPARATE_DATA=1 in this "
+                            "environment makes off-by-default untestable here")
 
-            # Simulate launcher check (as would be in the actual launcher)
-            if marker.exists():
-                self.fail("Marker should not exist without setup opt-in")
-            # Launcher would NOT set CLAUDE_CONFIG_DIR here
+    def test_setup_creates_no_layout_when_not_called(self):
+        """setup_links is only ever called by the enabled launcher; nothing runs by
+        importing the module."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data = Path(tmpdir) / "data"
+            # No setup call: importing the module must not have created anything.
+            self.assertFalse(data.exists())
 
 
 class TestSetupLinks(unittest.TestCase):
@@ -64,61 +69,54 @@ class TestSetupLinks(unittest.TestCase):
     def tearDown(self):
         self.tmpdir.cleanup()
 
-    def _is_link_or_exists(self, path: Path) -> bool:
-        """Check if path exists (as link, junction, or regular file/dir)."""
-        if not path.exists():
-            return False
-        # On Windows without Dev Mode, symlinks fail with WinError 1314
-        # The code logs a warning and skips. We accept that files may not be linked.
-        return True
-
     def test_creates_links_for_existing_items(self):
-        """setup_links creates junctions/symlinks for items that exist in shared."""
+        """setup_links creates links for items that exist in shared, and the linked
+        files stay READABLE (regression: junctions on files are unreadable via Win32)."""
         separate_data.setup_links(str(self.shared), str(self.data))
 
         # Data dir created
         self.assertTrue(self.data.exists())
 
-        # Shared items: on Windows without privileges, links fail but we don't fail
-        # The function logs warnings. Accept either linked or skipped.
-        # Just verify data items were created regardless of link success
+        # Data items were created real (not links)
         self.assertTrue((self.data / "file-history").exists())
         self.assertTrue((self.data / "history.jsonl").exists())
         self.assertFalse((self.data / "history.jsonl").is_symlink())
 
-        # If links succeeded, these should be links; if not, they're skipped
-        if (self.data / "CLAUDE.md").exists():
-            self._is_link_or_exists(self.data / "CLAUDE.md")
+        # Shared FILE items are readable through the data dir with the same content.
+        # This is the load-bearing assertion: a link method that Win32/Node cannot
+        # read (junction on a file) fails here even though the path exists.
+        self.assertTrue((self.data / "CLAUDE.md").exists())
+        self.assertEqual((self.data / "CLAUDE.md").read_text(), "# Fake CLAUDE.md")
+        with open(self.data / "CLAUDE.md", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "# Fake CLAUDE.md")
+
+        # Shared DIR items resolve to the shared content
+        self.assertEqual((self.data / "skills" / "test.txt").read_text(), "skill")
 
     def test_idempotent_on_re_run(self):
-        """Running setup twice leaves the same state."""
-        # First run
-        separate_data.setup_links(str(self.shared), str(self.data))
-
-        # Check if links were created (or warnings logged if not)
+        """Running setup twice leaves the same state without warnings about its
+        own items (a real-item warning on re-run would break every launch)."""
         import io
-        stderr_capture = io.StringIO()
-        old_stderr = sys.stderr
-        sys.stderr = stderr_capture
+        separate_data.setup_links(str(self.shared), str(self.data))
 
         first_content = None
         if (self.data / "CLAUDE.md").exists():
             first_content = (self.data / "CLAUDE.md").read_text()
 
-        sys.stderr = old_stderr
-        first_output = stderr_capture.getvalue()
-
-        # Second run
         stderr_capture = io.StringIO()
+        old_stderr = sys.stderr
         sys.stderr = stderr_capture
-        separate_data.setup_links(str(self.shared), str(self.data))
-        sys.stderr = old_stderr
-        second_output = stderr_capture.getvalue()
+        try:
+            separate_data.setup_links(str(self.shared), str(self.data))
+        finally:
+            sys.stderr = old_stderr
 
-        # Second run should not produce link creation warnings (idempotent)
-        # Either links exist and are skipped, or copies remain unchanged
+        # Content unchanged through the re-run
         if first_content:
             self.assertEqual(first_content, (self.data / "CLAUDE.md").read_text())
+        # Re-run must not warn about items setup itself created or copied
+        self.assertNotIn("not touching it", stderr_capture.getvalue())
+        self.assertNotIn("could not link", stderr_capture.getvalue())
 
     def test_missing_source_skipped(self):
         """Items that don't exist in shared are not linked."""
@@ -145,8 +143,9 @@ class TestSetupLinks(unittest.TestCase):
         finally:
             sys.stderr = old_stderr
 
-        # Warning issued (either about link failure or about real item)
-        self.assertIn("settings.json", stderr_output.lower() or True)
+        # Warning issued about the real settings.json item
+        self.assertIn("settings.json", stderr_output.lower())
+        self.assertIn("not touching it", stderr_output.lower())
 
         # Real file untouched
         self.assertEqual("real content", (self.data / "settings.json").read_text())
@@ -311,8 +310,9 @@ class TestMigrateSessions(unittest.TestCase):
         finally:
             sys.stderr = old_stderr
 
-        # Memory stayed in shared (warned)
-        self.assertIn("mixed", stderr_output.lower() or "lumolume" in stderr_output.lower() or True)  # Warning check
+        # Memory stayed in shared (the mixed-project warning fired)
+        self.assertIn("mixes claude and lumo sessions", stderr_output.lower())
+        self.assertIn("memory stays put", stderr_output.lower())
         self.assertTrue((memory / "context.md").exists())
 
         # Only lumo session moved

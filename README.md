@@ -270,8 +270,9 @@ claude-lumo its own store for that data while rules stay shared:
 | `projects/` (conversations, auto memory), `history.jsonl`, `file-history/`, `session-env/`, `shell-snapshots/`, `todos/`, `plans/`, `paste-cache/`, `debug/`, `.credentials.json` | `CLAUDE.md`, `settings.json`, `keybindings.json`, `themes/`, `rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `output-styles/`, `plugins/`, `hooks/` |
 
 The launcher exports `CLAUDE_CONFIG_DIR=~/.claude-lumo/data` for its own process only, so
-plain `claude` is untouched. Linked items are junctions on Windows (no admin rights needed)
-and symlinks elsewhere.
+plain `claude` is untouched. Directories are linked as junctions on Windows (no admin
+rights needed) and symlinks elsewhere; files are hardlinks (or symlinks when the privilege
+allows, with a refreshed copy as the last resort, warned about).
 
 Turn it on (off by default, nothing changes for existing users):
 
@@ -304,9 +305,9 @@ Two limitations worth knowing. A project dir mixing Claude and Lumo sessions kee
 `claude --resume <id>` from a normal terminal cannot see Lumo-store sessions: resume them
 via `claude-lumo --resume <id>` or from an environment that also sets `CLAUDE_CONFIG_DIR`.
 
-Separation ships in v1.3.0. Uninstall removes `~/.claude-lumo` including the separate
-store, but not what lives in `~/.claude` (run migrate-from-lumo.sh first if you want those
-sessions kept).
+Separation is new and will ship with v1.3.0 (not yet released). Uninstall removes
+`~/.claude-lumo` including the separate store, but not what lives in `~/.claude` (run
+migrate-from-lumo.sh first if you want those sessions kept).
 
 ## Personal additions
 
