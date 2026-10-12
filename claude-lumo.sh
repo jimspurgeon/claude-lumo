@@ -33,5 +33,10 @@ if [ -d "$D/.git" ] && [ -n "$(git -C "$D" status --porcelain --untracked-files=
   echo "claude-lumo: note: $D has local edits; updates may conflict. Put personal changes in $LOCAL instead." >&2
 fi
 
+# Personal agents (render.py turns $LOCAL/agents/*.md into agents.json). Passed inline because claude
+# reads --agents from a file only with --print; render.py keeps it under the command-line limit.
+AGENTS=()
+[ -s "$S/agents.json" ] && AGENTS=(--agents "$(cat "$S/agents.json")")
+
 export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL"
-exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "$@"
+exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "${AGENTS[@]}" "$@"

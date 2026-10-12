@@ -195,13 +195,14 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `claude-lumo.sh` | Launcher: starts proxy and LiteLLM if down, then runs Claude Code |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
 | `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
-| `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours |
+| `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
 | `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; chains to `statusline-next.sh` from your personal additions if present |
 | `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair (splits multi-tool-call chunks that LiteLLM would merge), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
 | `proxy/edit-hints.mjs` | Adds the closest real text to a failed Edit (and a reminder to Read before Edit or Write), so the retry copies it instead of guessing again. Claude Code checks edits before any hook runs, so this has to live in the proxy |
 | `proxy/tool-guard.mjs` | Holds tool calls until the stream ends, then checks each one: repairs arguments leaked as `<arg_key>` tags, retries the request once when Lumo announced a call but sent none or a broken one, and otherwise ends the turn with a visible message (#11). Tests: `node --test proxy/tool-guard.test.mjs` |
 | `proxy/creds.mjs` | Reads Lumo login from any browser's cookies (Firefox, Chrome, Edge, Brave, Vivaldi, Opera) |
 | `proxy/litellm.yaml` | LiteLLM route table |
+| `test_render.py` | Tests for the personal agents in `render.py`: `python test_render.py` |
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 | `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |
@@ -222,7 +223,22 @@ write to it or delete it. Everything is optional, and your files win over ours:
 |---|---|
 | `settings.json` | Merged over `settings-lumo.json` at each launch: objects merge key by key, lists are appended (your hooks and permissions add to ours), anything else is replaced. Invalid JSON is skipped with a warning |
 | `LUMO.md` | Appended to the system prompt after this repo's `LUMO.md` (your agent names, project rules) |
+| `agents/*.md` | Your own versions of agents, in the usual Claude Code agent format (frontmatter with `name`, `description`, `tools`, `model`, then the prompt). Passed to claude with `--agents`, so in claude-lumo they replace the agents of the same name in `~/.claude/agents`, which stay untouched for plain `claude`. See below |
 | `statusline-next.sh` | Run with the same status-line JSON after `[LUMO]` is printed, for tools that read the status line (for example Orca); its output is ignored |
+
+### Personal agents
+
+Put a file such as `agents/gatekeeper.md` in the personal folder to give claude-lumo its own
+gatekeeper, for example one with `model: lumo-max`. A `model:` line wins over
+`CLAUDE_CODE_SUBAGENT_MODEL` (which sends other agents to `lumo-lite`); without one the agent runs on
+`lumo-lite`. Only `name`, `description`, `tools`, `disallowedTools` and `model` are read; values sit
+on one line, except lists (`a, b`, `[a, b]` or `- a` lines) and `|` or `>` blocks.
+
+Limit: claude reads `--agents` from a file only with `--print`, so the agents travel inline on the
+command line, and Windows caps a whole command line at 32,767 characters. The launcher keeps the
+personal agents under 24,000 characters (100,000 elsewhere) and skips any that do not fit, with a
+warning; the shared agent of that name is then used. Two agents of about 10,000 and 7,500
+characters fit. Tests: `python test_render.py`.
 
 Keep that folder under your own version control (a private repo) if you want it backed up.
 Instructions for every session, Claude or Lumo, belong in `~/.claude/CLAUDE.md` as usual.
