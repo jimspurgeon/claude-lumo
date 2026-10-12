@@ -381,6 +381,12 @@ def collect_candidates(config_dir, days, allowlist_path):
 
 def plan_for_named_session(config_dir, session_id):
     """--session mode: one session's files across all keyed stores."""
+    # Session ids are opaque identifiers; anything path-like is refused rather
+    # than joined into store paths (defense in depth, same rule as --project).
+    if session_id in (".", "..") or "/" in session_id or os.sep in session_id \
+            or (len(session_id) > 1 and session_id[1] == ":"):
+        print(f"Error: {session_id!r} is not a valid session id.", file=sys.stderr)
+        sys.exit(1)
     project = find_project_of_session(config_dir, session_id)
     if project is None:
         return None

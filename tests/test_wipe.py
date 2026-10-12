@@ -542,14 +542,38 @@ class TestPlanForNamedSession:
         (projects_dir / "active.jsonl").write_text("{}", encoding="utf-8")
         os.utime(str(projects_dir / "active.jsonl"), (recent_mtime, recent_mtime))
 
-        # The function calls sys.exit(1) for active sessions, so we can't test it returning None
-        # Instead, test that an old session with no lock works
+        # A fresh transcript means the session looks live: the planner must
+        # refuse by exiting rather than returning a deletion plan.
+        with pytest.raises(SystemExit) as excinfo:
+            plan_for_named_session(str(config_dir), "active")
+        assert excinfo.value.code == 1
+
+    def test_active_session_env_lock_rejected(self, tmp_path):
+        # Env lock also marks a session active even with an old transcript.
+        config_dir = tmp_path
+        projects_dir = config_dir / "projects" / "test"
+        projects_dir.mkdir(parents=True)
+        old_mtime = time.time() - 40 * 86400
+        (projects_dir / "locked.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(projects_dir / "locked.jsonl"), (old_mtime, old_mtime))
+        lock = config_dir / "session-env" / "locked"
+        lock.mkdir(parents=True)
+        (lock / ".lock").write_text("", encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            plan_for_named_session(str(config_dir), "locked")
+        assert excinfo.value.code == 1
+
+    def test_old_session_allowed(self, tmp_path):
+        # Contrast case: an old unlocked session plans normally.
+        config_dir = tmp_path
+        projects_dir = config_dir / "projects" / "test"
+        projects_dir.mkdir(parents=True)
         old_mtime = time.time() - 40 * 86400
         (projects_dir / "old.jsonl").write_text("{}", encoding="utf-8")
         os.utime(str(projects_dir / "old.jsonl"), (old_mtime, old_mtime))
 
         result = plan_for_named_session(str(config_dir), "old")
-        # Should succeed for old session
         assert result is not None
         assert result["project"] == "test"
 
@@ -561,6 +585,27 @@ class TestPlanForNamedSession:
 
         result = plan_for_named_session(str(config_dir), "missing")
         assert result is None
+
+    def test_session_id_traversal_rejected(self, tmp_path):
+        # Path-like session ids must be refused, never treated as filenames
+        # or folder names under the config dir.
+        config_dir = tmp_path
+        projects_dir = config_dir / "projects" / "test"
+        projects_dir.mkdir(parents=True)
+
+        for bad_id in ("..", "../escape", "sub/session", "C:\\evil"):
+            with pytest.raises(SystemExit) as excinfo:
+                plan_for_named_session(str(config_dir), bad_id)
+            assert excinfo.value.code == 1
+
+    def test_session_id_dot_rejected(self, tmp_path):
+        config_dir = tmp_path
+        projects_dir = config_dir / "projects" / "test"
+        projects_dir.mkdir(parents=True)
+
+        with pytest.raises(SystemExit) as excinfo:
+            plan_for_named_session(str(config_dir), ".")
+        assert excinfo.value.code == 1
 
 
 class TestPlanForNamedProject:
@@ -596,16 +641,62 @@ class TestPlanForNamedProject:
 
     def test_active_project_rejected(self, tmp_path):
         config_dir = tmp_path
+        projects_dir = config_dir / "projects" / "active-project"
+        projects_dir.mkdir(parents=True)
+        recent_mtime = time.time() - 100
+        (projects_dir / "s1.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(projects_dir / "s1.jsonl"), (recent_mtime, recent_mtime))
+
+        # Fresh transcript makes the project look live: refuse with exit 1.
+        with pytest.raises(SystemExit) as excinfo:
+            plan_for_named_project(str(config_dir), "active-project")
+        assert excinfo.value.code == 1
+
+    def test_old_project_allowed(self, tmp_path):
+        # Contrast case: an old project plans normally.
+        config_dir = tmp_path
         projects_dir = config_dir / "projects" / "old-project"
         projects_dir.mkdir(parents=True)
-        old_mtime = time.time() - 40 * 86400  # Old to avoid being "active"
+        old_mtime = time.time() - 40 * 86400
         (projects_dir / "s1.jsonl").write_text("{}", encoding="utf-8")
         os.utime(str(projects_dir / "s1.jsonl"), (old_mtime, old_mtime))
 
         result = plan_for_named_project(str(config_dir), "old-project")
-        # Should succeed for old project (not active)
         assert result is not None
         assert result["project"] == "old-project"
+
+    def test_project_traversal_rejected(self, tmp_path):
+        # Regression for the path traversal fix: path-like project names must
+        # never resolve above projects/ as a folder name. ".." must fail to
+        # match (returns None), not delete the config dir.
+        config_dir = tmp_path
+        projects_dir = config_dir / "projects"
+        projects_dir.mkdir(parents=True)
+        old_mtime = time.time() - 40 * 86400
+        victim = projects_dir / "victim"
+        victim.mkdir()
+        (victim / "s1.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(victim / "s1.jsonl"), (old_mtime, old_mtime))
+        marker = config_dir / "above-projects.txt"
+        marker.write_text("survivor", encoding="utf-8")
+
+        result = plan_for_named_project(str(config_dir), "..")
+        assert result is None
+        assert marker.read_text(encoding="utf-8") == "survivor"
+
+    def test_project_absolute_path_not_treated_as_name(self, tmp_path):
+        # A name with separators must fall through to cwd matching only; if no
+        # project's transcript cwd matches, the plan is None.
+        config_dir = tmp_path
+        projects_dir = config_dir / "projects" / "real-project"
+        projects_dir.mkdir(parents=True)
+        old_mtime = time.time() - 40 * 86400
+        (projects_dir / "s1.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(projects_dir / "s1.jsonl"), (old_mtime, old_mtime))
+
+        # "C:/no/such/dir" is path-like but matches no project: None, no error.
+        result = plan_for_named_project(str(config_dir), os.path.join("no", "such", "dir"))
+        assert result is None
 
 
 class TestDescribeOrca:
@@ -1145,9 +1236,12 @@ class TestHookDetectStale:
 
         proj_info = {"name": "listed", "folder": str(project), "sessions": [{"id": "s1", "mtime": old_mtime}]}
         allowlist = [str(project)]
+        # Transcript carries a cwd matching the allowlist entry, so the project
+        # is covered and must not count as stale in allowlist mode.
+        cwd_json = str(project).replace("\\", "\\\\")
+        (project / "s1.jsonl").write_text('{"cwd": "' + cwd_json + '"}\n', encoding="utf-8")
         result = detect_stale(proj_info, str(config_dir), 30, allowlist)
-        # Actually the allowlist checks cwd from transcript, not project folder
-        # With empty transcript, cwd is None, so it returns True (stale)
+        assert result is False
 
 
 class TestOrcaReportOnly:
