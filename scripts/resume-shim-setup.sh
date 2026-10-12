@@ -16,7 +16,7 @@ case "$(uname -s)" in
   *)                    OS="linux";;
 esac
 
-add_line() { # add_line <file> <line> <create-missing?>  — append once, after a marker comment
+add_line() { # add_line <file> <line> <create-missing?> - append once, after a marker comment
   local f="$1" line="$2" create="${3:-no}"
   if [ ! -f "$f" ]; then
     [ "$create" = "yes" ] && mkdir -p "$(dirname "$f")" && touch "$f" || return 0
@@ -26,18 +26,23 @@ add_line() { # add_line <file> <line> <create-missing?>  — append once, after 
   echo "  $f updated."
 }
 
-del_lines() { # del_lines <file>  — remove exactly what add_line appended
+del_lines() { # del_lines <file> - remove exactly what add_line appended
   local f="$1"
   [ -f "$f" ] || return 0
   grep -qF "$MARKER" "$f" || return 0
-  local n
+  local n total mline sline cut
   n=$(grep -c '' "$f")
-  # add_line appends three lines: a blank separator, the marker comment, the source line.
-  # If the file still ends with exactly that block, cut it off (byte-identical restore).
-  if [ "$n" -ge 3 ] && [ -z "$(tail -n 3 "$f" | sed -n 1p)" ] \
-     && tail -n 3 "$f" | sed -n 2p | grep -qF "$MARKER" \
-     && tail -n 3 "$f" | sed -n 3p | grep -qF 'resume-shim'; then
-    head -n $((n - 3)) "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  if [ "$n" -ge 2 ] \
+     && sed -n "$((n - 1))p" "$f" | grep -qF "$MARKER" \
+     && sed -n "${n}p" "$f" | grep -qF 'resume-shim'; then
+    # add_line appended exactly: \n + marker comment + \n + source line + \n. Cut those
+    # bytes off, which restores the file byte-identically whether or not it ended with
+    # a newline before (the appended chunk starts with its own separator newline).
+    total=$(wc -c < "$f")
+    mline="$(sed -n "$((n - 1))p" "$f")"
+    sline="$(sed -n "${n}p" "$f")"
+    cut=$((total - ${#mline} - ${#sline} - 3))
+    [ "$cut" -ge 0 ] && head -c "$cut" "$f" > "$f.tmp" && mv "$f.tmp" "$f" || rm -f "$f.tmp"
   else
     # Older or hand-edited block: filter the lines out instead.
     grep -vF "$MARKER" "$f" | grep -vF '.claude/lumo/scripts/resume-shim' > "$f.tmp" \

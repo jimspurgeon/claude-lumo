@@ -57,6 +57,11 @@ grep -qF '.claude/lumo/scripts/resume-shim.sh' "$PROF";                  check "
 HOME="$TMP/home" bash scripts/resume-shim-setup.sh uninstall >/dev/null
 cmp -s "$PROF" "$PROF.orig";                                            check "setup: uninstall restores profile byte-identically" "$?"
 [ ! -f "$TMP/home/Documents/PowerShell/Microsoft.PowerShell_profile.ps1" ]; check "setup: created PowerShell profile removed on uninstall" "$?"
+printf 'no trailing newline' > "$PROF"
+cp "$PROF" "$PROF.orig2"
+HOME="$TMP/home" bash scripts/resume-shim-setup.sh install >/dev/null
+HOME="$TMP/home" bash scripts/resume-shim-setup.sh uninstall >/dev/null
+cmp -s "$PROF" "$PROF.orig2";                                            check "setup: profile without trailing newline restored byte-identically" "$?"
 
 # --- PowerShell shim (skip quietly where PowerShell is unavailable) ---
 PS_BIN="$(command -v powershell.exe || command -v pwsh || true)"

@@ -139,7 +139,7 @@ fi
 # A folder that arrived as a zip (saved on Windows, or one of the v1.0/v1.1 release zips)
 # can carry CRLF line endings, which break the shebang on Linux/macOS. Strip CRs from
 # every shell script we just installed so `bash\r` never happens again.
-for f in "$D"/*.sh; do
+for f in "$D"/*.sh "$D"/scripts/*.sh; do
   [ -f "$f" ] || continue
   if ! tr -d "\r" < "$f" | cmp -s - "$f"; then
     tr -d "\r" < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
