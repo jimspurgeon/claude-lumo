@@ -688,7 +688,7 @@ class TestCandidateDetection:
 class TestDryRunMode:
     """Tests for dry-run behavior."""
 
-    def test_dry_run_deletes_nothing(self, tmp_path):
+    def test_dry_run_deletes_nothing(self, tmp_path, capsys):
         config_dir = tmp_path
         projects_root = config_dir / "projects"
         projects_root.mkdir()
@@ -705,10 +705,13 @@ class TestDryRunMode:
         wipe.resolve_config_dir = lambda: str(config_dir)
 
         try:
-            plan = plan_for_named_project(str(config_dir), "old")
-            # Simulate dry-run: just check files still exist
+            wipe.main(["--dry-run"])
+            out = capsys.readouterr().out
+            assert "old" in out
+            # Dry run: everything still on disk, nothing deleted
             assert test_file.exists()
-            # In actual dry run, print_plans would be called but delete_all wouldn't
+            assert (old_project / "s1.jsonl").exists()
+            assert old_project.is_dir()
         finally:
             wipe.resolve_config_dir = original_resolve
 
@@ -1166,29 +1169,33 @@ class TestOrcaReportOnly:
 class TestCliArgsParsing:
     """Tests for CLI argument parsing."""
 
-    def test_default_args(self):
-        from wipe import main
-        import io
-        import sys
+    def test_default_args(self, tmp_path, capsys, monkeypatch):
+        """main([]) with an empty store completes without error and reports nothing to wipe."""
+        import wipe
+        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(tmp_path))
+        (tmp_path / "projects").mkdir()
 
-        # Just test that parsing works, capture output
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
+        # Empty store: collect_candidates finds nothing, main returns normally
+        wipe.main([])
+        out = capsys.readouterr().out
+        assert "Nothing to wipe" in out
 
-        try:
-            # Parse args without running full main logic
-            import argparse
-            from wipe import main
-            # Access the parser indirectly through a dry call
-            pass
-        finally:
-            sys.stdout = old_stdout
+    def test_dry_run_flag_recognized(self, tmp_path, capsys, monkeypatch):
+        """--dry-run is parsed and suppresses deletion."""
+        import wipe
+        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(tmp_path))
+        (tmp_path / "projects").mkdir()
+        old_project = tmp_path / "projects" / "old"
+        old_project.mkdir()
+        old_mtime = time.time() - 40 * 86400
+        (old_project / "s1.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(old_project / "s1.jsonl"), (old_mtime, old_mtime))
 
-    def test_dry_run_flag_recognized(self):
-        import argparse
-        # Verify the parser recognizes --dry-run
-        # We test this by checking the argument spec exists
-        pass  # Covered implicitly by main() tests
+        wipe.main(["--dry-run"])
+        out = capsys.readouterr().out
+        assert "Dry run: nothing was deleted" in out
+        # The old session data is still there
+        assert (old_project / "s1.jsonl").exists()
 
 
 class TestProjectFolderPathGone:
@@ -1265,6 +1272,67 @@ class TestHookAllowlistEnv:
 
         result = hook_load_allowlist(str(allowlist_file))
         assert result == [str(project)]
+
+
+class TestHookDisabled:
+    """hookConfig.sessionWipeOffer.enabled=false suppresses the offer."""
+
+    HOOK_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "hooks", "session-start-offer.py")
+
+    def _run_hook(self, stdin_text, env):
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, self.HOOK_PATH],
+            input=stdin_text, capture_output=True, text=True, env=env, timeout=30)
+        assert proc.returncode == 0, proc.stderr
+        return json.loads(proc.stdout)
+
+    def test_disabled_config_yields_no_additional_context(self, tmp_path):
+        # A stale project that WOULD trigger the offer if enabled
+        project = tmp_path / "projects" / "old"
+        project.mkdir(parents=True)
+        old_mtime = time.time() - 40 * 86400
+        (project / "s1.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(project / "s1.jsonl"), (old_mtime, old_mtime))
+
+        # HOME/USERPROFILE point at the sandbox so the rate-limit marker
+        # cannot leak in from (or be written to) the real ~/.claude-lumo
+        env = dict(os.environ)
+        env["CLAUDE_CONFIG_DIR"] = str(tmp_path)
+        env["HOME"] = str(tmp_path)
+        env["USERPROFILE"] = str(tmp_path)
+
+        output = self._run_hook(
+            '{"hookEventName": "SessionStart", '
+            '"hookConfig": {"sessionWipeOffer": {"enabled": false}}}',
+            env)
+
+        hook_out = output.get("hookSpecificOutput", {})
+        assert hook_out.get("hookEventName") == "SessionStart"
+        assert "additionalContext" not in hook_out
+
+    def test_enabled_by_default_when_stale(self, tmp_path):
+        # Same stale project, no disabling config: the offer appears
+        project = tmp_path / "projects" / "old"
+        project.mkdir(parents=True)
+        old_mtime = time.time() - 40 * 86400
+        (project / "s1.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(project / "s1.jsonl"), (old_mtime, old_mtime))
+
+        env = dict(os.environ)
+        env["CLAUDE_CONFIG_DIR"] = str(tmp_path)
+        env["HOME"] = str(tmp_path)
+        env["USERPROFILE"] = str(tmp_path)
+
+        output = self._run_hook(
+            '{"hookEventName": "SessionStart", "hookConfig": {}}',
+            env)
+
+        hook_out = output.get("hookSpecificOutput", {})
+        assert "additionalContext" in hook_out
+        assert "could be wiped" in hook_out["additionalContext"]
 
 
 if __name__ == "__main__":

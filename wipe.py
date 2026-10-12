@@ -411,8 +411,13 @@ def plan_for_named_session(config_dir, session_id):
 def plan_for_named_project(config_dir, name):
     """--project mode: accept the encoded folder name or a real path."""
     projects_root = os.path.join(config_dir, "projects")
-    # Only treat as simple project name if it doesn't look like an absolute/relative path
-    is_path_like = os.sep in name or (len(name) > 1 and name[1] == ":") or name.startswith("~")
+    # Treat ".", ".." and anything with a separator (either kind, so "/" counts on
+    # Windows too) as a path, never a folder name: encoded project names contain
+    # none of these, and letting ".." through as a name would resolve above
+    # projects/ and delete the whole config dir. Path-like values fall through
+    # to the cwd-matching branch, which only ever picks real project folders.
+    is_path_like = (name in (".", "..") or "/" in name or os.sep in name
+                     or (len(name) > 1 and name[1] == ":") or name.startswith("~"))
     project = name if not is_path_like and os.path.isdir(os.path.join(projects_root, name)) else None
     if project is None:
         wanted = os.path.normcase(os.path.normpath(os.path.abspath(os.path.expanduser(name))))
