@@ -47,6 +47,37 @@ unreleased changes). To follow the `master` branch instead — for development �
 `CLAUDE_LUMO_CHANNEL=master` before re-running it. If the clone has local changes,
 or the checkout fails (e.g. offline), it is left as is with a note.
 
+### Updating (v1.3.0+)
+
+Instead of re-running the installer, run:
+
+```bash
+claude-lumo update
+```
+
+It shows what changed since the installed version, checks out the newest `v*`
+release tag (never `master`), and re-runs the installer so new files and settings
+take effect. It refuses when `~/.claude/lumo` has local changes (put personal
+changes in `~/.claude/lumo-local`, see "Personal additions") or when the clone is
+not at a release tag, and the only network traffic is a `git fetch` to this
+repo's own remote. Open sessions keep the old files until restarted; the command
+then offers to restart them one at a time (wait until idle, interrupt now, or
+skip, default skip) when Orca or tmux can drive their terminals, and prints the
+exact `claude-lumo --resume` command otherwise. It never restarts anything
+without your confirmation.
+
+Each launch also runs a silent background check for a newer release (at most
+once a day, 5 second timeout, nothing leaves your machine except release-tag
+requests to this repo's remote). When a newer release is out, the status line
+shows a one-line notice, once per version, until you update or 7 days pass.
+Disable it with `CLAUDE_LUMO_UPDATE_CHECK=0`; set the interval with
+`CLAUDE_LUMO_UPDATE_CHECK_INTERVAL` (hours, default 24).
+
+Idle detection for the restart offer: every session writes a busy flag to
+`~/.claude-lumo/sessions/<session id>.json` (set when a prompt is submitted,
+cleared when the turn ends), which the update command reads to tell busy from
+idle sessions.
+
 ---
 
 ## Manual install (step by step, per OS)
@@ -138,6 +169,9 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | Symptom | Fix |
 |---------|-----|
 | `claude-lumo: command not found` after install | Close and reopen your terminal (PATH refresh), or add `$HOME/.local/bin` / `$APPDATA/npm` to PATH manually. |
+| `claude-lumo update` refuses: "local changes" | Expected: your changes in `~/.claude/lumo` would be overwritten. Move them to `~/.claude/lumo-local` (see "Personal additions") or commit them, then retry. |
+| `claude-lumo update` refuses: "not at a release tag" | Expected: the clone tracks `master` or an untagged commit (development install). Re-run the installer to reset to a release. |
+| Update notice stuck on the status line | It clears on the next `claude-lumo update`; it also expires after 7 days. `CLAUDE_LUMO_UPDATE_CHECK=0` disables the check entirely. |
 | `ECONNREFUSED` mid-response | Proxy or LiteLLM crashed. Run any `claude-lumo` command again — it restarts both automatically. |
 | 401 from Lumo | Log in again at lumo.proton.me in your browser; the proxy picks up the fresh cookie by itself. |
 | "Slow thinking" or stuck at 5 min | Normal on lumo-max (~16 tok/s, minutes-long reasoning). Not a hang if requests keep finishing: `proxy/proxy.log` logs each one, and `curl 127.0.0.1:8790/v1/debug/live` shows what is in flight. `LUMO_CAPTURE=1` on the proxy saves raw requests and streams to `proxy/debug/`. |
@@ -198,7 +232,10 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `install.ps1` | Windows one-command entry-point: installs Git Bash (with prompt), then runs install.sh |
 | `uninstall.sh` | Removes everything claude-lumo added; plain `claude` untouched |
 | `uninstall.ps1` | Windows entry-point for the uninstaller |
-| `claude-lumo.sh` | Launcher: starts proxy and LiteLLM if down, then runs Claude Code |
+| `claude-lumo.sh` | Launcher: starts proxy and LiteLLM if down, then runs Claude Code; `claude-lumo update` runs `update-command.sh` |
+| `update-command.sh` | `claude-lumo update`: checks out the newest `v*` release tag, re-runs the installer, offers session restarts |
+| `update-check.py` | Silent background check for a newer release at each launch; writes the one-line status-line notice |
+| `session-restart.py` | After an update: finds running sessions, offers restarts (wait until idle / interrupt now / skip) via Orca or tmux |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
 | `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
 | `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
@@ -209,8 +246,10 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `proxy/creds.mjs` | Reads Lumo login from any browser's cookies (Firefox, Chrome, Edge, Brave, Vivaldi, Opera) |
 | `proxy/litellm.yaml` | LiteLLM route table |
 | `test_render.py` | Tests for the personal agents in `render.py`: `python test_render.py` |
+| `test_update_check.py` | Tests for the update check, `claude-lumo update`, the busy-flag registry and the restart offer: `python test_update_check.py` |
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
+| `hooks/busy-mark.py` | Session registry for the restart offer: writes a per-session busy flag (set on prompt submit, cleared when the turn ends) |
 | `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |
 | `scripts/pre-push` | Opt-in git pre-push hook running the tombstone check |
 

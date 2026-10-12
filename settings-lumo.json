@@ -31,6 +31,50 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/busy-mark.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/busy-mark.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/busy-mark.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/busy-mark.py",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   },
   "attribution": {

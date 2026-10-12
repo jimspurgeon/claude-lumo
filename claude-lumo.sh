@@ -10,6 +10,10 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) LITELLM="$VENV/Scripts/litellm.exe"; PY=python; native() { cygpath -m "$1"; };;
   *) LITELLM="$VENV/bin/litellm"; PY=$(command -v python3 >/dev/null && echo python3 || echo python); native() { echo "$1"; };;
 esac
+
+# `claude-lumo update`: bring this install to the latest release (v1.3.0+).
+[ "$1" = "update" ] && exec bash "$D/update-command.sh"
+
 up() { curl -s -o /dev/null -m 2 -w '%{http_code}' "$1" 2>/dev/null | grep -q 200; }
 if ! up http://127.0.0.1:8790/v1/health; then
   (cd "$PROXY" && nohup node --no-warnings proxy.mjs >/dev/null 2>&1 &)
@@ -37,6 +41,13 @@ fi
 # reads --agents from a file only with --print; render.py keeps it under the command-line limit.
 AGENTS=()
 [ -s "$S/agents.json" ] && AGENTS=(--agents "$(cat "$S/agents.json")")
+
+# Update check (v1.3.0+): silent, in the background, at most once a day. It only asks the
+# repo's own remote for release tags and never touches the running session. Disable with
+# CLAUDE_LUMO_UPDATE_CHECK=0; see README.
+if [ "${CLAUDE_LUMO_UPDATE_CHECK:-1}" != "0" ] && [ -f "$D/update-check.py" ]; then
+  (nohup "$PY" "$(native "$D")/update-check.py" "$(native "$D")" >/dev/null 2>&1 &)
+fi
 
 export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL"
 exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "${AGENTS[@]}" "$@"
