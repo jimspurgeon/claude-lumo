@@ -11,6 +11,11 @@ echo "Stopping claude-lumo background processes (proxy, LiteLLM)..."
 pkill -f "claude.lumo/proxy/proxy.mjs" 2>/dev/null || true
 pkill -f "claude-lumo/litellm-venv" 2>/dev/null || true
 
+# Remove the resume shim profile lines first (before deleting ~/.claude/lumo).
+if [ -f "$HOME/.claude/lumo/scripts/resume-shim-setup.sh" ]; then
+  bash "$HOME/.claude/lumo/scripts/resume-shim-setup.sh" uninstall
+fi
+
 echo "Removing files..."
 rm -rf "$HOME/.claude-lumo" "$HOME/.claude/lumo"
 rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" \
