@@ -411,7 +411,9 @@ def plan_for_named_session(config_dir, session_id):
 def plan_for_named_project(config_dir, name):
     """--project mode: accept the encoded folder name or a real path."""
     projects_root = os.path.join(config_dir, "projects")
-    project = name if os.path.isdir(os.path.join(projects_root, name)) else None
+    # Only treat as simple project name if it doesn't look like an absolute/relative path
+    is_path_like = os.sep in name or (len(name) > 1 and name[1] == ":") or name.startswith("~")
+    project = name if not is_path_like and os.path.isdir(os.path.join(projects_root, name)) else None
     if project is None:
         wanted = os.path.normcase(os.path.normpath(os.path.abspath(os.path.expanduser(name))))
         try:

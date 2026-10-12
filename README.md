@@ -471,7 +471,8 @@ The wipe and offer features work with plain Claude Code too, not just lumo.
 To enable:
 
 1. Create `~/.claude/allowlist.txt` (optional): one project path per line
-2. Add this to your `~/.claude/settings.json`:
+2. Add this to your `~/.claude/settings.json`, replacing the python and script
+   paths with your own absolute paths:
 ```json
 {
   "hooks": {
@@ -479,13 +480,16 @@ To enable:
       {
         "matcher": "startup",
         "hooks": [
-          { "type": "command", "command": "{{PYTHON}} ~/.claude/lumo/hooks/session-start-offer.py", "timeout": 30 }
+          { "type": "command", "command": "python \"C:/Users/YOU/.claude/lumo/hooks/session-start-offer.py\"", "timeout": 30 }
         ]
       }
     ]
   }
 }
 ```
+On macOS/Linux use `/home/YOU/.claude/lumo/hooks/session-start-offer.py`.
+The `{{PYTHON}}` and `{{LUMO_DIR}}` placeholders used inside claude-lumo's own
+settings are filled in by its launcher and do not work in plain settings.json.
 
 To disable, remove the SessionStart hook entry. The offer is rate-limited to at
 most once per day and silent when nothing qualifies.
