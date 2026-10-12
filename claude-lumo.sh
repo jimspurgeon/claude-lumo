@@ -6,6 +6,7 @@
 D="$HOME/.claude/lumo"; PROXY="$HOME/.claude/lumo/proxy"; S="$HOME/.claude-lumo"; VENV="$S/litellm-venv"
 # Optional personal additions, kept outside this repo (see README, "Personal additions").
 LOCAL="${CLAUDE_LUMO_LOCAL:-$HOME/.claude/lumo-local}"
+
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) LITELLM="$VENV/Scripts/litellm.exe"; PY=python; native() { cygpath -m "$1"; };;
   *) LITELLM="$VENV/bin/litellm"; PY=$(command -v python3 >/dev/null && echo python3 || echo python); native() { echo "$1"; };;
@@ -14,6 +15,14 @@ esac
 # `claude-lumo update`: bring this install to the latest release (v1.3.0+).
 [ "$1" = "update" ] && exec bash "$D/update-command.sh"
 
+# Offline subcommands: data hygiene, no proxy or Lumo login needed.
+case "$1" in
+  wipe|privacy-audit)
+    SCRIPT="$D/${1//-/_}.py"
+    [ -f "$SCRIPT" ] || { echo "claude-lumo: $SCRIPT not found" >&2; exit 1; }
+    exec "$PY" "$(native "$SCRIPT")" "${@:2}"
+    ;;
+esac
 up() { curl -s -o /dev/null -m 2 -w '%{http_code}' "$1" 2>/dev/null | grep -q 200; }
 if ! up http://127.0.0.1:8790/v1/health; then
   (cd "$PROXY" && nohup node --no-warnings proxy.mjs >/dev/null 2>&1 &)

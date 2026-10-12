@@ -272,6 +272,8 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
 | `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
 | `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; chains to `statusline-next.sh` from your personal additions if present |
+| `wipe.py` | Finds and deletes finished conversation data (inactive 30+ days, branch merged/removed, project folder gone): run as `claude-lumo wipe` |
+| `privacy_audit.py` | Reads data safety posture (encryption, cloud sync, stale data volume): run as `claude-lumo privacy-audit` |
 | `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair (splits multi-tool-call chunks that LiteLLM would merge), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
 | `proxy/edit-hints.mjs` | Adds the closest real text to a failed Edit (and a reminder to Read before Edit or Write), so the retry copies it instead of guessing again. Claude Code checks edits before any hook runs, so this has to live in the proxy |
 | `proxy/tool-guard.mjs` | Holds tool calls until the stream ends, then checks each one: repairs arguments leaked as `<arg_key>` tags, retries the request once when Lumo announced a call but sent none or a broken one, and otherwise ends the turn with a visible message (#11). Tests: `node --test proxy/tool-guard.test.mjs` |
@@ -282,6 +284,7 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 | `hooks/busy-mark.py` | Session registry for the restart offer: writes a per-session busy flag (set on prompt submit, cleared when the turn ends) |
+| `hooks/session-start-offer.py` | SessionStart hook: offers to wipe old conversations, at most once per day, silent when nothing qualifies |
 | `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |
 | `scripts/separate_data.py` | Optional data separation: build/repair the link layout, migrate sessions between stores, status. Tests: `python scripts/test_separate_data.py` |
 | `scripts/pre-push` | Opt-in git pre-push hook running the tombstone check |
@@ -370,3 +373,119 @@ characters fit. Tests: `python test_render.py`.
 
 Keep that folder under your own version control (a private repo) if you want it backed up.
 Instructions for every session, Claude or Lumo, belong in `~/.claude/CLAUDE.md` as usual.
+
+---
+
+## Data hygiene commands
+
+### `claude-lumo wipe`
+
+Finds conversation data that is no longer needed and permanently deletes it.
+
+A session/project is a candidate when signals say its project is finished:
+- Inactivity (default 30+ days since last transcript write)
+- The project's git branch is merged into master/main or removed
+- The project working folder no longer exists
+- A `wipe-done` marker file exists in the project folder
+- (Allowlist mode) The project path is NOT in an allowlist file
+
+**Usage:**
+```bash
+# Dry run: list what would be deleted
+claude-lumo wipe --dry-run
+
+# Review and confirm deletion
+claude-lumo wipe
+
+# Custom inactivity threshold
+claude-lumo wipe --days 60
+
+# Wipe one specific session by ID
+claude-lumo wipe --session <session-id>
+
+# Wipe all sessions for a project
+claude-lumo wipe --project <project-name-or-path>
+
+# Skip confirmation (for scripting)
+claude-lumo wipe --yes
+
+# Allowlist mode: only wipe projects outside this file
+claude-lumo wipe --allowlist ~/.claude/allowlist.txt
+```
+
+**Stores affected:**
+- `projects/<project>/<session>.jsonl` and session subfolders (subagents, tool-results)
+- `session-env/<session>/`, `file-history/`, `tasks/` (entry-keyed folders)
+- Matching lines from `history.jsonl`
+- Stale temp scratch files (`claude-*` under `%TEMP%` or CLAUDE_CODE_TMPDIR)
+- Stale Lumo logs (`~/.claude-lumo/*.log`)
+
+**Protected:**
+- Sessions with recent activity (< 6 hours) or active env lock
+- Settings, memory, credentials, config files
+
+**Important:** Deletion is logical, not forensic. SSD wear levelling, backups,
+cloud sync and other tools' copies may still hold the data.
+
+**Orca data:** Orca keeps its own session data in `%APPDATA%/orca`. The wipe command
+lists these paths but does not delete them (V1 has no supported CLI for Orca data).
+Manual cleanup: close unneeded Orca terminals, then delete their folders under
+`terminal-history` yourself.
+
+### `claude-lumo privacy-audit`
+
+Read-only assessment of your data safety posture. Checks encryption, cloud sync,
+cleanup settings, stale data volume and update status. Outputs findings with severity.
+Runs occasionally (rate-limited), never changes anything.
+
+**Usage:**
+```bash
+# Full audit with all checks
+claude-lumo privacy-audit
+
+# Suggest mode: weekly reminder if stale data exists (quiet)
+claude-lumo privacy-audit --suggest
+
+# Custom staleness threshold
+claude-lumo privacy-audit --days 60
+```
+
+**Checks performed:**
+- Full-disk encryption (BitLocker on Windows, FileVault on macOS, LUKS on Linux)
+- Cloud sync exposure (OneDrive, Dropbox, iCloud)
+- Backup systems (Time Machine on macOS, File History on Windows)
+- Cleanup settings (cleanupPeriodDays, CLAUDE_CODE_SKIP_PROMPT_HISTORY)
+- Data separation (CLAUDE_CONFIG_DIR for lumo/plain split)
+- Stale data volume estimation
+- Update status (installed version vs latest release)
+- Orca data presence (report-only with manual cleanup steps)
+
+The full audit always runs when asked. Only `--suggest` is rate-limited: weekly, and
+silent when no stale data exists.
+
+---
+
+## Plain Claude Code opt-in
+
+The wipe and offer features work with plain Claude Code too, not just lumo.
+To enable:
+
+1. Create `~/.claude/allowlist.txt` (optional): one project path per line
+2. Add this to your `~/.claude/settings.json`:
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          { "type": "command", "command": "{{PYTHON}} ~/.claude/lumo/hooks/session-start-offer.py", "timeout": 30 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+To disable, remove the SessionStart hook entry. The offer is rate-limited to at
+most once per day and silent when nothing qualifies.

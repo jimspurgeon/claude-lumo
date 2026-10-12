@@ -20,6 +20,18 @@
     "command": "{{PYTHON}} {{LUMO_DIR}}/statusline.py"
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/session-start-offer.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
