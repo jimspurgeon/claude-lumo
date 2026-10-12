@@ -236,6 +236,8 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `update-command.sh` | `claude-lumo update`: checks out the newest `v*` release tag, re-runs the installer, offers session restarts |
 | `update-check.py` | Silent background check for a newer release at each launch; writes the one-line status-line notice |
 | `session-restart.py` | After an update: finds running sessions, offers restarts (wait until idle / interrupt now / skip) via Orca or tmux |
+| `migrate-to-lumo.sh` | Moves Lumo sessions from `~/.claude` into the separate store (see "Separate data") |
+| `migrate-from-lumo.sh` | Moves them back; undoes `migrate-to-lumo.sh` |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
 | `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
 | `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
@@ -251,10 +253,60 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 | `hooks/busy-mark.py` | Session registry for the restart offer: writes a per-session busy flag (set on prompt submit, cleared when the turn ends) |
 | `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |
+| `scripts/separate_data.py` | Optional data separation: build/repair the link layout, migrate sessions between stores, status. Tests: `python scripts/test_separate_data.py` |
 | `scripts/pre-push` | Opt-in git pre-push hook running the tombstone check |
 
 Runtime state (not in the repo): `~/.claude-lumo/` holds the LiteLLM venv, a random
 local key, logs, and the settings and system prompt rendered at each launch.
+
+## Separate data (optional)
+
+By default claude-lumo shares everything with `claude`: one `~/.claude`, so one set of
+conversations, prompt history, file snapshots and logins. Optional data separation gives
+claude-lumo its own store for that data while rules stay shared:
+
+| Kept separate in `~/.claude-lumo/data` | Shared with `claude` (linked) |
+|---|---|
+| `projects/` (conversations, auto memory), `history.jsonl`, `file-history/`, `session-env/`, `shell-snapshots/`, `todos/`, `plans/`, `paste-cache/`, `debug/`, `.credentials.json` | `CLAUDE.md`, `settings.json`, `keybindings.json`, `themes/`, `rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `output-styles/`, `plugins/`, `hooks/` |
+
+The launcher exports `CLAUDE_CONFIG_DIR=~/.claude-lumo/data` for its own process only, so
+plain `claude` is untouched. Linked items are junctions on Windows (no admin rights needed)
+and symlinks elsewhere.
+
+Turn it on (off by default, nothing changes for existing users):
+
+```bash
+# option 1: reinstall with the flag
+bash ~/.claude/lumo/install.sh --separate-data   # or: powershell install.ps1 --separate-data
+
+# option 2: just the marker, layout is built on next launch
+touch ~/.claude-lumo/separate-data.on
+
+# option 3: one session only
+CLAUDE_LUMO_SEPARATE_DATA=1 claude-lumo
+```
+
+Check state any time with `python ~/.claude/lumo/scripts/separate_data.py status`.
+
+Moving existing Lumo sessions into the store (they are the transcripts containing a
+`lumo-` model; Claude sessions are never touched):
+
+```bash
+bash ~/.claude/lumo/migrate-to-lumo.sh --dry-run   # show the plan
+bash ~/.claude/lumo/migrate-to-lumo.sh --yes       # move: transcripts, their per-session
+                                                   # dirs, history lines; project memory/
+                                                   # only when every session there is Lumo
+bash ~/.claude/lumo/migrate-from-lumo.sh --yes     # undo: everything back to ~/.claude
+```
+
+Two limitations worth knowing. A project dir mixing Claude and Lumo sessions keeps its
+`memory/` in the shared store (both kinds of session use it), and a plain
+`claude --resume <id>` from a normal terminal cannot see Lumo-store sessions: resume them
+via `claude-lumo --resume <id>` or from an environment that also sets `CLAUDE_CONFIG_DIR`.
+
+Separation ships in v1.3.0. Uninstall removes `~/.claude-lumo` including the separate
+store, but not what lives in `~/.claude` (run migrate-from-lumo.sh first if you want those
+sessions kept).
 
 ## Personal additions
 

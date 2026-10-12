@@ -38,8 +38,8 @@ $localSh = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'install.sh' } else { $n
 if ($localSh -and (Test-Path $localSh)) {
   & $gitExe -lc '"$0" "$@"' $localSh "$args"
 } else {
-  # Bootstrap the latest install.sh from GitHub
-  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.sh | & $gitExe -
+  # Bootstrap the latest install.sh from GitHub (forward any args, e.g. --separate-data)
+  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.sh | & $gitExe -s -- "$args"
 }
 
 Write-Host ''

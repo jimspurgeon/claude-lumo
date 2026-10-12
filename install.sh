@@ -156,5 +156,24 @@ if [ "$OS" = "windows" ]; then
   printf '@echo off\r\n"C:\\Program Files\\Git\\bin\\bash.exe" "%%USERPROFILE%%\\.claude\\lumo\\claude-lumo.sh" %%*\r\n' > "$BIN/claude-lumo.cmd"
 fi
 
+# Separate data (optional): --separate-data writes a marker and runs setup so the launcher
+# exports CLAUDE_CONFIG_DIR on next launch.
+if [ "${1:-}" = "--separate-data" ]; then
+  echo ""
+  echo "Enabling optional data separation..."
+  touch "$S/separate-data.on"
+  if "$PY" "$D/scripts/separate_data.py" setup --config-dir "$S/data" --shared "$HOME/.claude"; then
+    echo "Data separation enabled:"
+    echo "  - Config dir: $S/data (transcripts, history, per-session state)"
+    echo "  - Shared items linked from ~/.claude (CLAUDE.md, settings.json, skills, agents, ...)"
+    echo ""
+    echo "Migrate existing Lumo sessions with:"
+    echo "  python $S/scripts/separate_data.py migrate --dry-run  # preview"
+    echo "  python $S/scripts/separate_data.py migrate          # execute"
+  else
+    echo "Warning: setup failed; CLAUDE_CONFIG_DIR will not be set on next launch" >&2
+  fi
+fi
+
 echo "Installed into ~/.claude/lumo. If 'claude-lumo' is not found, add $BIN to PATH and reopen the terminal."
 echo "Test: claude-lumo -p 'reply with pong'"
