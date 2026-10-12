@@ -3,7 +3,8 @@
 
 Rate-limited to at most once per day via a timestamp marker. Surfaces one short line
 when candidates exist: "X old conversations in Y projects could be wiped: run `claude-lumo wipe`".
-Silent when nothing qualifies. Easy to disable via config (set sessionWipeOffer.enabled = false).
+Silent when nothing qualifies. Disable by setting CLAUDE_LUMO_WIPE_OFFER=0 in your
+environment, or by removing the SessionStart hook entry from settings (plain installs).
 
 Input/output format for hooks:
   stdin: {"hookEventName": "SessionStart", ...}
@@ -151,9 +152,9 @@ def main():
     except (ValueError, OSError):
         input_data = {}
 
-    config = input_data.get("hookConfig", {})
-    enabled = config.get("sessionWipeOffer", {}).get("enabled", True)
-    if not enabled:
+    # Claude Code sends no hook configuration on stdin, so the off switch is
+    # an environment variable the hook reads itself.
+    if os.environ.get("CLAUDE_LUMO_WIPE_OFFER") == "0":
         output = {"hookSpecificOutput": {"hookEventName": "SessionStart"}}
         print(json.dumps(output))
         return

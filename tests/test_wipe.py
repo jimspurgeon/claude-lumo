@@ -36,6 +36,7 @@ from wipe import (
     history_rewrite,
     stale_temp_scratch,
     stale_lumo_logs,
+    stale_config_stores,
     find_project_of_session,
     collect_candidates,
     plan_for_named_session,
@@ -495,6 +496,69 @@ class TestStaleLumoLogs:
             os.path.expanduser = original_expanduser
 
 
+class TestStaleConfigStores:
+    """Tests for stale_config_stores: the age-keyed stores under the config dir."""
+
+    def test_stale_entries_found_fresh_kept(self, tmp_path):
+        config_dir = tmp_path
+        old_time = time.time() - 40 * 86400
+        now = time.time()
+
+        paste_old = config_dir / "paste-cache" / "abc123.txt"
+        paste_old.parent.mkdir(parents=True)
+        paste_old.write_text("secret")
+        os.utime(str(paste_old), (old_time, old_time))
+
+        paste_fresh = config_dir / "paste-cache" / "def456.txt"
+        paste_fresh.write_text("recent")
+        os.utime(str(paste_fresh), (now, now))
+
+        snap_old = config_dir / "shell-snapshots" / "old.sh"
+        snap_old.parent.mkdir(parents=True)
+        snap_old.write_text("rm -rf /")
+        os.utime(str(snap_old), (old_time, old_time))
+
+        result = stale_config_stores(str(config_dir), 30)
+
+        paths = [p for _, p in result]
+        assert str(paste_old) in paths
+        assert str(snap_old) in paths
+        assert str(paste_fresh) not in paths
+        kinds = [k for k, _ in result]
+        assert "paste-cache" in kinds and "shell-snapshots" in kinds
+
+    def test_stale_directories_swept_too(self, tmp_path):
+        # plans/ holds arbitrary .md files; debug/ holds dated subfolders
+        config_dir = tmp_path
+        old_time = time.time() - 40 * 86400
+        plan_old = config_dir / "plans" / "old-plan.md"
+        plan_old.parent.mkdir(parents=True)
+        plan_old.write_text("plan")
+        os.utime(str(plan_old), (old_time, old_time))
+
+        debug_dir = config_dir / "debug" / "2026-09-01"
+        debug_dir.mkdir(parents=True)
+        (debug_dir / "trace.json").write_text("{}")
+        os.utime(str(debug_dir), (old_time, old_time))
+
+        result = stale_config_stores(str(config_dir), 30)
+        paths = [p for _, p in result]
+        assert str(plan_old) in paths
+        assert str(debug_dir) in paths
+
+    def test_unknown_dirs_ignored(self, tmp_path):
+        # Stores outside the list are never touched
+        other = tmp_path / "projects" / "someproject"
+        other.mkdir(parents=True)
+        old_time = time.time() - 40 * 86400
+        os.utime(str(other), (old_time, old_time))
+
+        assert stale_config_stores(str(tmp_path), 30) == []
+
+    def test_missing_stores_yield_empty(self, tmp_path):
+        assert stale_config_stores(str(tmp_path / "nonexistent"), 30) == []
+
+
 class TestFindProjectOfSession:
     """Tests for find_project_of_session function."""
 
@@ -803,6 +867,81 @@ class TestDryRunMode:
             assert test_file.exists()
             assert (old_project / "s1.jsonl").exists()
             assert old_project.is_dir()
+        finally:
+            wipe.resolve_config_dir = original_resolve
+
+
+    def test_dry_run_lists_stale_store_entries_and_deletes_nothing(self, tmp_path, capsys):
+        # Auto mode: a stale paste-cache entry is listed and survives
+        config_dir = tmp_path
+        projects_root = config_dir / "projects"
+        projects_root.mkdir()
+        paste_old = config_dir / "paste-cache" / "abc123.txt"
+        paste_old.parent.mkdir(parents=True)
+        paste_old.write_text("secret")
+        old_mtime = time.time() - 40 * 86400
+        os.utime(str(paste_old), (old_mtime, old_mtime))
+
+        import wipe
+        original_resolve = wipe.resolve_config_dir
+        wipe.resolve_config_dir = lambda: str(config_dir)
+
+        try:
+            wipe.main(["--dry-run"])
+            out = capsys.readouterr().out
+            assert "paste-cache" in out
+            assert str(paste_old) in out
+            assert paste_old.exists()
+        finally:
+            wipe.resolve_config_dir = original_resolve
+
+    def test_yes_deletes_stale_store_entries(self, tmp_path, capsys):
+        # Auto mode with --yes: a stale paste-cache file is gone afterwards
+        config_dir = tmp_path
+        projects_root = config_dir / "projects"
+        projects_root.mkdir()
+        paste_old = config_dir / "paste-cache" / "abc123.txt"
+        paste_old.parent.mkdir(parents=True)
+        paste_old.write_text("secret")
+        old_mtime = time.time() - 40 * 86400
+        os.utime(str(paste_old), (old_mtime, old_mtime))
+
+        paste_fresh = config_dir / "paste-cache" / "fresh.txt"
+        paste_fresh.write_text("recent")
+        os.utime(str(paste_fresh), (time.time(), time.time()))
+
+        import wipe
+        original_resolve = wipe.resolve_config_dir
+        wipe.resolve_config_dir = lambda: str(config_dir)
+
+        try:
+            wipe.main(["--yes"])
+            assert not paste_old.exists()
+            assert paste_fresh.exists()
+        finally:
+            wipe.resolve_config_dir = original_resolve
+
+    def test_session_mode_skips_store_sweep(self, tmp_path, capsys):
+        # --session wipes only that session's paths, never the age-keyed stores
+        config_dir = tmp_path
+        projects_root = config_dir / "projects" / "proj"
+        projects_root.mkdir(parents=True)
+        (projects_root / "session-id-1.jsonl").write_text("{}", encoding="utf-8")
+        old_mtime = time.time() - 40 * 86400
+        os.utime(str(projects_root / "session-id-1.jsonl"), (old_mtime, old_mtime))
+
+        paste_old = config_dir / "paste-cache" / "abc123.txt"
+        paste_old.parent.mkdir(parents=True)
+        paste_old.write_text("secret")
+        os.utime(str(paste_old), (old_mtime, old_mtime))
+
+        import wipe
+        original_resolve = wipe.resolve_config_dir
+        wipe.resolve_config_dir = lambda: str(config_dir)
+
+        try:
+            wipe.main(["--session", "session-id-1", "--yes"])
+            assert paste_old.exists()
         finally:
             wipe.resolve_config_dir = original_resolve
 
@@ -1369,7 +1508,7 @@ class TestHookAllowlistEnv:
 
 
 class TestHookDisabled:
-    """hookConfig.sessionWipeOffer.enabled=false suppresses the offer."""
+    """CLAUDE_LUMO_WIPE_OFFER=0 suppresses the offer."""
 
     HOOK_PATH = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -1383,8 +1522,7 @@ class TestHookDisabled:
         assert proc.returncode == 0, proc.stderr
         return json.loads(proc.stdout)
 
-    def test_disabled_config_yields_no_additional_context(self, tmp_path):
-        # A stale project that WOULD trigger the offer if enabled
+    def _stale_env(self, tmp_path):
         project = tmp_path / "projects" / "old"
         project.mkdir(parents=True)
         old_mtime = time.time() - 40 * 86400
@@ -1397,32 +1535,34 @@ class TestHookDisabled:
         env["CLAUDE_CONFIG_DIR"] = str(tmp_path)
         env["HOME"] = str(tmp_path)
         env["USERPROFILE"] = str(tmp_path)
+        env.pop("CLAUDE_LUMO_WIPE_OFFER", None)
+        return env
 
-        output = self._run_hook(
-            '{"hookEventName": "SessionStart", '
-            '"hookConfig": {"sessionWipeOffer": {"enabled": false}}}',
-            env)
+    def test_disabled_env_yields_no_additional_context(self, tmp_path):
+        env = self._stale_env(tmp_path)
+        env["CLAUDE_LUMO_WIPE_OFFER"] = "0"
+
+        output = self._run_hook('{"hookEventName": "SessionStart"}', env)
 
         hook_out = output.get("hookSpecificOutput", {})
         assert hook_out.get("hookEventName") == "SessionStart"
         assert "additionalContext" not in hook_out
 
+    def test_other_env_values_do_not_disable(self, tmp_path):
+        # Any value other than "0" leaves the offer on
+        env = self._stale_env(tmp_path)
+        env["CLAUDE_LUMO_WIPE_OFFER"] = "false"
+
+        output = self._run_hook('{"hookEventName": "SessionStart"}', env)
+
+        hook_out = output.get("hookSpecificOutput", {})
+        assert "additionalContext" in hook_out
+        assert "could be wiped" in hook_out["additionalContext"]
+
     def test_enabled_by_default_when_stale(self, tmp_path):
-        # Same stale project, no disabling config: the offer appears
-        project = tmp_path / "projects" / "old"
-        project.mkdir(parents=True)
-        old_mtime = time.time() - 40 * 86400
-        (project / "s1.jsonl").write_text("{}", encoding="utf-8")
-        os.utime(str(project / "s1.jsonl"), (old_mtime, old_mtime))
+        env = self._stale_env(tmp_path)
 
-        env = dict(os.environ)
-        env["CLAUDE_CONFIG_DIR"] = str(tmp_path)
-        env["HOME"] = str(tmp_path)
-        env["USERPROFILE"] = str(tmp_path)
-
-        output = self._run_hook(
-            '{"hookEventName": "SessionStart", "hookConfig": {}}',
-            env)
+        output = self._run_hook('{"hookEventName": "SessionStart"}', env)
 
         hook_out = output.get("hookSpecificOutput", {})
         assert "additionalContext" in hook_out

@@ -419,6 +419,11 @@ claude-lumo wipe --allowlist ~/.claude/allowlist.txt
 - Matching lines from `history.jsonl`
 - Stale temp scratch files (`claude-*` under `%TEMP%` or CLAUDE_CODE_TMPDIR)
 - Stale Lumo logs (`~/.claude-lumo/*.log`)
+- Stale entries (default 30+ days) in the age-keyed stores: `paste-cache/`,
+  `image-cache/`, `shell-snapshots/`, `plans/`, `debug/`, `uploads/`
+
+The age-keyed stores hold no session key, so entries are swept by age in
+`wipe` auto mode only (not with `--session` or `--project`).
 
 **Protected:**
 - Sessions with recent activity (< 6 hours) or active env lock
@@ -436,7 +441,8 @@ Manual cleanup: close unneeded Orca terminals, then delete their folders under
 
 Read-only assessment of your data safety posture. Checks encryption, cloud sync,
 cleanup settings, stale data volume and update status. Outputs findings with severity.
-Runs occasionally (rate-limited), never changes anything.
+Runs occasionally (rate-limited), never reads or writes your conversation data
+(the only files it writes are its own tiny rate-limit markers under `~/.claude-lumo`).
 
 **Usage:**
 ```bash
@@ -491,5 +497,7 @@ On macOS/Linux use `/home/YOU/.claude/lumo/hooks/session-start-offer.py`.
 The `{{PYTHON}}` and `{{LUMO_DIR}}` placeholders used inside claude-lumo's own
 settings are filled in by its launcher and do not work in plain settings.json.
 
-To disable, remove the SessionStart hook entry. The offer is rate-limited to at
-most once per day and silent when nothing qualifies.
+To disable, set `CLAUDE_LUMO_WIPE_OFFER=0` in your environment (works everywhere,
+including claude-lumo installs where the hook is part of the shipped settings), or
+remove the SessionStart hook entry from your settings. The offer is rate-limited to
+at most once per day and silent when nothing qualifies.

@@ -5,6 +5,8 @@
 # When this file exists at ~/.claude/allowlist.txt (or ~/.claude-lumo/allowlist.txt
 # when CLAUDE_CONFIG_DIR is set), only projects OUTSIDE this list are candidates.
 # Projects ON the list are never wiped automatically.
+# The session-start offer hook reads this file by itself; for `claude-lumo wipe`
+# pass it explicitly with --allowlist (or set WIPE_ALLOWLIST for the hook).
 #
 # Examples:
 # C:/Users/Jim/orca/claude-lumo

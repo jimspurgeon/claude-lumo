@@ -334,6 +334,34 @@ def stale_lumo_logs(days):
     return out
 
 
+# Config-dir stores that hold no session key: entries are aged out globally,
+# never attached to a per-session wipe plan.
+STALE_STORE_NAMES = ("paste-cache", "image-cache", "shell-snapshots", "plans", "debug", "uploads")
+
+
+def stale_config_stores(config_dir, days):
+    """Entries in the age-keyed config stores older than the cutoff."""
+    cutoff = time.time() - days * 86400
+    out = []
+    for name in STALE_STORE_NAMES:
+        store = os.path.join(config_dir, name)
+        if not os.path.isdir(store):
+            continue
+        try:
+            entries = list(os.scandir(store))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if not (entry.is_dir(follow_symlinks=False) or entry.is_file(follow_symlinks=False)):
+                    continue
+                if entry.stat().st_mtime < cutoff:
+                    out.append((name, entry.path))
+            except OSError:
+                pass
+    return out
+
+
 def find_project_of_session(config_dir, session_id):
     """Locate the projects/<project> folder holding <session_id>.jsonl, else None."""
     projects = os.path.join(config_dir, "projects")
@@ -503,7 +531,7 @@ def delete_all(target_groups):
     return results
 
 
-def print_plans(candidates, days, temp_paths, log_paths):
+def print_plans(candidates, days, temp_paths, log_paths, store_paths):
     total = sum(c["size"] for c in candidates)
     session_count = sum(len(c["sessions"]) for c in candidates)
     print(f"Found {session_count} conversation(s) in {len(candidates)} project(s) to wipe.")
@@ -516,12 +544,17 @@ def print_plans(candidates, days, temp_paths, log_paths):
         for kind, path in c["paths"]:
             print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
         print(f"  [history.jsonl] {len(c['session_ids'])} matching line(s)")
-    for group, label in ((temp_paths, "stale temp scratch"), (log_paths, "stale Lumo logs")):
+    for group, label in (
+            (temp_paths, "stale temp scratch"),
+            (log_paths, "stale Lumo logs"),
+            (store_paths, "stale cache and snapshot stores")):
         if group:
             print(f"\n{label.title()}:")
             for kind, path in group:
                 print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
-    grand = total + sum(tree_size(p) for _, p in temp_paths) + sum(tree_size(p) for _, p in log_paths)
+    grand = (total + sum(tree_size(p) for _, p in temp_paths)
+             + sum(tree_size(p) for _, p in log_paths)
+             + sum(tree_size(p) for _, p in store_paths))
     print(f"\nTotal to delete: {format_size(grand)}")
     print("Deletion is permanent but logical, not forensic: SSD wear levelling, backups,")
     print("cloud sync and other tools' copies may still hold the data.")
@@ -562,24 +595,25 @@ def main(argv=None):
             print(f"No session {args.session} found under {config_dir}/projects.")
             sys.exit(1)
         plans = [plan]
-        temp_paths, log_paths = [], []
+        temp_paths, log_paths, store_paths = [], [], []
     elif args.project:
         plan = plan_for_named_project(config_dir, args.project)
         if plan is None:
             print(f"No project matching {args.project} found under {config_dir}/projects.")
             sys.exit(1)
         plans = [plan]
-        temp_paths, log_paths = [], []
+        temp_paths, log_paths, store_paths = [], [], []
     else:
         plans = collect_candidates(config_dir, args.days, args.allowlist)
         temp_paths = stale_temp_scratch(resolve_temp_dir(), args.days)
         log_paths = stale_lumo_logs(args.days)
+        store_paths = stale_config_stores(config_dir, args.days)
 
-    if not plans and not temp_paths and not log_paths:
+    if not plans and not temp_paths and not log_paths and not store_paths:
         print("Nothing to wipe.")
         return
 
-    print_plans(plans, args.days, temp_paths, log_paths)
+    print_plans(plans, args.days, temp_paths, log_paths, store_paths)
     print_orca_section(describe_orca(resolve_orca_dir()))
 
     if args.dry_run:
@@ -594,7 +628,7 @@ def main(argv=None):
     all_groups = []
     for c in plans:
         all_groups.append(c["paths"])
-    all_groups.extend([temp_paths, log_paths])
+    all_groups.extend([temp_paths, log_paths, store_paths])
     for group in all_groups:
         if not group:
             continue

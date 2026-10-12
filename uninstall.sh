@@ -30,6 +30,10 @@ if [ -f "$SETTINGS" ] && grep -q "session-start-offer.py" "$SETTINGS" 2>/dev/nul
   if command -v "$PY" >/dev/null 2>&1; then
     if [ -f "$SETTINGS.bak-wipe-offer" ]; then
       # Restore the pre-opt-in backup (made by install.sh when it added the hook).
+      # Tradeoff: the backup captures the entire settings.json before the opt-in,
+      # so restoring it discards any manual changes made AFTER opt-in but BEFORE
+      # uninstall. If you kept important edits, restore the file manually and
+      # re-apply just the opt-in removal with the Python snippet below.
       cp "$SETTINGS.bak-wipe-offer" "$SETTINGS"
       rm -f "$SETTINGS.bak-wipe-offer"
       echo "Restored ~/.claude/settings.json from the pre-opt-in backup."
