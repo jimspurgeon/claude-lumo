@@ -11,8 +11,13 @@
 // client. A no_db_connection error is retried once with a short backoff: it is
 // transient at request level (the log shows single failures whose immediate
 // successor with the same input size succeeded - see the analysis posted on
-// issue #43). Only the error type and code are ever logged, never the message
-// or any prompt content.
+// issue #43). If the retry also fails with no_db_connection, the request is
+// retried once more with the `prompt_cache_key` field stripped: Lumo keys its
+// per-session prompt cache on that field (injected by LiteLLM on every call),
+// and a session whose cache entry is wedged fails permanently while fresh
+// sessions work (issue #60 - chronic after leaving and re-entering an agent).
+// Removing the key forces Lumo to start a fresh cache entry; only the error
+// type and code are ever logged, never the message or any prompt content.
 
 export const NO_DB_CONNECTION = "no_db_connection";
 export const NO_DB_RETRY_MS = 1500;
@@ -28,6 +33,19 @@ export function errorMetaFrom(text) {
 }
 
 const isSSE = (r) => (r.headers.get("content-type") || "").includes("event-stream");
+
+// Strips `prompt_cache_key` (and the LiteLLM-mirrored `user` field it derives
+// from) from a chat request body, so the retry lands on a fresh Lumo prompt-cache
+// entry. Returns the original body unchanged when it is not JSON or carries no key.
+function stripCacheKey(body) {
+  let d;
+  try { d = JSON.parse(body); } catch { return body; }
+  if (d == null || typeof d !== "object" || !("prompt_cache_key" in d)) return body;
+  const out = { ...d };
+  delete out.prompt_cache_key;
+  if (out.user === d.prompt_cache_key) delete out.user; // LiteLLM mirrors the key into user
+  return JSON.stringify(out);
+}
 
 // Fetches the upstream chat response, buffering non-SSE bodies to detect error
 // payloads. Returns { response, buffered, errMeta, retried }: buffered is the
@@ -55,12 +73,25 @@ export async function upstreamChat({ upstream, method, path, body, headers, log,
       return { response: res, buffered: text, errMeta, retried };
     }
     if (!errMeta) return { response: res, buffered: text, errMeta: null, retried };
-    if (!errMeta.isNoDb || attempt >= 1) {
-      log(`${path} upstream error ${res.status} type=${errMeta.type} code=${errMeta.code}`);
-      return { response: res, buffered: text, errMeta, retried };
+    // no_db_connection: retry once with backoff (issue #43), then once more with
+    // prompt_cache_key stripped (issue #60). Give up after that.
+    if (errMeta.isNoDb && attempt === 0) {
+      log(`${path} upstream error ${res.status} type=${errMeta.type} code=${errMeta.code}; retrying once in ${retryDelayMs / 1000}s`);
+      retried = true;
+      await sleep(retryDelayMs);
+      continue;
     }
-    log(`${path} upstream error ${res.status} type=${errMeta.type} code=${errMeta.code}; retrying once in ${retryDelayMs / 1000}s`);
-    retried = true;
-    await sleep(retryDelayMs);
+    if (errMeta.isNoDb && attempt === 1) {
+      const stripped = stripCacheKey(body);
+      if (stripped !== body) {
+        log(`${path} upstream error ${res.status} type=${errMeta.type} code=${errMeta.code}; retrying once with prompt_cache_key stripped`);
+        body = stripped;
+        retried = true;
+        await sleep(retryDelayMs);
+        continue;
+      }
+    }
+    log(`${path} upstream error ${res.status} type=${errMeta.type} code=${errMeta.code}`);
+    return { response: res, buffered: text, errMeta, retried };
   }
 }
