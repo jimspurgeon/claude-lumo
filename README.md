@@ -227,7 +227,7 @@ removes the lines too.
 | **Pressing LEFT ARROW in an agent view then re-entering that same agent causes permanent `no_db_connection` failures** (issue #60) | The proxy now recovers by retrying with `prompt_cache_key` stripped after two consecutive `no_db_connection` errors. If you still see persistent failures in a session after leaving the agent list, start a fresh `claude-lumo` session (or use `claude-lumo --resume <session_id>` for the session-resume hook); fresh sessions work because they get a new cache key. Never press into the agents view in other sessions. |
 | "response exceeded the 32000 output token maximum" | The model spent its whole budget thinking (often drafting a big batch in its head) before it answered; `proxy/proxy.log` shows `finish=length content=0c tools=0`. Split the work into smaller steps, for example one batch per tool call. The cap is `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in `settings-lumo.json` (32000, #19); you can raise it in your own `settings.json`, but each stuck turn then runs longer, at about 1.2K tokens a minute on lumo-max. |
 | Failed Edit with a "[claude-lumo]" note | The proxy added the closest real text to an Edit whose old text was not in the file; the model should retry with the text between the markers. |
-| WebSearch returns fabricated results / sources | Expected limitation: Lumo has no search backend, so real WebSearch cannot run. Since #59 the proxy answers WebSearch calls with a `[claude-lumo] WebSearch is not available` message instead of letting the model present training-data guesses as search output; `proxy/proxy.log` shows `websearch_blocked=1`. Use WebFetch for specific URLs. |
+| WebSearch returns fabricated results / sources | Fixed since #73: the proxy runs the search itself via the Brave Search API and answers WebSearch calls with real results, as long as `LUMO_SEARCH_API_KEY` is set (see "Web search"). Without a key — or when the Brave API errors — the fallback from #59 applies: a `[claude-lumo] WebSearch is not available` message instead of letting the model present training-data guesses as search output; `proxy/proxy.log` shows `websearch_answered=unavailable`. |
 | `python` / `python3` not found | Install Python 3.12+. On Windows, make sure it's added to PATH during installation. |
 | "No Lumo login found" | Log in at lumo.proton.me in a supported browser, or use the manual `login.json` fallback above. |
 | `NODE_ENV` warning | Ignore harmless warnings about NODE_ENV from LiteLLM. |
@@ -244,10 +244,68 @@ browser's cookies — so there are no passwords or API keys to copy anywhere. It
 transparently reconnects when your Lumo session expires and retries on hiccups.
 
 Two local ports are used: 4000 and 8790. Nothing leaves your machine except traffic to
-lumo.proton.me.
+lumo.proton.me — and, when web search is enabled (see "Web search"), search queries to
+api.search.brave.com.
 
 Nothing is stored in the repo or sent anywhere else: no credentials in any file, and
 re-running the installer is always safe (it skips what already exists).
+
+## Web search
+
+WebSearch in Claude Code is implemented as an internal chat-side call (a request carrying
+`web_search_options: {}`). Since #73 the Lumo proxy answers that delegation with real
+search results from the [Brave Search API](https://api.search.brave.com/) instead of
+letting Lumo fabricate sources from training data (#59).
+
+### Setup
+
+1. Get a free API key: sign up at [Brave Search API Console](https://api.search.brave.com/).
+   The free tier allows 2,000 queries/month with generous rate limits.
+
+2. Set the environment variable before launching the proxy:
+   ```bash
+   set LUMO_SEARCH_API_KEY=your-brave-api-key
+   claude-lumo
+   ```
+
+   On Windows PowerShell:
+   ```powershell
+   $env:LUMO_SEARCH_API_KEY="your-brave-api-key"
+   claude-lumo
+   ```
+
+3. Test: ask "Search for recent news about X" or use the WebSearch tool explicitly.
+
+### Fallback behavior
+
+When `LUMO_SEARCH_API_KEY` is not configured — or when the Brave API returns an error —
+the proxy returns the original unavailability message (from #59):
+
+> "[claude-lumo] WebSearch is not available on this endpoint: Lumo has no web-search
+> backend, so no real search was performed. Do NOT present these results or invent
+> sources. Tell the user that web search is unavailable, and that WebFetch can still
+> retrieve specific URLs."
+
+This ensures the model never presents training-data guesses as search output.
+
+### API details
+
+- Endpoint: `https://api.search.brave.com/res/v1/web/search`
+- Parameters: `count=5`, `safesearch=off`
+- Header: `X-Subscription-Token: <API key>`
+- Timeout: 15 seconds
+- Format: Numbered list (1-5) showing title, snippet, URL
+
+Log output in `proxy/proxy.log`:
+- `websearch_answered=results` when Brave API returned results
+- `websearch_answered=unavailable` when falling back to the unavailability message
+
+### Limitations
+
+- Free tier: 2,000 queries/month. Upgrade at [Brave API](https://api.search.brave.com/pricing)
+  for higher quotas.
+- Results limited to top 5 for brevity in tool responses.
+- No geographic targeting (uses Brave's global index).
 
 ## Hook tombstone policy
 
@@ -316,7 +374,7 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `proxy/sniffer.test.mjs` | Sniffer tests: `node --test proxy/sniffer.test.mjs` |
 | `proxy/edit-hints.mjs` | Adds the closest real text to a failed Edit (and a reminder to Read before Edit or Write), so the retry copies it instead of guessing again. Claude Code checks edits before any hook runs, so this has to live in the proxy |
 | `proxy/tool-guard.mjs` | Holds tool calls until the stream ends, then checks each one: repairs arguments leaked as `<arg_key>` tags, retries the request once when Lumo announced a call but sent none or a broken one, and otherwise ends the turn with a visible message (#11). Tests: `node --test proxy/tool-guard.test.mjs` |
-| `proxy/websearch-guard.mjs` | Blocks Claude Code's internal WebSearch delegation (`web_search_options: {}`) and answers with a clear unavailability message instead of letting Lumo hallucinate from training data (#59). Tests: `node --test proxy/websearch-guard.test.mjs` |
+| `proxy/websearch-guard.mjs` | Answers Claude Code's internal WebSearch delegation (`web_search_options: {}`) with real Brave Search API results (`LUMO_SEARCH_API_KEY`, #73), falling back to a clear unavailability message when no key is set or the API errors, instead of letting Lumo hallucinate from training data (#59). Tests: `node --test proxy/websearch-guard.test.mjs` |
 | `proxy/creds.mjs` | Reads Lumo login from any browser's cookies (Firefox, Chrome, Edge, Brave, Vivaldi, Opera) |
 | `proxy/litellm.yaml` | LiteLLM route table |
 | `test_render.py` | Tests for the personal agents in `render.py`: `python test_render.py` |
