@@ -188,7 +188,7 @@ This adds one clearly commented line to your shell profiles (`~/.bashrc`, `~/.zs
 and on Windows the PowerShell profiles), sourcing the shim from `~/.claude/lumo/scripts/`
 so updates flow to it. It is idempotent: re-running keeps exactly one line. Transcripts
 are looked up in `$CLAUDE_CONFIG_DIR` if set, then `~/.claude`, then
-`~/.claude-lumo/config` (the separated Lumo data store). Uninstalling claude-lumo
+`~/.claude-lumo/data` (the separated Lumo data store). Uninstalling claude-lumo
 removes the lines too.
 
 ## Troubleshooting
@@ -400,11 +400,14 @@ claude-lumo wipe
 # Custom inactivity threshold
 claude-lumo wipe --days 60
 
-# Wipe one specific session by ID
+# Wipe one specific session by ID (searched in every store)
 claude-lumo wipe --session <session-id>
 
-# Wipe all sessions for a project
+# Wipe all sessions for a project (searched in every store)
 claude-lumo wipe --project <project-name-or-path>
+
+# Restrict the scan to one or more stores (repeat the flag)
+claude-lumo wipe --store ~/.claude --store ~/.claude-lumo/data
 
 # Skip confirmation (for scripting)
 claude-lumo wipe --yes
@@ -413,7 +416,15 @@ claude-lumo wipe --yes
 claude-lumo wipe --allowlist ~/.claude/allowlist.txt
 ```
 
-**Stores affected:**
+**Stores scanned:** auto mode discovers and scans every Claude data store on the
+machine: `$CLAUDE_CONFIG_DIR` if set, `~/.claude`, `~/.claude-lumo/data`, the
+legacy `~/.claude-lumo/config`, plus a bounded walk of your home directory
+(common noise like `node_modules`, caches and cloud-sync folders is skipped).
+`--store PATH` restricts the run to the given store(s); `--session` and
+`--project` search every store (an id matching multiple stores is refused with
+the list). The same rules apply in every store.
+
+**Deleted:**
 - `projects/<project>/<session>.jsonl` and session subfolders (subagents, tool-results)
 - `session-env/<session>/`, `file-history/`, `tasks/` (entry-keyed folders)
 - Matching lines from `history.jsonl`
@@ -423,10 +434,10 @@ claude-lumo wipe --allowlist ~/.claude/allowlist.txt
   `image-cache/`, `shell-snapshots/`, `plans/`, `debug/`, `uploads/`
 
 The age-keyed stores hold no session key, so entries are swept by age in
-`wipe` auto mode only (not with `--session` or `--project`). A store entry
-that is a Windows junction cannot be deleted by the sweep (Python refuses to
-rmtree through it); the wipe run reports it as failed and leaves the target
-folder untouched. Delete such an entry manually if you want it gone.
+`wipe` auto mode only (not with `--session` or `--project`). The wipe never
+deletes through a directory link (junction or symlink): such entries are
+reported and left for you to remove manually, and nothing outside a store is
+ever deleted.
 
 **Protected:**
 - Sessions with recent activity (< 6 hours) or active env lock

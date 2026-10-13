@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """claude-lumo wipe: find and permanently delete conversation data that is no longer needed.
 
+Multi-store discovery: in auto mode, scans all Claude/claude-lumo stores (known locations
+plus bounded home walk). Named modes (--session, --project) search every store; ambiguous
+matches are refused. The --store flag restricts the scan to given store(s).
+
 A session is a candidate when signals say its project is finished: inactivity (configurable
 days, default 30), the project folder is gone, the git branch it ran on is merged or removed,
 a done marker exists, or (allowlist mode) the project is outside the allowlist file.
@@ -10,14 +14,17 @@ tasks/, history.jsonl (matching lines only), Lumo state logs, temp scratch (clau
 CLAUDE_CODE_TMPDIR or TEMP). Settings, credentials, memory and config are never touched.
 Orca data is report-only: the wipe output lists what Orca keeps and how to clear it by hand.
 
+Link safety: directory links (junctions or symlinks) are never deleted through and never
+followed during collection. Any target that resolves outside its owning store is refused.
+
 Deletion is permanent but logical, not forensic: SSD wear levelling, backups, cloud sync and
 other tools may still hold copies.
 
 Usage:
-    wipe.py [--dry-run] [--days N] [--allowlist FILE]
+    wipe.py [--dry-run] [--days N] [--store PATH] [--allowlist FILE]
     wipe.py --session <session-id> [--dry-run]
     wipe.py --project <name-or-path> [--dry-run]
-Add --yes to skip the confirmation prompt (for scripting).
+Repeat --store to limit multiple stores. Add --yes to skip the confirmation prompt.
 """
 
 import argparse
