@@ -36,9 +36,10 @@ def install_version():
         return ""
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
-        with open(cache, "w", encoding="utf-8") as f:
+        tmp = cache + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             f.write(tag)
-        os.utime(cache)
+        os.replace(tmp, cache)  # atomic: a concurrent reader never sees a truncated file
     except OSError:
         pass
     return tag
@@ -60,7 +61,7 @@ ver_txt = f"  {ver}" if ver else ""  # tag already starts with 'v'; 'dev' has no
 if os.environ.get("CLAUDE_LUMO") == "1":
     sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {m.get('id') or name} via local proxy{pct}{ver_txt}  (Claude: run `claude`)")
 else:
-    sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {name}{pct}  (Lumo: run `claude-lumo`)")
+    sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {name}{pct}{ver_txt}  (Lumo: run `claude-lumo`)")
 sys.stdout.flush()
 
 local = os.environ.get("CLAUDE_LUMO_LOCAL") or os.path.join(os.path.expanduser("~"), ".claude", "lumo-local")

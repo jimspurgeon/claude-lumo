@@ -661,7 +661,7 @@ def main(argv=None):
     if sys.stdin.isatty():
         try:
             answer = input("Run a privacy audit to check what's left? [y/N] ")
-        except EOFError:
+        except (AttributeError, EOFError, OSError):
             answer = ""
         if answer.strip().lower() in ("y", "yes"):
             audit = os.path.join(os.path.dirname(os.path.abspath(__file__)),
