@@ -3,6 +3,7 @@
 These tests drive install_version() via subprocess to exercise real git and cache behavior,
 with CLAUDE_LUMO_STATE_DIR set to a fresh temp dir per test.
 """
+import json
 import os
 import shutil
 import subprocess
@@ -230,3 +231,233 @@ class TestCacheExpiry:
         # Cache mtime should have updated
         new_mtime = os.path.getmtime(cache_path)
         assert new_mtime > old_time
+
+
+# ---------------------------------------------------------------------------
+# Issue #42: model shown must be the one that answered (from the transcript),
+# not the configured model. last_transcript_model() is imported via subprocess
+# because statusline.py writes the status line at import time.
+# ---------------------------------------------------------------------------
+
+def run_last_model(state_dir: str, module_path: str, transcript_path: str) -> str:
+    """Run last_transcript_model() via subprocess; returns the repr of the result."""
+    env = os.environ.copy()
+    env["CLAUDE_LUMO_STATE_DIR"] = state_dir
+    cmd = [
+        "python", "-c",
+        "from statusline import last_transcript_model; import sys; "
+        f"sys.stderr.write(repr(last_transcript_model(sys.argv[1])) + '\\n')",
+        transcript_path,
+    ]
+    result = subprocess.run(
+        cmd, env=env, cwd=str(Path(module_path).parent),
+        capture_output=True, text=True, timeout=10,
+        stdin=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"subprocess failed: {result.stderr}")
+    return result.stderr.strip()
+
+
+def run_statusline(state_dir: str, module_path: str, payload: dict) -> str:
+    """Run statusline.py end to end with payload on stdin; returns stdout."""
+    env = os.environ.copy()
+    env["CLAUDE_LUMO_STATE_DIR"] = state_dir
+    env.pop("CLAUDE_LUMO", None)  # deterministic [CLAUDE] branch
+    result = subprocess.run(
+        ["python", module_path], env=env,
+        input=json.dumps(payload), capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"subprocess failed: {result.stderr}")
+    return result.stdout
+
+
+def write_transcript(entries):
+    """Write entries as JSONL to a temp file; returns its path. Caller cleans up."""
+    fd, path = tempfile.mkstemp(prefix="transcript-", suffix=".jsonl")
+    with os.fdopen(fd, "wb") as f:
+        for e in entries:
+            f.write((json.dumps(e) + "\n").encode())
+    return path
+
+
+def assistant_entry(model):
+    return {"type": "assistant", "message": {"role": "assistant", "model": model}}
+
+
+class TestLastTranscriptModel:
+    def _dir(self):
+        d = tempfile.mkdtemp(prefix="transcripts-")
+        self._dirs.append(d)
+        return d
+
+    def setup_method(self, _):
+        self._dirs = []
+
+    def teardown_method(self, _):
+        for d in self._dirs:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_none_for_missing_or_unreadable_path(self, temp_state_dir, statusline_module_path):
+        assert run_last_model(temp_state_dir, statusline_module_path, "") == "None"
+        assert run_last_model(temp_state_dir, statusline_module_path,
+                              str(Path(self._dir()) / "nope.jsonl")) == "None"
+
+    def test_none_for_empty_file(self, temp_state_dir, statusline_module_path):
+        p = write_transcript([])
+        try:
+            assert run_last_model(temp_state_dir, statusline_module_path, p) == "None"
+        finally:
+            os.unlink(p)
+
+    def test_last_assistant_model_wins(self, temp_state_dir, statusline_module_path):
+        p = write_transcript([
+            assistant_entry("lumo-max"),
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            assistant_entry("lumo-lite"),
+        ])
+        try:
+            assert run_last_model(temp_state_dir, statusline_module_path, p) == "'lumo-lite'"
+        finally:
+            os.unlink(p)
+
+    def test_no_assistant_entries_returns_none(self, temp_state_dir, statusline_module_path):
+        p = write_transcript([
+            {"type": "summary", "summary": "stuff"},
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+        ])
+        try:
+            assert run_last_model(temp_state_dir, statusline_module_path, p) == "None"
+        finally:
+            os.unlink(p)
+
+    def test_partial_final_line_is_skipped(self, temp_state_dir, statusline_module_path):
+        # The writer can flush mid-record; a truncated last line must be ignored.
+        p = write_transcript([assistant_entry("lumo-max")])
+        try:
+            with open(p, "ab") as f:
+                f.write(b'{"type": "assistant", "mess')  # cut mid-JSON, no newline
+            assert run_last_model(temp_state_dir, statusline_module_path, p) == "'lumo-max'"
+        finally:
+            os.unlink(p)
+
+    def test_tail_read_handles_cut_first_line(self, temp_state_dir, statusline_module_path):
+        # A tail window starting mid-file cuts the first line in the chunk;
+        # that fragment must be dropped, not parsed.
+        filler = {"type": "user", "message": {"content": "x" * 40}}
+        entries = [filler] * 50 + [assistant_entry("lumo-max")]
+        p = write_transcript(entries)
+        try:
+            # tail smaller than the file: forces the mid-line cut path
+            env = os.environ.copy()
+            env["CLAUDE_LUMO_STATE_DIR"] = temp_state_dir
+            cmd = ["python", "-c",
+                   "from statusline import last_transcript_model; import sys; "
+                   "sys.stderr.write(repr(last_transcript_model("
+                   "sys.argv[1], tail_bytes=int(sys.argv[2]))) + '\\n')",
+                   p, str(len(json.dumps(filler)))]
+            result = subprocess.run(cmd, env=env,
+                                    cwd=str(Path(statusline_module_path).parent),
+                                    capture_output=True, text=True, timeout=10,
+                                    stdin=subprocess.DEVNULL)
+            assert result.returncode == 0, result.stderr
+            assert result.stderr.strip() == "'lumo-max'"
+        finally:
+            os.unlink(p)
+
+
+class TestNormalization:
+    """Issue #42 round 2: transcript ids like 'claude-opus-5-5' vs configured 'opus'
+    must NOT be reported as a fallback."""
+
+    def run_helper(self, state_dir, module_path, code):
+        env = os.environ.copy()
+        env["CLAUDE_LUMO_STATE_DIR"] = state_dir
+        cmd = ["python", "-c",
+               "from statusline import normalize_model, looks_like_fallback; import sys; "
+               f"sys.stderr.write(eval({code!r}) + chr(10))"]
+        result = subprocess.run(
+            cmd, env=env, cwd=str(Path(module_path).parent),
+            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"subprocess failed: {result.stderr}")
+        return result.stderr.strip()
+
+    def test_normalize_strips_prefix_and_versions(self, temp_state_dir, statusline_module_path):
+        out = self.run_helper(temp_state_dir, statusline_module_path,
+                              "repr(normalize_model('claude-opus-5-5'))")
+        assert out == "'opus'"
+        out = self.run_helper(temp_state_dir, statusline_module_path,
+                              "repr(normalize_model('Opus'))")
+        assert out == "'opus'"
+        out = self.run_helper(temp_state_dir, statusline_module_path,
+                              "repr(normalize_model('lumo-max'))")
+        assert out == "'lumo-max'"
+
+    def test_no_false_fallback_across_id_shapes(self, temp_state_dir, statusline_module_path):
+        out = self.run_helper(temp_state_dir, statusline_module_path,
+                              "repr(looks_like_fallback('claude-opus-5-5', 'opus'))")
+        assert out == "False"
+        out = self.run_helper(temp_state_dir, statusline_module_path,
+                              "repr(looks_like_fallback('claude-opus-4', 'opus'))")
+        assert out == "False"
+        out = self.run_helper(temp_state_dir, statusline_module_path,
+                              "repr(looks_like_fallback('', 'opus'))")
+        assert out == "False"
+
+    def test_real_fallback_still_detected(self, temp_state_dir, statusline_module_path):
+        out = self.run_helper(temp_state_dir, statusline_module_path,
+                              "repr(looks_like_fallback('lumo-lite', 'lumo-max'))")
+        assert out == "True"
+
+    def test_full_id_matching_configured_not_marked(self, temp_state_dir, statusline_module_path):
+        """Transcript id 'claude-opus-5-5' with configured 'claude-opus-5-5': no fallback,
+        and the [CLAUDE] branch shows the display name."""
+        p = write_transcript([assistant_entry("claude-opus-5-5")])
+        try:
+            payload = {"model": {"id": "claude-opus-5-5", "display_name": "Opus"},
+                       "transcript_path": p}
+            out = run_statusline(temp_state_dir, statusline_module_path, payload)
+            assert "Opus" in out
+            assert "fallback" not in out
+        finally:
+            os.unlink(p)
+
+    def test_short_configured_vs_full_transcript_not_marked(self, temp_state_dir, statusline_module_path):
+        """Transcript id 'claude-opus-5-5' with configured 'opus': no fallback shown."""
+        p = write_transcript([assistant_entry("claude-opus-5-5")])
+        try:
+            payload = {"model": {"id": "opus", "display_name": "Opus"},
+                       "transcript_path": p}
+            out = run_statusline(temp_state_dir, statusline_module_path, payload)
+            assert "fallback" not in out
+        finally:
+            os.unlink(p)
+
+
+class TestStatuslineOutput:
+    def test_shows_configured_model_when_no_fallback(self, temp_state_dir, statusline_module_path):
+        payload = {"model": {"id": "lumo-max", "display_name": "Lumo Max"},
+                   "transcript_path": None}
+        out = run_statusline(temp_state_dir, statusline_module_path, payload)
+        # [CLAUDE] branch prefers the display name when nothing fell back
+        assert "Lumo Max" in out
+        assert "fallback" not in out
+
+    def test_shows_actual_model_on_fallback(self, temp_state_dir, statusline_module_path):
+        p = write_transcript([assistant_entry("lumo-lite")])
+        try:
+            payload = {"model": {"id": "lumo-max", "display_name": "Lumo Max"},
+                       "transcript_path": p}
+            out = run_statusline(temp_state_dir, statusline_module_path, payload)
+            assert "lumo-lite (fallback from lumo-max)" in out
+        finally:
+            os.unlink(p)
+
+    def test_no_transcript_shows_configured(self, temp_state_dir, statusline_module_path):
+        payload = {"model": {"id": "lumo-max"}}
+        out = run_statusline(temp_state_dir, statusline_module_path, payload)
+        assert "lumo-max" in out
+        assert "fallback" not in out

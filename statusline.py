@@ -4,7 +4,7 @@ If the personal additions folder (CLAUDE_LUMO_LOCAL, default ~/.claude/lumo-loca
 statusline-next.sh, it is also run with the same status JSON, for tools that read the status line
 themselves (for example Orca); its output is ignored.
 """
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 from datetime import datetime
 
 STATE_DIR = os.environ.get("CLAUDE_LUMO_STATE_DIR") or os.path.join(os.path.expanduser("~"), ".claude-lumo")
@@ -45,6 +45,69 @@ def install_version():
     return tag
 
 
+TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024  # read only the tail; transcripts grow unboundedly
+
+
+def last_transcript_model(transcript_path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
+    """Model id of the last assistant message in the session transcript, or None.
+
+    Transcripts are JSONL, appended as the session progresses, so recent turns live
+    in the tail: read only the last `tail_bytes` of the file. Assistant entries
+    carry the producing model in message["model"]. A partially written final line
+    (the writer can flush mid-record) and any other unparsable lines are skipped.
+    Never raises: any problem yields None.
+    """
+    if not transcript_path or not isinstance(transcript_path, str):
+        return None
+    try:
+        with open(transcript_path, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            if size == 0:
+                return None
+            f.seek(max(0, size - tail_bytes))
+            chunk = f.read()
+    except OSError:
+        return None
+    lines = chunk.split(b"\n")
+    if size > tail_bytes:
+        lines = lines[1:]  # the first line was cut mid-record by the tail read
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "assistant":
+            continue
+        msg = entry.get("message")
+        model = (msg.get("model") if isinstance(msg, dict) else None) or entry.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return None
+
+
+def normalize_model(model_id):
+    """Canonical form of a model id for comparison: lowercase, without a 'claude-'
+    prefix or a trailing '-<numbers>' version suffix. Transcripts record full ids
+    like 'claude-opus-5-5' while the configured model may be just 'opus'; both
+    normalize to 'opus'. Unknown shapes pass through with only case folded."""
+    s = (model_id or "").strip().lower()
+    if s.startswith("claude-"):
+        s = s[len("claude-"):]
+    return re.sub(r"-\d+(-\d+)*$", "", s)
+
+
+def looks_like_fallback(actual, configured):
+    """True when the transcript model is a different model than the configured
+    one, comparing normalized forms so 'claude-opus-5-5' vs 'opus' is NOT a
+    fallback but 'lumo-lite' vs 'lumo-max' is."""
+    if not actual or not configured:
+        return False
+    return normalize_model(actual) != normalize_model(configured)
+
+
 raw = sys.stdin.buffer.read()
 try:
     d = json.loads(raw or b"{}")
@@ -52,6 +115,17 @@ except ValueError:
     d = {}
 m = d.get("model") or {}
 name = m.get("display_name") or m.get("id") or "?"
+configured = m.get("id") or name
+# Issue #42: after a fallback the configured model lies about who is answering.
+# Compare the configured id against the model that produced the last assistant
+# message in the transcript; when they differ, show the actual one with a note.
+actual = last_transcript_model(d.get("transcript_path"))
+if looks_like_fallback(actual, configured):
+    shown = f"{actual} (fallback from {configured})"
+else:
+    # What to show when nothing fell back: the [LUMO] branch prefers the model
+    # id, the [CLAUDE] branch the display name (pre-#42 behaviour preserved).
+    shown = configured if os.environ.get("CLAUDE_LUMO") == "1" else name
 pct = ""
 cw = d.get("context_window") or {}
 if isinstance(cw, dict) and cw.get("used_percentage") is not None:
@@ -59,9 +133,9 @@ if isinstance(cw, dict) and cw.get("used_percentage") is not None:
 ver = install_version()
 ver_txt = f"  {ver}" if ver else ""  # tag already starts with 'v'; 'dev' has no prefix
 if os.environ.get("CLAUDE_LUMO") == "1":
-    sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {m.get('id') or name} via local proxy{pct}{ver_txt}  (Claude: run `claude`)")
+    sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} via local proxy{pct}{ver_txt}  (Claude: run `claude`)")
 else:
-    sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {name}{pct}{ver_txt}  (Lumo: run `claude-lumo`)")
+    sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {shown}{pct}{ver_txt}  (Lumo: run `claude-lumo`)")
 sys.stdout.flush()
 
 local = os.environ.get("CLAUDE_LUMO_LOCAL") or os.path.join(os.path.expanduser("~"), ".claude", "lumo-local")
