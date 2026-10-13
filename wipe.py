@@ -25,6 +25,7 @@ import glob
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -41,6 +42,27 @@ def resolve_config_dir():
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
     root = os.path.expanduser(env_dir) if env_dir else os.path.expanduser("~/.claude")
     return os.path.abspath(root)
+
+
+def is_mount_point(path):
+    """True for a Windows junction (directory reparse point)."""
+    if hasattr(os.path, "isjunction"):
+        try:
+            return os.path.isjunction(path)
+        except OSError:
+            return False
+    if os.name != "nt":
+        return False
+    try:
+        return os.stat(path, follow_symlinks=False).st_reparse_tag \
+            == stat.IO_REPARSE_TAG_MOUNT_POINT
+    except OSError:
+        return False
+
+
+def is_any_link(path):
+    """True for a symlink or junction: never deleted through, never followed."""
+    return os.path.islink(path) or is_mount_point(path)
 
 
 def resolve_temp_dir():
@@ -88,22 +110,29 @@ def format_size(num_bytes):
 
 
 def tree_size(path):
-    """Total size of a file or folder, 0 if unreadable."""
-    if os.path.isfile(path):
-        try:
+    """Total size of a file or folder, 0 if unreadable. Links are never
+    followed (junction loops would hang, and link targets are never ours)."""
+    try:
+        if os.path.isfile(path):
             return os.path.getsize(path)
-        except OSError:
-            return 0
+    except OSError:
+        return 0
     total = 0
     try:
-        for root, dirs, files in os.walk(path):
-            for name in files:
-                try:
-                    total += os.path.getsize(os.path.join(root, name))
-                except OSError:
-                    pass
+        with os.scandir(path) as it:
+            entries = list(it)
     except OSError:
-        pass
+        return total
+    for entry in entries:
+        try:
+            if is_any_link(entry.path):
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                total += tree_size(entry.path)
+            elif entry.is_file(follow_symlinks=False):
+                total += entry.stat().st_size
+        except OSError:
+            pass
     return total
 
 
