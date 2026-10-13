@@ -652,8 +652,22 @@ def main(argv=None):
             print(f"  removed {removed} history.jsonl line(s) for {plan['project']}")
 
     print(f"\nDone: {deleted} path(s) deleted, {failed} failed, {format_size(freed)} freed.")
+
     if failed:
         sys.exit(1)
+
+    # Interactive runs only: offer a read-only audit of what is left. Dry runs
+    # return above, so this is a completed deletion pass.
+    if sys.stdin.isatty():
+        try:
+            answer = input("Run a privacy audit to check what's left? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() in ("y", "yes"):
+            audit = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "privacy_audit.py")
+            result = subprocess.run([sys.executable, audit])
+            sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
