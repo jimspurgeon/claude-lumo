@@ -1,4 +1,4 @@
-"""Tests for render.py's personal agents. Run: python test_render.py"""
+"""Tests for render.py (personal agents, re-host settings and prompt parts). Run: python test_render.py"""
 import json, os, subprocess, sys, tempfile, unittest
 
 import render
@@ -6,9 +6,16 @@ import render
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def run_render(personal, state):
-    return subprocess.run([sys.executable, os.path.join(HERE, "render.py"), HERE, state, personal, "python"],
+def run_render(personal, state, *extra):
+    return subprocess.run([sys.executable, os.path.join(HERE, "render.py"), HERE, state, personal, "python", *extra],
                           capture_output=True, text=True, check=True)
+
+
+def run_script(path, args, env_extra=None, stdin="{}"):
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_LUMO", "CLAUDE_LUMO_WRAPPER")}
+    env.update(env_extra or {})
+    return subprocess.run([sys.executable, os.path.join(HERE, path), *args], input=stdin, env=env,
+                          capture_output=True, text=True, encoding="utf-8", check=True)
 
 
 class PersonalAgents(unittest.TestCase):
@@ -66,6 +73,107 @@ class PersonalAgents(unittest.TestCase):
         with open(self.out, encoding="utf-8") as f:
             self.assertEqual(list(json.load(f)), ["a"])
         self.assertIn("skipping agent b", result.stderr)
+
+
+class RehostedSessions(unittest.TestCase):
+    """#77: a session Claude Code re-hosts by itself keeps --settings but loses the launcher's
+    environment and --append-system-prompt-file, so the settings must carry both."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.personal = os.path.join(self.tmp.name, "personal").replace("\\", "/")
+        self.state = os.path.join(self.tmp.name, "state").replace("\\", "/")
+        os.makedirs(self.personal)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def settings(self, *extra):
+        run_render(self.personal, self.state, *extra)
+        with open(os.path.join(self.state, "settings.json"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("{{", text)
+        return json.loads(text)
+
+    def parts(self):
+        folder = os.path.join(self.state, "prompt-parts")
+        names = sorted(os.listdir(folder), key=lambda n: int(n.split(".")[0]))
+        out = []
+        for name in names:
+            with open(os.path.join(folder, name), encoding="utf-8") as f:
+                out.append(f.read())
+        return out
+
+    def test_settings_carry_the_launcher_values(self):
+        s = self.settings()
+        self.assertEqual(s["env"]["CLAUDE_LUMO"], "1")
+        self.assertEqual(s["env"]["CLAUDE_LUMO_LOCAL"], self.personal)
+        self.assertIn(f"scripts/api-key.py {self.state}", s["apiKeyHelper"])
+        self.assertTrue(s["statusLine"]["command"].endswith("statusline.py --lumo"))
+        self.assertNotIn("CLAUDE_CONFIG_DIR", s["env"])
+
+    def test_config_dir_is_carried_when_given(self):
+        s = self.settings("C:\\x\\data")
+        self.assertEqual(s["env"]["CLAUDE_CONFIG_DIR"], "C:/x/data")
+        self.assertNotIn("CLAUDE_CONFIG_DIR", self.settings("")["env"])
+
+    def test_prompt_hooks_are_registered_for_every_part(self):
+        hooks = [h for entry in self.settings()["hooks"]["SessionStart"] for h in entry["hooks"]
+                 if "lumo-prompt.py" in h["command"]]
+        self.assertEqual([h["command"].split()[-1] for h in hooks],
+                         [str(i) for i in range(1, render.PARTS + 1)])
+        entry = next(e for e in self.settings()["hooks"]["SessionStart"]
+                     if any("lumo-prompt.py" in h["command"] for h in e["hooks"]))
+        # Not resume/fork: a resumed transcript already restores the system prompt it was started with.
+        self.assertEqual(entry["matcher"], "startup|clear|compact")
+
+    def test_parts_stay_under_the_hook_output_cap_and_rebuild_the_prompt(self):
+        with open(os.path.join(self.personal, "LUMO.md"), "w", encoding="utf-8") as f:
+            f.write("# Personal\n\n" + ("A rule that is long enough. " * 9 + "\n") * 80 + "x" * 12000 + "\n")
+        self.settings()
+        with open(os.path.join(self.state, "system-prompt.md"), encoding="utf-8") as f:
+            prompt = f.read()
+        parts = self.parts()
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(p) <= render.PART_LIMIT < 10000 for p in parts))
+        self.assertEqual("".join(p.split("):\n\n", 1)[1] for p in parts), prompt)
+        self.assertTrue(parts[0].startswith(f"claude-lumo system prompt, part 1 of {len(parts)}"))
+
+    def test_stale_parts_are_removed(self):
+        os.makedirs(os.path.join(self.state, "prompt-parts"))
+        with open(os.path.join(self.state, "prompt-parts", "4.md"), "w") as f:
+            f.write("STALE-PART-77")
+        self.settings()
+        self.assertEqual(len(os.listdir(os.path.join(self.state, "prompt-parts"))), len(self.parts()))
+        self.assertNotIn("STALE-PART-77", "".join(self.parts()))
+
+    def test_hook_prints_a_part_only_without_the_launcher(self):
+        self.settings()
+        alone = run_script("hooks/lumo-prompt.py", [self.state, "1"]).stdout
+        self.assertEqual(alone, self.parts()[0])
+        self.assertIn("Running on Proton Lumo", alone)
+        wrapped = run_script("hooks/lumo-prompt.py", [self.state, "1"], {"CLAUDE_LUMO_WRAPPER": "1"}).stdout
+        self.assertEqual(wrapped, "")
+        self.assertEqual(run_script("hooks/lumo-prompt.py", [self.state, "99"]).stdout, "")
+
+    def test_api_key_helper_prints_the_key(self):
+        os.makedirs(self.state)
+        with open(os.path.join(self.state, "master.key"), "w") as f:
+            f.write("sk-lumo-test\n")
+        self.assertEqual(run_script("scripts/api-key.py", [self.state]).stdout, "sk-lumo-test\n")
+
+    def test_statusline_flag_shows_lumo_without_the_env(self):
+        env = {"CLAUDE_LUMO_STATE_DIR": self.state, "CLAUDE_LUMO_LOCAL": self.personal}
+        self.assertIn("[LUMO]", run_script("statusline.py", ["--lumo"], env).stdout)
+        self.assertIn("[CLAUDE]", run_script("statusline.py", [], env).stdout)
+
+
+class SplitPrompt(unittest.TestCase):
+    def test_a_line_longer_than_a_part_is_cut(self):
+        text = "short\n" + "y" * 20000 + "\nend\n"
+        parts = render.split_prompt(text, limit=5000)
+        self.assertTrue(all(len(p) <= 5000 for p in parts))
+        self.assertEqual("".join(p.split("):\n\n", 1)[1] for p in parts), text)
 
 
 if __name__ == "__main__":

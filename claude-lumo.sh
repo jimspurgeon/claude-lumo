@@ -60,10 +60,29 @@ if ! up http://127.0.0.1:4000/health/liveliness; then
   up http://127.0.0.1:4000/health/liveliness || { echo "claude-lumo: LiteLLM did not start, see $S/litellm.log" >&2; exit 1; }
 fi
 
+# Separate data (optional): when enabled, build link layout and export CLAUDE_CONFIG_DIR so
+# transcripts, history, and per-session state go into ~/.claude-lumo/data, not the shared store.
+# Enable via env CLAUDE_LUMO_SEPARATE_DATA=1 or marker ~/.claude-lumo/separate-data.on.
+# Runs before render.py so the settings can carry CLAUDE_CONFIG_DIR (see below).
+if [ "${CLAUDE_LUMO_SEPARATE_DATA:-}" = "1" ] || [ -f "$S/separate-data.on" ]; then
+  info_sep() { echo "info: $*" >&2; }
+  if ! "$PY" "$(native "$D")/scripts/separate_data.py" setup \
+       --config-dir "$S/data" --shared "$HOME/.claude"; then
+    echo "claude-lumo: could not run separate_data.py setup; leaving CLAUDE_CONFIG_DIR unset" >&2
+  else
+    export CLAUDE_CONFIG_DIR="$S/data"
+    info_sep "CLAUDE_CONFIG_DIR=$S/data (separate data enabled)"
+  fi
+fi
+
 # Render this machine's settings and system prompt into ~/.claude-lumo, merging the optional
 # personal additions in $LOCAL over ours (see render.py). Tracked files here are only read, so a
-# clone stays clean and updates (re-running install.sh) keep working.
-"$PY" "$(native "$D")/render.py" "$(native "$D")" "$(native "$S")" "$(native "$LOCAL")" "$PY" \
+# clone stays clean and updates (re-running install.sh) keep working. CLAUDE_CONFIG_DIR (separate
+# data, or the user's own) goes into the settings too, so a session Claude Code re-hosts without
+# this launcher keeps writing to the same store (#77).
+CFG=""
+[ -n "${CLAUDE_CONFIG_DIR:-}" ] && CFG="$(native "$CLAUDE_CONFIG_DIR")"
+"$PY" "$(native "$D")/render.py" "$(native "$D")" "$(native "$S")" "$(native "$LOCAL")" "$PY" "$CFG" \
   || { echo "claude-lumo: could not build settings (render.py failed)" >&2; exit 1; }
 
 # Personal changes belong in $LOCAL, not here: an update would conflict with or overwrite them.
@@ -83,19 +102,10 @@ if [ "${CLAUDE_LUMO_UPDATE_CHECK:-1}" != "0" ] && [ -f "$D/update-check.py" ]; t
   (nohup "$PY" "$(native "$D")/update-check.py" "$(native "$D")" >/dev/null 2>&1 &)
 fi
 
-# Separate data (optional): when enabled, build link layout and export CLAUDE_CONFIG_DIR so
-# transcripts, history, and per-session state go into ~/.claude-lumo/data, not the shared store.
-# Enable via env CLAUDE_LUMO_SEPARATE_DATA=1 or marker ~/.claude-lumo/separate-data.on.
-if [ "${CLAUDE_LUMO_SEPARATE_DATA:-}" = "1" ] || [ -f "$S/separate-data.on" ]; then
-  info_sep() { echo "info: $*" >&2; }
-  if ! "$PY" "$(native "$D")/scripts/separate_data.py" setup \
-       --config-dir "$S/data" --shared "$HOME/.claude"; then
-    echo "claude-lumo: could not run separate_data.py setup; leaving CLAUDE_CONFIG_DIR unset" >&2
-  else
-    export CLAUDE_CONFIG_DIR="$S/data"
-    info_sep "CLAUDE_CONFIG_DIR=$S/data (separate data enabled)"
-  fi
-fi
-
-export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
+# A session Claude Code re-hosts by itself (agents view) keeps --settings but none of these exports
+# and no --append-system-prompt-file (#77), so the settings carry the same values (env, apiKeyHelper)
+# and hooks/lumo-prompt.py replays the prompt. CLAUDE_LUMO_WRAPPER tells that hook the prompt is
+# already here.
+export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0 \
+  CLAUDE_LUMO_WRAPPER=1
 exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "${AGENTS[@]}" "$@"
