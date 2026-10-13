@@ -722,30 +722,49 @@ def delete_all(target_groups, store_root=None):
     return results
 
 
-def print_plans(candidates, days, temp_paths, log_paths, store_paths):
-    total = sum(c["size"] for c in candidates)
-    session_count = sum(len(c["sessions"]) for c in candidates)
-    print(f"Found {session_count} conversation(s) in {len(candidates)} project(s) to wipe.")
-    for c in candidates:
-        when = ""
-        if c["last_activity"]:
-            when = datetime.fromtimestamp(c["last_activity"], tz=timezone.utc).strftime("%Y-%m-%d")
-        print(f"\nProject: {c['project']}  (last activity {when or 'unknown'})")
-        print(f"Reasons: {'; '.join(c['reasons'])}")
-        for kind, path in c["paths"]:
-            print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
-        print(f"  [history.jsonl] {len(c['session_ids'])} matching line(s)")
+def print_report(store_groups, temp_paths, log_paths, days):
+    """One combined report across every scanned store.
+
+    Each store group is {"store": record, "plans": [...], "store_paths": [...]}
+    with one entry per scanned store (empty ones print no section)."""
+    scanned = ", ".join(g["store"]["path"] for g in store_groups)
+    print(f"Scanning {len(store_groups)} store(s): {scanned}")
+    total = sum(c["size"] for g in store_groups for c in g["plans"])
+    session_count = sum(len(c["sessions"]) for g in store_groups for c in g["plans"])
+    project_count = sum(len(g["plans"]) for g in store_groups)
+    print(f"Found {session_count} conversation(s) in {project_count} project(s) to wipe.")
+    for g in store_groups:
+        candidates = g["plans"]
+        store_paths = g["store_paths"]
+        if not candidates and not store_paths:
+            continue
+        label = f"Store: {g['store']['path']}"
+        if g["store"].get("current"):
+            label += " [current store]"
+        print(f"\n{label}")
+        for c in candidates:
+            when = ""
+            if c["last_activity"]:
+                when = datetime.fromtimestamp(c["last_activity"], tz=timezone.utc).strftime("%Y-%m-%d")
+            print(f"\nProject: {c['project']}  (last activity {when or 'unknown'})")
+            print(f"Reasons: {'; '.join(c['reasons'])}")
+            for kind, path in c["paths"]:
+                print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
+            print(f"  [history.jsonl] {len(c['session_ids'])} matching line(s)")
+        if store_paths:
+            print("\nStale cache and snapshot stores:")
+            for kind, path in store_paths:
+                print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
     for group, label in (
             (temp_paths, "stale temp scratch"),
-            (log_paths, "stale Lumo logs"),
-            (store_paths, "stale cache and snapshot stores")):
+            (log_paths, "stale Lumo logs")):
         if group:
             print(f"\n{label.title()}:")
             for kind, path in group:
                 print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
     grand = (total + sum(tree_size(p) for _, p in temp_paths)
              + sum(tree_size(p) for _, p in log_paths)
-             + sum(tree_size(p) for _, p in store_paths))
+             + sum(tree_size(p) for g in store_groups for _, p in g["store_paths"]))
     print(f"\nTotal to delete: {format_size(grand)}")
     print("Deletion is permanent but logical, not forensic: SSD wear levelling, backups,")
     print("cloud sync and other tools' copies may still hold the data.")
@@ -768,43 +787,83 @@ def main(argv=None):
     parser.add_argument("--allowlist", help="file of project paths; anything outside is a candidate")
     parser.add_argument("--session", help="wipe one session by id")
     parser.add_argument("--project", help="wipe one project by folder name or path")
+    parser.add_argument("--store", action="append", metavar="PATH",
+                        help="restrict the wipe to this store (repeatable)")
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     args = parser.parse_args(argv)
 
-    config_dir = resolve_config_dir()
-    if not os.path.isdir(config_dir):
-        print("Error: cannot determine the data store path "
-              f"({config_dir} does not exist). Set CLAUDE_CONFIG_DIR.", file=sys.stderr)
-        sys.exit(1)
     if args.days < 1:
         print("Error: --days must be at least 1.", file=sys.stderr)
         sys.exit(1)
 
-    if args.session:
-        plan = plan_for_named_session(config_dir, args.session)
-        if plan is None:
-            print(f"No session {args.session} found under {config_dir}/projects.")
-            sys.exit(1)
-        plans = [plan]
-        temp_paths, log_paths, store_paths = [], [], []
-    elif args.project:
-        plan = plan_for_named_project(config_dir, args.project)
-        if plan is None:
-            print(f"No project matching {args.project} found under {config_dir}/projects.")
-            sys.exit(1)
-        plans = [plan]
-        temp_paths, log_paths, store_paths = [], [], []
+    if args.store:
+        stores = []
+        for p in args.store:
+            path = os.path.abspath(os.path.expanduser(p))
+            if not os.path.isdir(path) or is_any_link(path):
+                print(f"Error: store path {p} is not an existing directory.", file=sys.stderr)
+                sys.exit(1)
+            stores.append({"path": path, "realpath": os.path.realpath(path),
+                           "origin": "flag", "current": False})
     else:
-        plans = collect_candidates(config_dir, args.days, args.allowlist)
+        stores = discover_stores()
+    if not stores:
+        print("Error: no Claude data stores found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Named modes search all stores: --session refuses an ambiguous match,
+    # --project combines plans across stores.
+    plans = []
+    store_groups = []
+    if args.session:
+        matches = []
+        for store in stores:
+            plan = plan_for_named_session(store["path"], args.session)
+            if plan is not None:
+                plan["store"] = store
+                matches.append(plan)
+        if not matches:
+            print(f"No session {args.session} found in any store.")
+            sys.exit(1)
+        if len(matches) > 1:
+            print(f"Error: session {args.session} matches multiple stores:", file=sys.stderr)
+            for plan in matches:
+                print(f"  {plan['store']['path']}", file=sys.stderr)
+            sys.exit(1)
+        plans = matches
+        temp_paths, log_paths = [], []
+    elif args.project:
+        for store in stores:
+            plan = plan_for_named_project(store["path"], args.project)
+            if plan is not None:
+                plan["store"] = store
+                plans.append(plan)
+        if not plans:
+            print(f"No project matching {args.project} found in any store's projects.")
+            sys.exit(1)
+        temp_paths, log_paths = [], []
+    else:
+        for store in stores:
+            plans_for_store = collect_candidates(store["path"], args.days, args.allowlist)
+            store_paths = stale_config_stores(store["path"], args.days)
+            for plan in plans_for_store:
+                plan["store"] = store
+            plans.extend(plans_for_store)
+            store_groups.append({"store": store, "plans": plans_for_store,
+                                  "store_paths": store_paths})
         temp_paths = stale_temp_scratch(resolve_temp_dir(), args.days)
         log_paths = stale_lumo_logs(args.days)
-        store_paths = stale_config_stores(config_dir, args.days)
 
-    if not plans and not temp_paths and not log_paths and not store_paths:
+    if not plans and not any(g["plans"] or g["store_paths"] for g in store_groups) \
+            and not temp_paths and not log_paths:
         print("Nothing to wipe.")
         return
 
-    print_plans(plans, args.days, temp_paths, log_paths, store_paths)
+    if not store_groups:
+        store_groups = [{"store": p["store"], "plans": [p], "store_paths": []}
+                         for p in plans]
+
+    print_report(store_groups, temp_paths, log_paths, args.days)
     print_orca_section(describe_orca(resolve_orca_dir()))
 
     if args.dry_run:
@@ -816,11 +875,23 @@ def main(argv=None):
         return
 
     deleted, failed, freed = 0, 0, 0
-    all_groups = []
-    for c in plans:
-        all_groups.append(c["paths"])
-    all_groups.extend([temp_paths, log_paths, store_paths])
-    for group in all_groups:
+    for group in store_groups:
+        paths = [p for c in group["plans"] for p in c["paths"]] + group["store_paths"]
+        if not paths:
+            continue
+        # Targets are checked against the owning store so a stray link can
+        # never pull a deletion outside it.
+        store_root = group["store"]["realpath"]
+        freed += sum(tree_size(p) for _, p in paths)
+        for path, ok, err in delete_all(paths, store_root=store_root):
+            if ok:
+                deleted += 1
+                print(f"  deleted: {path}")
+            else:
+                failed += 1
+                print(f"  FAILED: {path} ({err})", file=sys.stderr)
+
+    for group in temp_paths, log_paths:
         if not group:
             continue
         freed += sum(tree_size(p) for _, p in group)
@@ -832,15 +903,22 @@ def main(argv=None):
                 failed += 1
                 print(f"  FAILED: {path} ({err})", file=sys.stderr)
 
-    for plan in plans:
+    # History rewrite batched per store over the union of that store's plans.
+    for group in store_groups:
+        session_ids = set()
+        for plan in group["plans"]:
+            session_ids |= plan["session_ids"]
+        if not session_ids:
+            continue
         removed, err = history_rewrite(
-            os.path.join(config_dir, "history.jsonl"), plan["session_ids"])
+            os.path.join(group["store"]["path"], "history.jsonl"), session_ids)
         if err:
             failed += 1
             print(f"  FAILED: history.jsonl ({err})", file=sys.stderr)
         elif removed:
             deleted += 1
-            print(f"  removed {removed} history.jsonl line(s) for {plan['project']}")
+            print(f"  removed {removed} history.jsonl line(s) for "
+                  f"{group['store']['path']}")
 
     print(f"\nDone: {deleted} path(s) deleted, {failed} failed, {format_size(freed)} freed.")
 

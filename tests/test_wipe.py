@@ -158,6 +158,12 @@ def make_store(root, name="store"):
     return store
 
 
+def single_store(config_dir):
+    """A discover_stores() stub naming one fixture store."""
+    return [{"path": str(config_dir), "realpath": str(config_dir),
+             "origin": "env", "current": True}]
+
+
 class TestLooksLikeStore:
     """Tests for the strict store discriminator."""
 
@@ -1194,7 +1200,7 @@ class TestDryRunMode:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
@@ -1221,7 +1227,7 @@ class TestDryRunMode:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
@@ -1249,7 +1255,7 @@ class TestDryRunMode:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
@@ -1272,7 +1278,7 @@ class TestDryRunMode:
         os.utime(str(paste_old), (old_mtime, old_mtime))
 
         import wipe
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
 
         wipe.main(["--session", "session-id-1", "--yes"])
         assert paste_old.exists()
@@ -1292,7 +1298,7 @@ class TestDryRunMode:
         os.utime(str(paste_old), (old_mtime, old_mtime))
 
         import wipe
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
 
         wipe.main(["--project", "proj", "--yes"])
         assert not (projects_root / "s1.jsonl").exists()
@@ -1760,7 +1766,7 @@ class TestCliArgsParsing:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(tmp_path))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
         (tmp_path / "projects").mkdir()
@@ -1775,7 +1781,7 @@ class TestCliArgsParsing:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(tmp_path))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
         (tmp_path / "projects").mkdir()
@@ -2048,6 +2054,194 @@ class TestAuditSuggestAction:
         out = capsys.readouterr().out
         assert "ask your running assistant to walk through the manual steps" in out
         assert "or run:" not in out
+
+
+class TestMultiStoreAutoWipe:
+    """Auto mode across two discovered stores."""
+
+    def _setup(self, tmp_path, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
+        return store_a, store_b
+
+    def test_yes_deletes_in_both_stores(self, tmp_path, capsys, monkeypatch):
+        store_a, store_b = self._setup(tmp_path, monkeypatch)
+        import wipe
+
+        wipe.main(["--yes"])
+        out = capsys.readouterr().out
+        assert f"Scanning 2 store(s): {store_a}, {store_b}" in out
+        assert out.count("Store: ") == 2
+        assert "[current store]" in out
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert not (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+        # Per-store history rewrite
+        assert (store_a / "history.jsonl").read_text() == ""
+        assert (store_b / "history.jsonl").read_text() == ""
+
+    def test_active_session_in_b_protects_only_b(self, tmp_path, capsys, monkeypatch):
+        store_a, store_b = self._setup(tmp_path, monkeypatch)
+        # Fresh transcript in store B's project marks it active there
+        fresh = store_b / "projects" / "proj-1" / "session-1.jsonl"
+        now = time.time()
+        os.utime(str(fresh), (now, now))
+        import wipe
+
+        wipe.main(["--yes"])
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert fresh.exists()
+
+
+class TestMultiStoreDryRun:
+    """--dry-run lists both stores, deletes nothing."""
+
+    def test_dry_run_across_stores(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
+
+        wipe.main(["--dry-run"])
+        out = capsys.readouterr().out
+        assert "Dry run: nothing was deleted" in out
+        assert (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_a / "history.jsonl").read_text() != ""
+
+
+class TestSessionAcrossStores:
+    """--session searches all stores."""
+
+    def test_found_in_one_store(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        # Give store B a different session id so no ambiguity
+        other = store_b / "projects" / "proj-1" / "other-session.jsonl"
+        other.write_text("{}", encoding="utf-8")
+        old = time.time() - 40 * 86400
+        os.utime(str(other), (old, old))
+        os.remove(str(store_b / "projects" / "proj-1" / "session-1.jsonl"))
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+
+        wipe.main(["--session", "session-1", "--yes"])
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert other.exists()
+
+    def test_ambiguous_across_two_stores_refused(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+
+        with pytest.raises(SystemExit) as exc_info:
+            wipe.main(["--session", "session-1", "--yes"])
+        assert exc_info.value.code == 1
+        out = capsys.readouterr()
+        assert "matches multiple stores" in out.err
+        assert str(store_a) in out.err
+        assert str(store_b) in out.err
+        # Nothing deleted in either store
+        assert (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+
+
+class TestProjectAcrossStores:
+    """--project matches in all stores and combines plans."""
+
+    def test_combined_wipe(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+
+        wipe.main(["--project", "proj-1", "--yes"])
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert not (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_a / "history.jsonl").read_text() == ""
+        assert (store_b / "history.jsonl").read_text() == ""
+
+    def test_active_match_anywhere_refuses_whole_run(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        # Active session in store B
+        fresh = store_b / "projects" / "proj-1" / "session-1.jsonl"
+        now = time.time()
+        os.utime(str(fresh), (now, now))
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+
+        with pytest.raises(SystemExit) as exc_info:
+            wipe.main(["--project", "proj-1", "--yes"])
+        assert exc_info.value.code == 1
+        # Nothing deleted anywhere
+        assert (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert fresh.exists()
+
+
+class TestStoreFlagRestricts:
+    """--store limits the wipe to the given store(s)."""
+
+    def test_single_store_flag(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
+        # out of the machine running the suite.
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
+
+        wipe.main(["--store", str(store_a), "--yes"])
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+        out = capsys.readouterr().out
+        assert f"Scanning 1 store(s): {store_a}" in out
+
+    def test_nonexistent_store_path_rejected(self, tmp_path, capsys):
+        import wipe
+
+        with pytest.raises(SystemExit) as exc_info:
+            wipe.main(["--store", str(tmp_path / "missing"), "--yes"])
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "not an existing directory" in err
+
+
+class TestEmptyDiscovery:
+    """No stores found: refuse with exit 1."""
+
+    def test_empty_discovery_exits_1(self, tmp_path, capsys, monkeypatch):
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [])
+
+        with pytest.raises(SystemExit) as exc_info:
+            wipe.main(["--dry-run"])
+        assert exc_info.value.code == 1
+        assert "no Claude data stores found" in capsys.readouterr().err
 
 
 if __name__ == "__main__":
