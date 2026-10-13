@@ -272,6 +272,20 @@ For the same check on every push, install the opt-in pre-push hook:
 ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 ```
 
+## Testing safety (ports and process cleanup)
+
+**Live test servers must only bind to spare ports**. Never use port 8790 (Lumo proxy), 4000 (LiteLLM), or any port an existing listener owns. Pick a random port in the range 18000-18999, then verify it's free with `netstat -ano` before binding.
+
+**Kill only PIDs you started**, and kill them by PID, not by image name. Before killing, verify the command line with `wmic process where processid=<PID> get commandline` or `tasklist /FI "PID eq <PID>" /V` points at your test process. Never use `taskkill /IM node.exe` or kill every node.exe process of a binary: on this machine, node.exe includes the production Lumo proxy (issue #71) and LiteLLM.
+
+**After cleanup**, verify both that your ports are free and that production services are still up:
+```bash
+curl -s --max-time 5 http://127.0.0.1:8790/v1/health
+```
+If a test stopped the proxy, restart it (`cd ~/.claude/lumo/proxy && nohup node --no-warnings proxy.mjs`) and report it in your verdict. Hiding it is a finding.
+
+On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result; PID 29388 turned out to be the production proxy. The agent process/port-safety rules (qa.md, worker.md, light-worker.md) now prohibit this pattern.
+
 ## Files
 
 | File | What it does |

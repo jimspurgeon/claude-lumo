@@ -105,7 +105,7 @@ function splitToolCallChunks() {
 const live = new Map(); // in-flight chat streams, shown at /v1/debug/live
 let nextId = 0;
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   const path = req.url.replace(/^\/v1/, "");
   if (path === "/debug/live") {
     const now = Date.now(), rows = [...live.values()].map((r) => ({ id: r.id, model: r.model, secs: Math.round((now - r.t0) / 1000), idle: Math.round((now - r.last) / 1000), bytes: r.bytes, reasoning: r.stats?.reasoning.length ?? 0, content: r.stats?.content ?? 0, tail: r.stats?.reasoning.slice(-400) }));
@@ -174,4 +174,16 @@ http.createServer(async (req, res) => {
     if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: { message: `lumo-proxy: ${e.message}` } }));
   }
-}).listen(PORT, "127.0.0.1", () => log("listening"));
+});
+// Refuse to shadow a live proxy on the same port instead of dying with EADDRINUSE:
+// a test that forgot LUMO_PROXY_PORT should fail loudly, and a second instance must
+// never silently take over traffic meant for the running one (#71).
+server.once("error", (e) => {
+  if (e.code === "EADDRINUSE") {
+    log(`fatal: port ${PORT} already in use (another proxy?). Set LUMO_PROXY_PORT to a spare port and retry.`);
+    console.error(`lumo-proxy: port ${PORT} already in use. Set LUMO_PROXY_PORT to a spare port and retry.`);
+    process.exit(1);
+  }
+  log(`fatal: ${e.message}`); process.exit(1);
+});
+server.listen(PORT, "127.0.0.1", () => log("listening"));
