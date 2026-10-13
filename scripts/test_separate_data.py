@@ -8,6 +8,7 @@ No real ~/.claude touched.
 """
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -485,6 +486,146 @@ class TestCollectHistoryLines(unittest.TestCase):
             # Both moved lines have sessionId "b"
             for line in moved:
                 self.assertEqual(json.loads(line)["sessionId"], "b")
+
+
+class TestSetupIdempotency(unittest.TestCase):
+    """Regressions for idempotency: running setup/migrate twice converges."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.shared = Path(self.tmpdir.name) / "shared"
+        self.data = Path(self.tmpdir.name) / "data"
+        self.shared.mkdir()
+
+        (self.shared / "CLAUDE.md").write_text("# Fake CLAUDE.md")
+        (self.shared / "settings.json").write_text("{}")
+        (self.shared / "keybindings.json").write_text("{}")
+        (self.shared / "skills").mkdir()
+        (self.shared / "skills" / "test.txt").write_text("skill")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def snapshot(self):
+        """Comparable state: sorted (relpath, kind, content-or-target)."""
+        entries = []
+        for path in sorted(self.data.rglob("*")):
+            rel = str(path.relative_to(self.data))
+            if separate_data.is_link(str(path)):
+                kind = "link:" + ("dir" if os.path.isdir(path) else "file")
+                entries.append((rel, kind, ""))
+            elif path.is_file():
+                entries.append((rel, "file", path.read_text(errors="replace")))
+            elif path.is_dir():
+                entries.append((rel, "dir", ""))
+        return entries
+
+    def test_setup_twice_converges(self):
+        """Second setup run produces byte-identical state: no new links, no copies
+        doubling, no data loss."""
+        separate_data.setup_links(str(self.shared), str(self.data))
+        first = self.snapshot()
+        separate_data.setup_links(str(self.shared), str(self.data))
+        second = self.snapshot()
+
+        self.assertEqual(first, second)
+        # And a third run is stable too
+        separate_data.setup_links(str(self.shared), str(self.data))
+        self.assertEqual(first, self.snapshot())
+
+    def test_setup_after_partial_setup(self):
+        """Setup interrupted after one link completes; re-run converges to the
+        full layout without warnings or duplicates."""
+        # Simulate a partial setup: one shared item already linked, rest missing
+        self.data.mkdir(parents=True)
+        separate_data.make_link(str(self.shared / "CLAUDE.md"), str(self.data / "CLAUDE.md"))
+
+        import io
+        old_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            separate_data.setup_links(str(self.shared), str(self.data))
+            stderr_output = sys.stderr.getvalue()
+        finally:
+            sys.stderr = old_stderr
+
+        self.assertNotIn("not touching it", stderr_output)
+        self.assertNotIn("could not link", stderr_output)
+
+        # Converges to the same state as a clean setup
+        reference_tmp = tempfile.TemporaryDirectory()
+        try:
+            clean_data = Path(reference_tmp.name) / "data"
+            separate_data.setup_links(str(self.shared), str(clean_data))
+            # Compare everything except copies.json timing noise: compare the
+            # link/file layout, not manifest mtimes (snapshot reads contents).
+            partial = [e for e in self.snapshot() if e[0] != "copies.json"]
+            clean = [e for e in (
+                (str(p.relative_to(clean_data)),
+                 ("link:" + ("dir" if os.path.isdir(p) else "file"))
+                 if separate_data.is_link(str(p))
+                 else ("file" if p.is_file() else "dir"),
+                 p.read_text(errors="replace") if p.is_file() and not separate_data.is_link(str(p)) else "")
+                for p in sorted(clean_data.rglob("*")))
+                if e[0] != "copies.json"]
+            self.assertEqual(partial, clean)
+        finally:
+            reference_tmp.cleanup()
+
+    def test_setup_repairs_broken_link(self):
+        """A link whose target disappeared gets repaired on re-run, instead of
+        being skipped forever."""
+        shared_rules = self.shared / "rules"
+        shared_rules.mkdir()
+        (shared_rules / "rule.md").write_text("rule v1")
+        separate_data.setup_links(str(self.shared), str(self.data))
+        self.assertTrue(separate_data.is_link(str(self.data / "rules")))
+
+        # Break the dst link by pointing it at a vanished target: replace the
+        # link with one to a now-deleted path.
+        os.rmdir(str(self.data / "rules")) if os.path.isdir(str(self.data / "rules")) \
+            else os.remove(str(self.data / "rules"))
+        vanished = Path(self.tmpdir.name) / "vanished"
+        vanished.mkdir()
+        separate_data.make_link(str(vanished), str(self.data / "rules"))
+        shutil.rmtree(str(vanished))
+        # Now data/rules is a broken link; setup must repair it
+        self.assertTrue(separate_data.is_link(str(self.data / "rules")))
+        self.assertFalse((self.data / "rules").exists())
+
+        separate_data.setup_links(str(self.shared), str(self.data))
+
+        self.assertTrue((self.data / "rules" / "rule.md").read_text() == "rule v1")
+
+    def test_migrate_dry_run_twice_changes_nothing(self):
+        """migrate --dry-run is safe twice: no moves, no history edits."""
+        project = self.shared / "projects" / "proj"
+        project.mkdir(parents=True)
+        session_uuid = "dry-uuid"
+        (project / f"{session_uuid}.jsonl").write_text('{"model":"lumo-max"}\n')
+        shared_history = self.shared / "history.jsonl"
+        shared_history.write_text(
+            json.dumps({"sessionId": session_uuid, "content": "line"}) + "\n")
+
+        self.data.mkdir()
+        (self.data / "projects").mkdir(exist_ok=True)
+
+        def store_state():
+            return ((project / f"{session_uuid}.jsonl").exists(),
+                    shared_history.read_text(),
+                    sorted(str(p.relative_to(self.data))
+                           for p in self.data.rglob("*")))
+
+        before = store_state()
+        separate_data.migrate_sessions(
+            str(self.data), str(self.shared), dry_run=True, confirm=False)
+        after_first = store_state()
+        separate_data.migrate_sessions(
+            str(self.data), str(self.shared), dry_run=True, confirm=False)
+        after_second = store_state()
+
+        self.assertEqual(before, after_first)
+        self.assertEqual(after_first, after_second)
 
 
 if __name__ == "__main__":

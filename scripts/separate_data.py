@@ -58,6 +58,25 @@ def is_link(path):
         return False
 
 
+def remove_link(path):
+    """Remove a symlink/junction (broken or healthy) without touching its target.
+
+    Junctions and directory symlinks remove with rmdir; file symlinks with remove.
+    Returns False (leaving the path alone) when neither works, e.g. it is a real
+    directory with content.
+    """
+    try:
+        os.rmdir(str(path))
+        return True
+    except OSError:
+        pass
+    try:
+        os.remove(str(path))
+        return True
+    except OSError:
+        return False
+
+
 def make_link(src, dst):
     """Link dst -> src; returns the method used.
 
@@ -216,17 +235,27 @@ def setup_links(shared_dir, data_dir):
             copies.discard(name)
             continue
         if dst.exists() or is_link(dst):
-            if is_link(dst):
+            if is_link(dst) and dst.exists():
                 continue
-            if os.path.isfile(dst) and os.path.isfile(src) \
+            if is_link(dst):
+                # Broken link (its target disappeared): repair it so setup
+                # converges instead of silently skipping, matching status_check.
+                if remove_link(dst):
+                    warn(f"removed broken link {name}; relinking")
+                else:
+                    warn(f"{name} is a broken link that could not be removed; "
+                         "not touching it")
+                    continue
+            elif os.path.isfile(dst) and os.path.isfile(src) \
                     and os.path.samefile(str(dst), str(src)):
                 continue  # hardlink to the source; already fine
-            if name in copies and os.path.isfile(src) and os.path.isfile(dst):
+            elif name in copies and os.path.isfile(src) and os.path.isfile(dst):
                 shutil.copy2(str(src), str(dst))
                 info(f"refreshed: {name}")
+                continue
             else:
                 warn(f"{name} already exists as a real item in {data}; not touching it")
-            continue
+                continue
         try:
             method = make_link(src, dst)
             info(f"linked: {name} ({method})")

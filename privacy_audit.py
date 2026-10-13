@@ -295,6 +295,66 @@ def print_finding(severity, title, details):
             print(f"      {line}")
 
 
+def suggest_action(finding, days):
+    """(action line, claude-lumo command or None) for one finding.
+
+    The command is None for anything claude-lumo cannot do itself; the action line
+    then says so instead of inventing a command.
+    """
+    title = finding["title"]
+    if "stale project" in title:
+        return (f"Review and delete conversations older than {days} days with wipe.",
+                f"claude-lumo wipe --days {days}")
+    if title == "No automatic cleanup configured":
+        return ("Set cleanupPeriodDays in settings.json, then run wipe to clear old data now.",
+                "claude-lumo wipe")
+    if title.startswith("Update available"):
+        return ("Update claude-lumo to the latest release.",
+                "claude-lumo update")
+    if "encryption" in title:
+        return ("Enable full-disk encryption (BitLocker or FileVault); a manual "
+                "operating-system step, no claude-lumo command for it.", None)
+    if "cloud-synced" in title:
+        return ("Move the Claude data folder out of the cloud-synced location; a manual "
+                "operating-system step, no claude-lumo command for it.", None)
+    if "retain deleted conversations" in title:
+        return ("Adjust the backup system so it stops keeping deleted conversations; a "
+                "manual operating-system step, no claude-lumo command for it.", None)
+    return ("Resolve this finding by hand; there is no claude-lumo command for it.", None)
+
+
+def offer_help(findings, days):
+    """Interactive runs only: offer to help fix the medium/high findings.
+
+    Prints nothing on --suggest (which never reaches this), non-TTY runs, "n"/empty
+    input, EOF, or when no medium/high finding exists.
+    """
+    notable = [f for f in findings if f["severity"] in ("medium", "high")]
+    if not notable:
+        return
+    try:
+        if not sys.stdin.isatty():
+            return
+        answer = input("Want claude-lumo to help fix these? [y/N] ")
+    except (AttributeError, EOFError, OSError):
+        return
+    if answer.strip().lower() not in ("y", "yes"):
+        return
+    actions = [suggest_action(f, days) for f in notable]
+    print()
+    for num, (line, _) in enumerate(actions, 1):
+        print(f"{num}. {line}")
+    commands = []
+    for _, command in actions:
+        if command and command not in commands:
+            commands.append(command)
+    if commands:
+        print("claude-lumo: ask your running assistant to help, or run: "
+              + " ".join(commands))
+    else:
+        print("claude-lumo: ask your running assistant to walk through the manual steps.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Privacy audit for claude-lumo")
     parser.add_argument("--suggest", action="store_true",
@@ -460,6 +520,8 @@ def main():
             mf.write("")
     except OSError:
         pass
+
+    offer_help(findings, args.days)
 
 
 if __name__ == "__main__":

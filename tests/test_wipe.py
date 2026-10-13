@@ -5,6 +5,7 @@ Uses pytest with stdlib-only subject code (no extra deps).
 """
 
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -53,6 +54,8 @@ from privacy_audit import (
     estimate_stale_size,
     describe_orca as audit_describe_orca,
     check_update_status,
+    offer_help,
+    suggest_action,
 )
 
 # Load hook module with hyphenated filename using importlib
@@ -1592,6 +1595,126 @@ class TestHookDisabled:
         hook_out = output.get("hookSpecificOutput", {})
         assert "additionalContext" in hook_out
         assert "could be wiped" in hook_out["additionalContext"]
+
+
+class _TTYStdin(io.StringIO):
+    """StringIO that claims to be a terminal, so offer_help prompts."""
+    def isatty(self):
+        return True
+
+
+class TestAuditOfferHelp:
+    """privacy_audit.offer_help: interactive offer after medium/high findings."""
+
+    FINDINGS = [
+        {"severity": "high", "title": "Full-disk encryption appears disabled", "details": []},
+        {"severity": "medium", "title": "3 stale project(s) found", "details": []},
+        {"severity": "medium", "title": "No automatic cleanup configured", "details": []},
+        {"severity": "low", "title": "Data folder not in cloud sync (good)", "details": []},
+    ]
+
+    def _run(self, findings, stdin_text, capsys):
+        old_stdin = sys.stdin
+        sys.stdin = _TTYStdin(stdin_text)
+        try:
+            offer_help(findings, days=30)
+        finally:
+            sys.stdin = old_stdin
+        # input()'s prompt echo lands in stdout too; drop it
+        return capsys.readouterr().out.replace(
+            "Want claude-lumo to help fix these? [y/N] ", "")
+
+    def test_yes_prints_numbered_actions_and_commands(self, capsys):
+        out = self._run(self.FINDINGS, "y\n", capsys)
+        # Numbered actions, medium/high only
+        assert "1. Enable full-disk encryption" in out
+        assert "2. Review and delete conversations older than 30 days" in out
+        assert "3. Set cleanupPeriodDays" in out
+        # The exact command line with concrete commands
+        assert ("claude-lumo: ask your running assistant to help, or run: "
+                "claude-lumo wipe --days 30 claude-lumo wipe") in out
+
+    def test_no_extra_output_on_decline(self, capsys):
+        out = self._run(self.FINDINGS, "n\n", capsys)
+        assert out == ""
+
+    def test_no_extra_output_on_empty_input(self, capsys):
+        out = self._run(self.FINDINGS, "\n", capsys)
+        assert out == ""
+
+    def test_no_extra_output_on_eof(self, capsys):
+        old_stdin = sys.stdin
+        sys.stdin = _TTYStdin("")  # empty stream raises EOFError on input()
+        try:
+            offer_help(self.FINDINGS, days=30)
+        finally:
+            sys.stdin = old_stdin
+        assert capsys.readouterr().out.replace(
+            "Want claude-lumo to help fix these? [y/N] ", "") == ""
+
+    def test_non_tty_prints_nothing(self, capsys):
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO("y\n")  # isatty() is False
+        try:
+            offer_help(self.FINDINGS, days=30)
+        finally:
+            sys.stdin = old_stdin
+        assert capsys.readouterr().out == ""
+
+    def test_low_only_findings_print_nothing(self, capsys):
+        findings = [{"severity": "low", "title": "whatever", "details": []}]
+        out = self._run(findings, "y\n", capsys)
+        assert out == ""
+
+    def test_no_findings_prints_nothing(self, capsys):
+        out = self._run([], "y\n", capsys)
+        assert out == ""
+
+
+class TestAuditSuggestAction:
+    """Mapping of finding titles to action lines and commands."""
+
+    def test_stale_projects_maps_to_wipe(self):
+        line, command = suggest_action(
+            {"title": "3 stale project(s) found"}, days=30)
+        assert "older than 30 days" in line
+        assert command == "claude-lumo wipe --days 30"
+
+    def test_no_cleanup_maps_to_setting_plus_wipe(self):
+        line, command = suggest_action(
+            {"title": "No automatic cleanup configured"}, days=30)
+        assert "cleanupPeriodDays" in line
+        assert command == "claude-lumo wipe"
+
+    def test_update_available_maps_to_update(self):
+        line, command = suggest_action(
+            {"title": "Update available (5 commits behind)"}, days=30)
+        assert command == "claude-lumo update"
+
+    def test_manual_findings_have_no_command(self):
+        for title in ("Full-disk encryption appears disabled",
+                      "Claude data is in a cloud-synced folder",
+                      "File History may retain deleted conversations"):
+            line, command = suggest_action({"title": title}, days=30)
+            assert command is None
+            assert "no claude-lumo command" in line
+
+    def test_manual_only_findings_give_manual_footer(self, capsys):
+        findings = [
+            {"severity": "high",
+             "title": "Full-disk encryption appears disabled", "details": []},
+            {"severity": "medium",
+             "title": "File History may retain deleted conversations", "details": []},
+        ]
+        old_stdin = sys.stdin
+        sys.stdin = _TTYStdin("y\n")
+        try:
+            offer_help(findings, days=30)
+        finally:
+            sys.stdin = old_stdin
+        out = capsys.readouterr().out
+        assert "ask your running assistant to walk through the manual steps" in out
+        assert "or run:" not in out
 
 
 if __name__ == "__main__":

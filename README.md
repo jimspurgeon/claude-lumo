@@ -1,6 +1,6 @@
 # claude-lumo
 
-Run [Claude Code](https://claude.com/code) on **Proton Lumo** with one command.
+Run [Claude Code](https://claude.com/product/claude-code) on [Proton Lumo](https://proton.me/lumo) with one command.
 
 `claude-lumo` looks and behaves exactly like `claude` — same prompts, same
 skills, same config in `~/.claude` — but the models behind it are Proton Lumo's
