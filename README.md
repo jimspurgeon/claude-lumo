@@ -439,7 +439,12 @@ claude-lumo wipe --yes
 # Allowlist mode: only wipe projects outside this file
 claude-lumo wipe --allowlist ~/.claude/allowlist.txt
 
+The default way to clean up is asking the assistant in a session: assessment in
+conversation, per-project recommendations, then execution. The CLI modes are for
+running the script directly, with `--mode manual` for a self-serve report.
+
 # Three execution modes
+```bash
 claude-lumo wipe --mode intelligent   # classify, execute REMOVE, prompt ASK (default on TTY)
 claude-lumo wipe --mode auto          # batch delete, --yes implied (default when piped)
 claude-lumo wipe --mode manual        # list commands, delete nothing
