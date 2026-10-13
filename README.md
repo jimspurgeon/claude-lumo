@@ -438,6 +438,7 @@ claude-lumo wipe --yes
 
 # Allowlist mode: only wipe projects outside this file
 claude-lumo wipe --allowlist ~/.claude/allowlist.txt
+```
 
 The default way to clean up is asking the assistant in a session: assessment in
 conversation, per-project recommendations, then execution. The CLI modes are for
@@ -516,8 +517,10 @@ claude-lumo privacy-audit --suggest
 
 # Custom staleness threshold
 claude-lumo privacy-audit --days 60
+```
 
 # Three execution modes
+```bash
 claude-lumo privacy-audit --mode intelligent  # show next step for medium/high findings (default on TTY)
 claude-lumo privacy-audit --mode auto         # current behavior, no new prompts (default when piped)
 claude-lumo privacy-audit --mode manual       # list commands for every finding
