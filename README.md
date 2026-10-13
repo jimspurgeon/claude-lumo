@@ -276,7 +276,7 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 
 **Live test servers must only bind to spare ports**. Never use port 8790 (Lumo proxy), 4000 (LiteLLM), or any port an existing listener owns. Pick a random port in the range 18000-18999, then verify it's free with `netstat -ano` before binding.
 
-**Kill only PIDs you started**, and kill them by PID, not by image name. Before killing, verify the command line with `powershell Get-CimInstance Win32_Process -Filter "ProcessId=<PID>"` or `tasklist /FI "PID eq <PID>" /V` points at your test process (Windows 11 has no `wmic` by default). Never use `taskkill /IM node.exe` or kill every node.exe process of a binary: on this machine, node.exe includes the production Lumo proxy (issue #71) and LiteLLM.
+**Kill only PIDs you started**, and kill them by PID, not by image name. Before killing, verify the command line with `powershell Get-CimInstance Win32_Process -Filter "ProcessId=<PID>" | select ProcessId,CommandLine` or `tasklist /FI "PID eq <PID>" /V` points at your test process (Windows 11 has no `wmic` by default). Never use `taskkill /IM node.exe` or kill every node.exe process of a binary: on this machine, node.exe includes the production Lumo proxy (issue #71) and LiteLLM.
 
 **After cleanup**, verify both that your ports are free and that production services are still up:
 ```bash
