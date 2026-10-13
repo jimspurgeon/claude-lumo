@@ -1,6 +1,7 @@
 # install.ps1: Windows entry-point — installs Git Bash if needed, then runs install.sh
 # Safe to re-run: checks everything, prompts before installing Git, then delegates.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+# Optional: add -ResumeShim to also install the resume shim (see README, "Resume shim").
 $ErrorActionPreference = 'Stop'
 
 Write-Host '=== claude-lumo installer (Windows) ==='

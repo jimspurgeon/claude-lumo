@@ -164,6 +164,33 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 # Windows also: %APPDATA%/npm/claude-lumo*
 ```
 
+## Resume shim (optional)
+
+Some tools resume sessions with a plain `claude --resume <id>` (Orca does). A resumed
+Lumo session would then come back on regular Claude, which does not know the lumo
+models. The resume shim fixes that: when the resumed session's transcript used a
+`lumo-*` model, it re-launches through `claude-lumo` with the same arguments. Every
+other `claude` call (new sessions, non-Lumo resumes, `--version`, scripts) reaches the
+real `claude` unchanged: same arguments, same exit code, no output added.
+
+Opt in at install time (ships in v1.3.0):
+
+```bash
+bash install.sh --resume-shim        # macOS / Linux / Windows (Git Bash)
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -ResumeShim
+```
+
+This adds one clearly commented line to your shell profiles (`~/.bashrc`, `~/.zshrc`,
+and on Windows the PowerShell profiles), sourcing the shim from `~/.claude/lumo/scripts/`
+so updates flow to it. It is idempotent: re-running keeps exactly one line. Transcripts
+are looked up in `$CLAUDE_CONFIG_DIR` if set, then `~/.claude`, then
+`~/.claude-lumo/config` (the separated Lumo data store). Uninstalling claude-lumo
+removes the lines too.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -238,6 +265,9 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `session-restart.py` | After an update: finds running sessions, offers restarts (wait until idle / interrupt now / skip) via Orca or tmux |
 | `migrate-to-lumo.sh` | Moves Lumo sessions from `~/.claude` into the separate store (see "Separate data") |
 | `migrate-from-lumo.sh` | Moves them back; undoes `migrate-to-lumo.sh` |
+| `scripts/resume-shim.ps1`, `scripts/resume-shim.sh` | The optional resume shim (PowerShell / bash+zsh), sourced from shell profiles. Tests: `bash test-resume-shim.sh` |
+| `scripts/resume-shim-setup.sh` | Adds/removes the resume shim profile lines (used by `install.sh --resume-shim` and the uninstaller) |
+| `test-resume-shim.sh` | Resume shim tests: fake transcripts and stub binaries, no real sessions |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
 | `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
 | `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |

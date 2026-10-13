@@ -12,6 +12,15 @@ _self="${BASH_SOURCE[0]:-}"
 if [ -n "$_self" ] && [ -f "$(dirname "$_self")/claude-lumo.sh" ]; then
   SRC="$(cd "$(dirname "$_self")" && pwd)"
 fi
+# Opt-in extras: --resume-shim also installs the resume shim (see README, "Resume shim").
+# Accept the PowerShell-style spelling too, since install.ps1 forwards its own args verbatim.
+EXTRA_RESUME_SHIM=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --resume-shim|-ResumeShim) EXTRA_RESUME_SHIM=1;;
+  esac
+done
+
 REPO_URL="https://github.com/jimspurgeon/claude-lumo"
 D="$HOME/.claude/lumo"; S="$HOME/.claude-lumo"; VENV="$S/litellm-venv"
 
@@ -130,7 +139,7 @@ fi
 # A folder that arrived as a zip (saved on Windows, or one of the v1.0/v1.1 release zips)
 # can carry CRLF line endings, which break the shebang on Linux/macOS. Strip CRs from
 # every shell script we just installed so `bash\r` never happens again.
-for f in "$D"/*.sh; do
+for f in "$D"/*.sh "$D"/scripts/*.sh; do
   [ -f "$f" ] || continue
   if ! tr -d "\r" < "$f" | cmp -s - "$f"; then
     tr -d "\r" < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
@@ -173,6 +182,11 @@ if [ "${1:-}" = "--separate-data" ]; then
   else
     echo "Warning: setup failed; CLAUDE_CONFIG_DIR will not be set on next launch" >&2
   fi
+fi
+
+# Optional: wire the resume shim into shell profiles (see README, "Resume shim").
+if [ "$EXTRA_RESUME_SHIM" = "1" ]; then
+  bash "$D/scripts/resume-shim-setup.sh" install
 fi
 
 echo "Installed into ~/.claude/lumo. If 'claude-lumo' is not found, add $BIN to PATH and reopen the terminal."
