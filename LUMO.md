@@ -13,7 +13,8 @@ Everything else about this session is standard Claude Code.
   not a hang. lumo-lite is 3 to 4 times faster, with no hidden reasoning.
 - There is no prompt caching: every call re-processes the full context, so long
   conversations are expensive. Keep context small and make fewer, larger calls.
-- Window: 131k tokens including the reply; auto-compact at 110k; replies capped at 16k.
+- Window: 131k tokens shared by prompt and reply; auto-compact fires near 100k (the status line
+  ctx % reaches 100% there); replies up to 32k, cut to fit when a prompt is long.
 
 ## Routing
 

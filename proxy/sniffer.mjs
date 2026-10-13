@@ -51,10 +51,13 @@ function stripCacheKey(body) {
 // payloads. Returns { response, buffered, errMeta, retried }: buffered is the
 // response text when it was consumed for inspection (null to stream normally),
 // errMeta the parsed error metadata when the final response is an error.
-export async function upstreamChat({ upstream, method, path, body, headers, log, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retryDelayMs = NO_DB_RETRY_MS }) {
+// `refit(errorText, body)` (context-fit.mjs) turns a context-length 400 into one retry with a
+// smaller max_tokens (#65); without it such errors are returned as before.
+export async function upstreamChat({ upstream, method, path, body, headers, log, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retryDelayMs = NO_DB_RETRY_MS, refit = null }) {
   if (!path.startsWith("/chat")) return { response: await upstream(path, method, body, headers), buffered: null, errMeta: null, retried: false };
-  let retried = false;
-  for (let attempt = 0; ; attempt++) {
+  // noDb counts no_db_connection failures; the one context clamp retry is tracked apart.
+  let retried = false, clamped = false, noDb = 0;
+  for (;;) {
     let res = await upstream(path, method, body, headers);
     // SSE responses (and bodiless ones) stream through untouched.
     if (isSSE(res) || !res.body) return { response: res, buffered: null, errMeta: null, retried };
@@ -69,19 +72,26 @@ export async function upstreamChat({ upstream, method, path, body, headers, log,
     res = new Response(text, { status: res.status, headers: res.headers });
     const errMeta = errorMetaFrom(text);
     if (res.status >= 400) {
+      const r = clamped || !refit ? null : refit(text, body);
+      if (r) {
+        log(`${path} -> ${res.status} context_refit est=${r.clamp.est} max_tokens ${r.clamp.from}->${r.clamp.to}; retrying once`);
+        body = r.body;
+        clamped = retried = true;
+        continue;
+      }
       log(`${path} -> ${res.status}${errMeta ? ` type=${errMeta.type} code=${errMeta.code}` : ""}`);
       return { response: res, buffered: text, errMeta, retried };
     }
     if (!errMeta) return { response: res, buffered: text, errMeta: null, retried };
     // no_db_connection: retry once with backoff (issue #43), then once more with
     // prompt_cache_key stripped (issue #60). Give up after that.
-    if (errMeta.isNoDb && attempt === 0) {
+    if (errMeta.isNoDb && noDb++ === 0) {
       log(`${path} upstream error ${res.status} type=${errMeta.type} code=${errMeta.code}; retrying once in ${retryDelayMs / 1000}s`);
       retried = true;
       await sleep(retryDelayMs);
       continue;
     }
-    if (errMeta.isNoDb && attempt === 1) {
+    if (errMeta.isNoDb && noDb === 2) {
       const stripped = stripCacheKey(body);
       if (stripped !== body) {
         log(`${path} upstream error ${res.status} type=${errMeta.type} code=${errMeta.code}; retrying once with prompt_cache_key stripped`);

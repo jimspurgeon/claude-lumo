@@ -1,6 +1,6 @@
 {
   "model": "lumo-max",
-  "autoCompactWindow": 110000,
+  "autoCompactWindow": 133000,
   "env": {
     "CLAUDE_LUMO": "1",
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
