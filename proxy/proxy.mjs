@@ -18,6 +18,7 @@ import { readLumoCredentials } from "./creds.mjs";
 import { addEditHints } from "./edit-hints.mjs";
 import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 import { upstreamChat } from "./sniffer.mjs";
+import { isWebSearchRequest, webSearchUnavailable } from "./websearch-guard.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
@@ -114,6 +115,17 @@ http.createServer(async (req, res) => {
   const chunks = []; for await (const c of req) chunks.push(c);
   let body = chunks.length ? Buffer.concat(chunks) : undefined;
   if (body && path.startsWith("/chat")) body = addEditHints(body);
+  // Claude Code's internal WebSearch delegation (web_search_options): Lumo has no search
+  // backend and would answer from training data as if it had searched. Answer it here with
+  // a clear unavailability message instead, so no fabricated sources reach the model (#59).
+  if (body && path.startsWith("/chat") && isWebSearchRequest(body)) {
+    let model = "-", stream = true; try { const r = JSON.parse(body); model = r.model || model; stream = r.stream ?? true; } catch {}
+    const out = webSearchUnavailable(model, stream);
+    res.writeHead(200, { "content-type": stream ? "text/event-stream" : "application/json" });
+    res.end(out);
+    log(`${path} 200 in=${body.length}B websearch_blocked=1`);
+    return;
+  }
   const headers = {}; for (const h of ["content-type", "accept"]) if (req.headers[h]) headers[h] = req.headers[h];
   const t0 = Date.now(); let tFirst = 0, bytes = 0;
   try {
