@@ -438,7 +438,26 @@ claude-lumo wipe --yes
 
 # Allowlist mode: only wipe projects outside this file
 claude-lumo wipe --allowlist ~/.claude/allowlist.txt
+
+# Three execution modes
+claude-lumo wipe --mode intelligent   # classify, execute REMOVE, prompt ASK (default on TTY)
+claude-lumo wipe --mode auto          # batch delete, --yes implied (default when piped)
+claude-lumo wipe --mode manual        # list commands, delete nothing
 ```
+
+**Modes:** `--mode` controls how candidates are handled.
+- `intelligent` (default on an interactive TTY): each candidate is classified
+  as REMOVE (clearly safe: marked done, explicitly selected, project folder
+  gone/empty, or purely inactive), ASK (borderline: branch merged or removed,
+  outside allowlist, or multiple mixed signals) or KEEP. REMOVE items are
+  deleted without a global confirm, ASK items get a per-item `y/N` prompt,
+  KEEP items are only reported.
+- `auto` (default with `--yes` or when stdin is not a TTY): current
+  behavior — one batch after a single confirmation. A non-interactive run
+  without `--yes` prints guidance and deletes nothing (it never prompts or
+  hangs).
+- `manual`: plain-language report with the exact `claude-lumo wipe` command
+  per finding; nothing is executed.
 
 **Stores scanned:** auto mode discovers and scans every Claude data store on the
 machine: `$CLAUDE_CONFIG_DIR` if set, `~/.claude`, `~/.claude-lumo/data`, the
@@ -492,6 +511,11 @@ claude-lumo privacy-audit --suggest
 
 # Custom staleness threshold
 claude-lumo privacy-audit --days 60
+
+# Three execution modes
+claude-lumo privacy-audit --mode intelligent  # show next step for medium/high findings (default on TTY)
+claude-lumo privacy-audit --mode auto         # current behavior, no new prompts (default when piped)
+claude-lumo privacy-audit --mode manual       # list commands for every finding
 ```
 
 **Checks performed:**
@@ -503,6 +527,14 @@ claude-lumo privacy-audit --days 60
 - Stale data volume estimation
 - Update status (installed version vs latest release)
 - Orca data presence (report-only with manual cleanup steps)
+
+**Modes:** `--mode` controls how findings are presented.
+- `intelligent` (default on an interactive TTY): show the recommended next
+  step for medium/high severity findings.
+- `auto` (default when stdin is not a TTY): current behavior — the optional
+  interactive offer to help fix findings, or a summary if piped.
+- `manual`: list the suggested action and command for every finding, execute
+  nothing.
 
 The full audit always runs when asked. Only `--suggest` is rate-limited: weekly, and
 silent when no stale data exists.
