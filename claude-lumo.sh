@@ -18,6 +18,28 @@ esac
 # `claude-lumo revert <version>|last`: roll back to a previous release (see revert-command.sh).
 [ "$1" = "revert" ] && exec bash "$D/revert-command.sh" "${@:2}"
 
+# `-h`/`--help`: print our subcommands, then `claude --help` for everything else. Fast path:
+# no proxy, LiteLLM or render work runs for a help request.
+case "$1" in
+  -h|--help|help)
+    cat <<'EOF'
+claude-lumo: Claude Code running on Proton Lumo (https://github.com/jimspurgeon/claude-lumo)
+
+Usage: claude-lumo [claude-arguments...]
+
+Subcommands:
+  update                   Bring this install to the latest release
+  revert [<version>|last]  Roll back to a previous release
+  wipe                     Delete finished projects' session data (offline)
+  privacy-audit            Report on local data posture (offline, read-only)
+
+All other arguments are passed to `claude`, including its own flags; see
+`claude --help` or https://claude.com/docs for Claude Code usage.
+EOF
+    exit 0
+    ;;
+esac
+
 # Offline subcommands: data hygiene, no proxy or Lumo login needed.
 case "$1" in
   wipe|privacy-audit)
