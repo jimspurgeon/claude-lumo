@@ -10,7 +10,11 @@ model_list:
       api_key: lumo-proxy
       model_info: { max_input_tokens: 131072 }
   - model_name: "*haiku*"
-    litellm_params: { model: hosted_vllm/lumo-lite, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+    litellm_params:
+      model: hosted_vllm/lumo-lite
+      api_base: "http://127.0.0.1:8790/v1"
+      api_key: lumo-proxy
+      model_info: { max_input_tokens: 131072 }
   - model_name: lumo-max
     litellm_params:
       model: hosted_vllm/lumo-max
@@ -18,7 +22,11 @@ model_list:
       api_key: lumo-proxy
       model_info: { max_input_tokens: 131072 }
   - model_name: "*"
-    litellm_params: { model: hosted_vllm/lumo-max, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+    litellm_params:
+      model: hosted_vllm/lumo-max
+      api_base: "http://127.0.0.1:8790/v1"
+      api_key: lumo-proxy
+      model_info: { max_input_tokens: 131072 }
 litellm_settings:
   drop_params: true
   request_timeout: 900
