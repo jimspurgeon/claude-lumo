@@ -470,8 +470,16 @@ class TestStatuslineOutput:
 # ---------------------------------------------------------------------------
 
 def fallback_entry():
-    return {"type": "system", "subtype": "model_fallback",
+    return {"type": "system", "subtype": "model_fallback", "isMeta": False, "level": "warning",
+            "originalModel": "lumo-max", "fallbackModel": "lumo-lite", "trigger": "server_error",
             "content": "Switched to lumo-lite due to high demand for lumo-max"}
+
+
+def synthetic_entry():
+    # Claude Code's record of a failed request: no model produced it.
+    return {"type": "assistant", "isApiErrorMessage": True, "isSidechain": False,
+            "message": {"role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence",
+                        "content": [{"type": "text", "text": "API Error: 400"}]}}
 
 
 class TestFallbackReplay:
@@ -486,7 +494,7 @@ class TestFallbackReplay:
         assert "lumo-lite (fallback from lumo-max)" in out
 
     def test_synthetic_error_turn_is_skipped(self, temp_state_dir, statusline_module_path):
-        path = write_transcript([assistant_entry("lumo-lite"), assistant_entry("<synthetic>")])
+        path = write_transcript([assistant_entry("lumo-lite"), synthetic_entry()])
         try:
             out = run_statusline(temp_state_dir, statusline_module_path,
                                  {"model": {"id": "lumo-max"}, "transcript_path": path})
@@ -498,7 +506,7 @@ class TestFallbackReplay:
     def test_fallback_that_never_answered_keeps_configured(self, temp_state_dir, statusline_module_path):
         # The fallback request failed too: no model answered, so nothing fell back.
         path = write_transcript([assistant_entry("lumo-max"), fallback_entry(),
-                                 assistant_entry("<synthetic>")])
+                                 synthetic_entry()])
         try:
             out = run_statusline(temp_state_dir, statusline_module_path,
                                  {"model": {"id": "lumo-max"}, "transcript_path": path})
