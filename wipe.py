@@ -1,6 +1,10 @@
 #!/usr/bin/env python
 """claude-lumo wipe: find and permanently delete conversation data that is no longer needed.
 
+Multi-store discovery: in auto mode, scans all Claude/claude-lumo stores (known locations
+plus bounded home walk). Named modes (--session, --project) search every store; ambiguous
+matches are refused. The --store flag restricts the scan to given store(s).
+
 A session is a candidate when signals say its project is finished: inactivity (configurable
 days, default 30), the project folder is gone, the git branch it ran on is merged or removed,
 a done marker exists, or (allowlist mode) the project is outside the allowlist file.
@@ -10,14 +14,17 @@ tasks/, history.jsonl (matching lines only), Lumo state logs, temp scratch (clau
 CLAUDE_CODE_TMPDIR or TEMP). Settings, credentials, memory and config are never touched.
 Orca data is report-only: the wipe output lists what Orca keeps and how to clear it by hand.
 
+Link safety: directory links (junctions or symlinks) are never deleted through and never
+followed during collection. Any target that resolves outside its owning store is refused.
+
 Deletion is permanent but logical, not forensic: SSD wear levelling, backups, cloud sync and
 other tools may still hold copies.
 
 Usage:
-    wipe.py [--dry-run] [--days N] [--allowlist FILE]
+    wipe.py [--dry-run] [--days N] [--store PATH] [--allowlist FILE]
     wipe.py --session <session-id> [--dry-run]
     wipe.py --project <name-or-path> [--dry-run]
-Add --yes to skip the confirmation prompt (for scripting).
+Repeat --store to limit multiple stores. Add --yes to skip the confirmation prompt.
 """
 
 import argparse
@@ -25,6 +32,7 @@ import glob
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -41,6 +49,27 @@ def resolve_config_dir():
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
     root = os.path.expanduser(env_dir) if env_dir else os.path.expanduser("~/.claude")
     return os.path.abspath(root)
+
+
+def is_mount_point(path):
+    """True for a Windows junction (directory reparse point)."""
+    if hasattr(os.path, "isjunction"):
+        try:
+            return os.path.isjunction(path)
+        except OSError:
+            return False
+    if os.name != "nt":
+        return False
+    try:
+        return os.stat(path, follow_symlinks=False).st_reparse_tag \
+            == stat.IO_REPARSE_TAG_MOUNT_POINT
+    except OSError:
+        return False
+
+
+def is_any_link(path):
+    """True for a symlink or junction: never deleted through, never followed."""
+    return os.path.islink(path) or is_mount_point(path)
 
 
 def resolve_temp_dir():
@@ -67,6 +96,155 @@ def resolve_orca_dir():
     return os.path.expanduser("~/.local/share/orca")
 
 
+# Directory names the home walk never enters: dependency caches, build output
+# and app internals that can never hold a store but can hold millions of files.
+WALK_SKIP_NAMES = frozenset((
+    "node_modules", ".git", "__pycache__", "venv", ".venv", "Cache", "Caches",
+    "Code Cache", "GPUCache", "dist", "build", "target", ".cargo", ".npm",
+    ".rustup", "site-packages", "electron", "Temp", "Tmp",
+))
+
+# Top-level home folders the walk never enters: app data, cloud sync mounts.
+WALK_SKIP_TOPLEVEL = frozenset((
+    "AppData", "OneDrive", "Dropbox", "Google Drive", "iCloudDrive", "iCloud Drive",
+))
+
+# How many projects/ subfolders looks_like_store inspects before giving up.
+STORE_PROBE_LIMIT = 50
+
+
+def resolve_known_stores():
+    """Store roots at fixed locations: realpath'd, deduped, priority order.
+    Returns (path, origin) pairs; nonexistent paths are dropped."""
+    candidates = []
+    env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if env_dir:
+        candidates.append((os.path.expanduser(env_dir), "env"))
+    candidates.append((os.path.expanduser("~/.claude"), "default"))
+    candidates.append((os.path.expanduser("~/.claude-lumo/data"), "separate"))
+    legacy = os.path.expanduser("~/.claude-lumo/config")
+    if os.path.isdir(legacy):
+        candidates.append((legacy, "legacy"))
+    out = []
+    seen = set()
+    for path, origin in candidates:
+        if not os.path.isdir(path):
+            continue
+        real = os.path.realpath(path)
+        key = os.path.normcase(real)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((real, origin))
+    return out
+
+
+def looks_like_store(path):
+    """Strict check that a folder is a Claude/claude-lumo conversation store:
+    real projects/ dir with a *.jsonl transcript in one of its first 50
+    subfolders, plus at least one secondary marker (history.jsonl file,
+    session-env/ or file-history/ real dir). Links satisfy nothing."""
+    if is_any_link(path):
+        return False
+    projects = os.path.join(path, "projects")
+    if not os.path.isdir(projects) or is_any_link(projects):
+        return False
+    has_transcripts = False
+    try:
+        with os.scandir(projects) as it:
+            entries = list(it)
+    except OSError:
+        return False
+    scanned = 0
+    for entry in entries:
+        scanned += 1
+        if scanned > STORE_PROBE_LIMIT:
+            break
+        if is_any_link(entry.path):
+            continue
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        try:
+            with os.scandir(entry.path) as sub:
+                if any(e.name.endswith(".jsonl") and not is_any_link(e.path)
+                       and e.is_file(follow_symlinks=False) for e in sub):
+                    has_transcripts = True
+                    break
+        except OSError:
+            pass
+    if not has_transcripts:
+        return False
+    history = os.path.join(path, "history.jsonl")
+    if os.path.isfile(history) and not is_any_link(history):
+        return True
+
+    def real_dir(name):
+        p = os.path.join(path, name)
+        return os.path.isdir(p) and not is_any_link(p)
+
+    return real_dir("session-env") or real_dir("file-history")
+
+
+def walk_home_for_stores(home=None, max_depth=4):
+    """Bounded scandir walk of the user profile looking for stores.
+    Never descends into a link (junction loops would hang) or an accepted
+    store; depth is capped at max_depth levels below home."""
+    if home is None:
+        home = os.path.expanduser("~")
+    found = []
+
+    def visit(dir_path, depth):
+        try:
+            with os.scandir(dir_path) as it:
+                entries = list(it)
+        except OSError:
+            return
+        for entry in entries:
+            if entry.name in WALK_SKIP_NAMES:
+                continue
+            if depth == 1 and entry.name in WALK_SKIP_TOPLEVEL:
+                continue
+            if is_any_link(entry.path):
+                continue
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if looks_like_store(entry.path):
+                found.append(os.path.abspath(entry.path))
+                continue
+            if depth < max_depth:
+                visit(entry.path, depth + 1)
+
+    visit(home, 1)
+    return found
+
+
+def discover_stores():
+    """Every conversation store on the machine: known locations first, then
+    whatever the home walk finds. Deduped by realpath, ordered."""
+    current = os.path.normcase(os.path.realpath(resolve_config_dir()))
+    out = []
+    seen = set()
+
+    def add(path, origin):
+        real = os.path.realpath(path)
+        key = os.path.normcase(real)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({
+            "path": os.path.abspath(path),
+            "realpath": real,
+            "origin": origin,
+            "current": key == current,
+        })
+
+    for path, origin in resolve_known_stores():
+        add(path, origin)
+    for path in walk_home_for_stores():
+        add(path, "discovered")
+    return out
+
+
 def run_git(args, cwd):
     """Run a git command, return stdout on success, None on any failure."""
     try:
@@ -88,22 +266,29 @@ def format_size(num_bytes):
 
 
 def tree_size(path):
-    """Total size of a file or folder, 0 if unreadable."""
-    if os.path.isfile(path):
-        try:
+    """Total size of a file or folder, 0 if unreadable. Links are never
+    followed (junction loops would hang, and link targets are never ours)."""
+    try:
+        if os.path.isfile(path):
             return os.path.getsize(path)
-        except OSError:
-            return 0
+    except OSError:
+        return 0
     total = 0
     try:
-        for root, dirs, files in os.walk(path):
-            for name in files:
-                try:
-                    total += os.path.getsize(os.path.join(root, name))
-                except OSError:
-                    pass
+        with os.scandir(path) as it:
+            entries = list(it)
     except OSError:
-        pass
+        return total
+    for entry in entries:
+        try:
+            if is_any_link(entry.path):
+                continue
+            if entry.is_dir(follow_symlinks=False):
+                total += tree_size(entry.path)
+            elif entry.is_file(follow_symlinks=False):
+                total += entry.stat().st_size
+        except OSError:
+            pass
     return total
 
 
@@ -388,7 +573,8 @@ def collect_candidates(config_dir, days, allowlist_path):
         names = []
     candidates = []
     for project in names:
-        if not os.path.isdir(os.path.join(projects_root, project)):
+        project_path = os.path.join(projects_root, project)
+        if not os.path.isdir(project_path) or is_any_link(project_path):
             continue
         info = collect_project(config_dir, project)
         reasons = detect_reasons(info, config_dir, days, allowlist)
@@ -513,11 +699,23 @@ def print_orca_section(found):
     print("transcript files, so wiping above already removes the sessions from that list.")
 
 
-def delete_all(target_groups):
-    """Delete every (kind, path), return per-path results."""
+def delete_all(target_groups, store_root=None):
+    """Delete every (kind, path), return per-path results. Refuses to delete
+    through directory links, and with store_root set, anything that resolves
+    outside the store (targets stay theirs even if a stray link points there)."""
     results = []
+    store_real = os.path.normcase(os.path.realpath(store_root)) if store_root else None
     for _, path in target_groups:
         try:
+            if os.path.isdir(path) and is_any_link(path):
+                results.append((path, False, "is a link; not deleting through it"))
+                continue
+            if store_real:
+                real = os.path.normcase(os.path.realpath(path))
+                if real != store_real and not real.startswith(store_real + os.sep) \
+                        and not real.startswith(store_real + "/"):
+                    results.append((path, False, "resolves outside the store; refusing"))
+                    continue
             if os.path.isdir(path) and not os.path.islink(path):
                 shutil.rmtree(path)
             elif os.path.exists(path) or os.path.islink(path):
@@ -531,30 +729,49 @@ def delete_all(target_groups):
     return results
 
 
-def print_plans(candidates, days, temp_paths, log_paths, store_paths):
-    total = sum(c["size"] for c in candidates)
-    session_count = sum(len(c["sessions"]) for c in candidates)
-    print(f"Found {session_count} conversation(s) in {len(candidates)} project(s) to wipe.")
-    for c in candidates:
-        when = ""
-        if c["last_activity"]:
-            when = datetime.fromtimestamp(c["last_activity"], tz=timezone.utc).strftime("%Y-%m-%d")
-        print(f"\nProject: {c['project']}  (last activity {when or 'unknown'})")
-        print(f"Reasons: {'; '.join(c['reasons'])}")
-        for kind, path in c["paths"]:
-            print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
-        print(f"  [history.jsonl] {len(c['session_ids'])} matching line(s)")
+def print_report(store_groups, temp_paths, log_paths):
+    """One combined report across every scanned store.
+
+    Each store group is {"store": record, "plans": [...], "store_paths": [...]}
+    with one entry per scanned store (empty ones print no section)."""
+    scanned = ", ".join(g["store"]["path"] for g in store_groups)
+    print(f"Scanning {len(store_groups)} store(s): {scanned}")
+    total = sum(c["size"] for g in store_groups for c in g["plans"])
+    session_count = sum(len(c["sessions"]) for g in store_groups for c in g["plans"])
+    project_count = sum(len(g["plans"]) for g in store_groups)
+    print(f"Found {session_count} conversation(s) in {project_count} project(s) to wipe.")
+    for g in store_groups:
+        candidates = g["plans"]
+        store_paths = g["store_paths"]
+        if not candidates and not store_paths:
+            continue
+        label = f"Store: {g['store']['path']}"
+        if g["store"].get("current"):
+            label += " [current store]"
+        print(f"\n{label}")
+        for c in candidates:
+            when = ""
+            if c["last_activity"]:
+                when = datetime.fromtimestamp(c["last_activity"], tz=timezone.utc).strftime("%Y-%m-%d")
+            print(f"\nProject: {c['project']}  (last activity {when or 'unknown'})")
+            print(f"Reasons: {'; '.join(c['reasons'])}")
+            for kind, path in c["paths"]:
+                print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
+            print(f"  [history.jsonl] {len(c['session_ids'])} matching line(s)")
+        if store_paths:
+            print("\nStale cache and snapshot stores:")
+            for kind, path in store_paths:
+                print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
     for group, label in (
             (temp_paths, "stale temp scratch"),
-            (log_paths, "stale Lumo logs"),
-            (store_paths, "stale cache and snapshot stores")):
+            (log_paths, "stale Lumo logs")):
         if group:
             print(f"\n{label.title()}:")
             for kind, path in group:
                 print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
     grand = (total + sum(tree_size(p) for _, p in temp_paths)
              + sum(tree_size(p) for _, p in log_paths)
-             + sum(tree_size(p) for _, p in store_paths))
+             + sum(tree_size(p) for g in store_groups for _, p in g["store_paths"]))
     print(f"\nTotal to delete: {format_size(grand)}")
     print("Deletion is permanent but logical, not forensic: SSD wear levelling, backups,")
     print("cloud sync and other tools' copies may still hold the data.")
@@ -577,43 +794,83 @@ def main(argv=None):
     parser.add_argument("--allowlist", help="file of project paths; anything outside is a candidate")
     parser.add_argument("--session", help="wipe one session by id")
     parser.add_argument("--project", help="wipe one project by folder name or path")
+    parser.add_argument("--store", action="append", metavar="PATH",
+                        help="restrict the wipe to this store (repeatable)")
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     args = parser.parse_args(argv)
 
-    config_dir = resolve_config_dir()
-    if not os.path.isdir(config_dir):
-        print("Error: cannot determine the data store path "
-              f"({config_dir} does not exist). Set CLAUDE_CONFIG_DIR.", file=sys.stderr)
-        sys.exit(1)
     if args.days < 1:
         print("Error: --days must be at least 1.", file=sys.stderr)
         sys.exit(1)
 
-    if args.session:
-        plan = plan_for_named_session(config_dir, args.session)
-        if plan is None:
-            print(f"No session {args.session} found under {config_dir}/projects.")
-            sys.exit(1)
-        plans = [plan]
-        temp_paths, log_paths, store_paths = [], [], []
-    elif args.project:
-        plan = plan_for_named_project(config_dir, args.project)
-        if plan is None:
-            print(f"No project matching {args.project} found under {config_dir}/projects.")
-            sys.exit(1)
-        plans = [plan]
-        temp_paths, log_paths, store_paths = [], [], []
+    if args.store:
+        stores = []
+        for p in args.store:
+            path = os.path.abspath(os.path.expanduser(p))
+            if not os.path.isdir(path) or is_any_link(path):
+                print(f"Error: store path {p} is not an existing directory.", file=sys.stderr)
+                sys.exit(1)
+            stores.append({"path": path, "realpath": os.path.realpath(path),
+                           "origin": "flag", "current": False})
     else:
-        plans = collect_candidates(config_dir, args.days, args.allowlist)
+        stores = discover_stores()
+    if not stores:
+        print("Error: no Claude data stores found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Named modes search all stores: --session refuses an ambiguous match,
+    # --project combines plans across stores.
+    plans = []
+    store_groups = []
+    if args.session:
+        matches = []
+        for store in stores:
+            plan = plan_for_named_session(store["path"], args.session)
+            if plan is not None:
+                plan["store"] = store
+                matches.append(plan)
+        if not matches:
+            print(f"No session {args.session} found in any store.")
+            sys.exit(1)
+        if len(matches) > 1:
+            print(f"Error: session {args.session} matches multiple stores:", file=sys.stderr)
+            for plan in matches:
+                print(f"  {plan['store']['path']}", file=sys.stderr)
+            sys.exit(1)
+        plans = matches
+        temp_paths, log_paths = [], []
+    elif args.project:
+        for store in stores:
+            plan = plan_for_named_project(store["path"], args.project)
+            if plan is not None:
+                plan["store"] = store
+                plans.append(plan)
+        if not plans:
+            print(f"No project matching {args.project} found in any store's projects.")
+            sys.exit(1)
+        temp_paths, log_paths = [], []
+    else:
+        for store in stores:
+            plans_for_store = collect_candidates(store["path"], args.days, args.allowlist)
+            store_paths = stale_config_stores(store["path"], args.days)
+            for plan in plans_for_store:
+                plan["store"] = store
+            plans.extend(plans_for_store)
+            store_groups.append({"store": store, "plans": plans_for_store,
+                                  "store_paths": store_paths})
         temp_paths = stale_temp_scratch(resolve_temp_dir(), args.days)
         log_paths = stale_lumo_logs(args.days)
-        store_paths = stale_config_stores(config_dir, args.days)
 
-    if not plans and not temp_paths and not log_paths and not store_paths:
+    if not plans and not any(g["plans"] or g["store_paths"] for g in store_groups) \
+            and not temp_paths and not log_paths:
         print("Nothing to wipe.")
         return
 
-    print_plans(plans, args.days, temp_paths, log_paths, store_paths)
+    if not store_groups:
+        store_groups = [{"store": p["store"], "plans": [p], "store_paths": []}
+                         for p in plans]
+
+    print_report(store_groups, temp_paths, log_paths)
     print_orca_section(describe_orca(resolve_orca_dir()))
 
     if args.dry_run:
@@ -625,11 +882,23 @@ def main(argv=None):
         return
 
     deleted, failed, freed = 0, 0, 0
-    all_groups = []
-    for c in plans:
-        all_groups.append(c["paths"])
-    all_groups.extend([temp_paths, log_paths, store_paths])
-    for group in all_groups:
+    for group in store_groups:
+        paths = [p for c in group["plans"] for p in c["paths"]] + group["store_paths"]
+        if not paths:
+            continue
+        # Targets are checked against the owning store so a stray link can
+        # never pull a deletion outside it.
+        store_root = group["store"]["realpath"]
+        freed += sum(tree_size(p) for _, p in paths)
+        for path, ok, err in delete_all(paths, store_root=store_root):
+            if ok:
+                deleted += 1
+                print(f"  deleted: {path}")
+            else:
+                failed += 1
+                print(f"  FAILED: {path} ({err})", file=sys.stderr)
+
+    for group in temp_paths, log_paths:
         if not group:
             continue
         freed += sum(tree_size(p) for _, p in group)
@@ -641,15 +910,22 @@ def main(argv=None):
                 failed += 1
                 print(f"  FAILED: {path} ({err})", file=sys.stderr)
 
-    for plan in plans:
+    # History rewrite batched per store over the union of that store's plans.
+    for group in store_groups:
+        session_ids = set()
+        for plan in group["plans"]:
+            session_ids |= plan["session_ids"]
+        if not session_ids:
+            continue
         removed, err = history_rewrite(
-            os.path.join(config_dir, "history.jsonl"), plan["session_ids"])
+            os.path.join(group["store"]["path"], "history.jsonl"), session_ids)
         if err:
             failed += 1
             print(f"  FAILED: history.jsonl ({err})", file=sys.stderr)
         elif removed:
             deleted += 1
-            print(f"  removed {removed} history.jsonl line(s) for {plan['project']}")
+            print(f"  removed {removed} history.jsonl line(s) for "
+                  f"{group['store']['path']}")
 
     print(f"\nDone: {deleted} path(s) deleted, {failed} failed, {format_size(freed)} freed.")
 
@@ -657,8 +933,13 @@ def main(argv=None):
         sys.exit(1)
 
     # Interactive runs only: offer a read-only audit of what is left. Dry runs
-    # return above, so this is a completed deletion pass.
-    if sys.stdin.isatty():
+    # return above, so this is a completed deletion pass. Skipped whenever the
+    # pass failed (sys.exit above) or stdin cannot be probed.
+    try:
+        is_tty = sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        is_tty = False
+    if is_tty:
         try:
             answer = input("Run a privacy audit to check what's left? [y/N] ")
         except (AttributeError, EOFError, OSError):

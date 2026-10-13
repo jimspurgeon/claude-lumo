@@ -21,6 +21,12 @@ from wipe import (
     resolve_config_dir,
     resolve_temp_dir,
     resolve_orca_dir,
+    is_mount_point,
+    is_any_link,
+    looks_like_store,
+    resolve_known_stores,
+    walk_home_for_stores,
+    discover_stores,
     run_git,
     format_size,
     tree_size,
@@ -74,6 +80,269 @@ hook_session_is_active = hook_module.session_is_active
 probe_cwd = hook_module.probe_cwd
 hook_last_activity = hook_module.last_activity
 detect_stale = hook_module.detect_stale
+
+
+class TestIsAnyLink:
+    """Tests for is_any_link/is_mount_point: junctions count as links."""
+
+    def _make_junction(self, target, link):
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junction_detected(self, tmp_path):
+        # A junction is not a symlink (islink is False) but must count as a link.
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "junction"
+        self._make_junction(target, link)
+        assert os.path.islink(str(link)) is False
+        assert is_mount_point(str(link)) is True
+        assert is_any_link(str(link)) is True
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_plain_dir_not_link(self, tmp_path):
+        assert is_any_link(str(tmp_path)) is False
+        assert is_mount_point(str(tmp_path)) is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_symlink_detected(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "sym"
+        try:
+            os.symlink(str(target), str(link), target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation requires privileges")
+        assert is_any_link(str(link)) is True
+
+
+class TestTreeSizeLinks:
+    """tree_size never follows links."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junctioned_content_excluded(self, tmp_path):
+        import _winapi
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "big.txt").write_text("x" * 1000)
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / "local.txt").write_text("y" * 100)
+        _winapi.CreateJunction(str(target), str(outer / "junction"))
+        assert tree_size(str(outer)) == 100
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junction_loop_returns(self, tmp_path):
+        # A junction pointing back at an ancestor must not hang the size walk.
+        import _winapi
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / "file.txt").write_text("z" * 10)
+        _winapi.CreateJunction(str(tmp_path), str(outer / "loop"))
+        assert tree_size(str(outer)) == 10
+
+
+def make_store(root, name="store"):
+    """Fixture store: old transcript, history.jsonl and session-env marker."""
+    store = root / name
+    projects = store / "projects" / "proj-1"
+    projects.mkdir(parents=True)
+    old = time.time() - 40 * 86400
+    transcript = projects / "session-1.jsonl"
+    cwd_json = str(root / "cwd").replace("\\", "\\\\")
+    transcript.write_text('{"cwd": "' + cwd_json + '"}\n', encoding="utf-8")
+    os.utime(str(transcript), (old, old))
+    (store / "history.jsonl").write_text('{"sessionId": "session-1"}\n')
+    (store / "session-env" / "session-1").mkdir(parents=True)
+    return store
+
+
+def single_store(config_dir):
+    """A discover_stores() stub naming one fixture store."""
+    return [{"path": str(config_dir), "realpath": str(config_dir),
+             "origin": "env", "current": True}]
+
+
+class TestLooksLikeStore:
+    """Tests for the strict store discriminator."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_full_fixture_passes(self, tmp_path):
+        store = make_store(tmp_path)
+        assert looks_like_store(str(store)) is True
+
+    def test_missing_secondary_marker_fails(self, tmp_path):
+        # Transcript without history/session-env/file-history: not a store.
+        store = tmp_path / "almost"
+        projects = store / "projects" / "p"
+        projects.mkdir(parents=True)
+        (projects / "s.jsonl").write_text("{}", encoding="utf-8")
+        assert looks_like_store(str(store)) is False
+
+    def test_projects_without_jsonl_fails(self, tmp_path):
+        store = tmp_path / "empty-projects"
+        (store / "projects" / "p").mkdir(parents=True)
+        (store / "session-env" / "s").mkdir(parents=True)
+        assert looks_like_store(str(store)) is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junctioned_projects_fails(self, tmp_path):
+        import _winapi
+        real_store = make_store(tmp_path, "real")
+        fake = tmp_path / "fake"
+        fake.mkdir()
+        _winapi.CreateJunction(str(real_store / "projects"), str(fake / "projects"))
+        assert looks_like_store(str(fake)) is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junctioned_session_env_marker_fails(self, tmp_path):
+        # A linked session-env does not satisfy the secondary marker.
+        import _winapi
+        real_store = make_store(tmp_path, "real")
+        fake = tmp_path / "fake-session-env"
+        projects = fake / "projects" / "p"
+        projects.mkdir(parents=True)
+        (projects / "s.jsonl").write_text("{}", encoding="utf-8")
+        _winapi.CreateJunction(str(real_store / "session-env"),
+                               str(fake / "session-env"))
+        assert looks_like_store(str(fake)) is False
+
+
+class TestResolveKnownStores:
+    """Tests for resolve_known_stores."""
+
+    def test_order_and_origins(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".claude").mkdir()
+        env_store = home / "custom"
+        env_store.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
+        result = resolve_known_stores()
+        assert result[0][1] == "env"
+        assert os.path.normcase(result[0][0]) \
+            == os.path.normcase(os.path.realpath(str(env_store)))
+        # ~/.claude exists (just made) and is second
+        assert result[1][1] == "default"
+
+    def test_env_equals_default_deduped(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        claude_dir = home / ".claude"
+        claude_dir.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
+        origins = [origin for _, origin in resolve_known_stores()]
+        # The env path wins; the identical default path is deduped away.
+        assert origins == ["env"]
+
+    def test_nonexistent_dropped(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".claude").mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / "missing"))
+        # ~/.claude-lumo/data does not exist either: only ~/.claude survives
+        origins = [origin for _, origin in resolve_known_stores()]
+        assert "env" not in origins
+        assert origins == ["default"]
+
+    def test_legacy_config_included(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        legacy = home / ".claude-lumo" / "config"
+        legacy.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        origins = [origin for _, origin in resolve_known_stores()]
+        assert "legacy" in origins
+
+
+class TestWalkHomeForStores:
+    """Tests for the bounded, link-safe home walk."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_stores_at_various_depths_and_noise(self, tmp_path):
+        import _winapi
+        home = tmp_path / "home"
+        (home / "noise" / "node_modules").mkdir(parents=True)
+        deep_store = make_store(home / "nested" / "deeper", "store")
+        top_store = make_store(home, "top-store")
+        # Junction loop: home points back into itself
+        _winapi.CreateJunction(str(home), str(home / "loop"))
+        found = walk_home_for_stores(str(home))
+        assert os.path.normcase(str(top_store)) in [os.path.normcase(p) for p in found]
+        assert os.path.normcase(str(deep_store)) in [os.path.normcase(p) for p in found]
+        # The walker never pathed through the loop, so nothing appears twice.
+        assert len(found) == len(set(os.path.normcase(p) for p in found))
+        assert not any("loop" in p for p in found)
+
+    def test_deep_store_beyond_cap_not_found(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        store = make_store(home / "a" / "b" / "c" / "d", "too-deep")
+        found = walk_home_for_stores(str(home), max_depth=4)
+        assert not any("too-deep" in p for p in found)
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_no_walk_into_accepted_store(self, tmp_path):
+        # A store nested inside a found store is not re-listed (single hit).
+        home = tmp_path / "home"
+        home.mkdir()
+        make_store(home, "store")
+        found = walk_home_for_stores(str(home))
+        assert len(found) == 1
+
+
+class TestDiscoverStores:
+    """Tests for discover_stores assembly."""
+
+    def test_known_first_and_current_flag(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        env_store = make_store(home, "env-store")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
+        import wipe
+        monkeypatch.setattr(wipe, "walk_home_for_stores", lambda home=None, max_depth=4: [])
+        records = discover_stores()
+        assert records[0]["origin"] == "env"
+        assert records[0]["current"] is True
+
+    def test_walker_refind_deduped(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        env_store = make_store(home, "env-store")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
+        import wipe
+        monkeypatch.setattr(wipe, "walk_home_for_stores",
+                            lambda home=None, max_depth=4: [str(env_store)])
+        records = discover_stores()
+        env_paths = [r for r in records if r["origin"] == "env"]
+        assert len(env_paths) == 1
+
+    def test_discovered_origin_recorded(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        stray = make_store(home, "stray")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        import wipe
+        monkeypatch.setattr(wipe, "walk_home_for_stores", lambda home=None, max_depth=4: [str(stray)])
+        records = discover_stores()
+        assert any(r["origin"] == "discovered"
+                   and os.path.normcase(r["realpath"]) == os.path.normcase(str(stray))
+                   for r in records)
 
 
 class TestFormatSize:
@@ -808,6 +1077,63 @@ class TestDeleteAll:
         assert result[0][2] == "not found"
 
 
+class TestDeleteAllLinkGuards:
+    """Tests for delete_all's link and store-boundary refusals."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junction_target_refused(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "keep.txt").write_text("precious")
+        link = tmp_path / "link"
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+
+        result = delete_all([("dir", str(link))])
+        assert result[0][1] is False
+        assert "link" in result[0][2]
+        assert link.exists()
+        assert (target / "keep.txt").exists()
+
+    def test_store_root_escape_refused(self, tmp_path):
+        store = tmp_path / "store"
+        (store / "projects").mkdir(parents=True)
+        external = tmp_path / "external"
+        external.mkdir()
+        (external / "keep.txt").write_text("precious")
+
+        result = delete_all([("dir", str(external))], store_root=str(store))
+        assert result[0][1] is False
+        assert "outside" in result[0][2]
+        assert (external / "keep.txt").exists()
+
+    def test_inside_store_allowed(self, tmp_path):
+        store = tmp_path / "store"
+        project = store / "projects" / "old"
+        project.mkdir(parents=True)
+        (project / "s1.jsonl").write_text("{}")
+
+        result = delete_all([("dir", str(project))], store_root=str(store))
+        assert result[0][1] is True
+        assert not project.exists()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_dir_containing_junction_removed_leaves_target(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "keep.txt").write_text("precious")
+        holder = tmp_path / "holder"
+        holder.mkdir()
+        (holder / "local.txt").write_text("local")
+        import _winapi
+        _winapi.CreateJunction(str(target), str(holder / "junction"))
+
+        result = delete_all([("dir", str(holder))], store_root=str(tmp_path))
+        assert result[0][1] is True
+        assert not holder.exists()
+        assert (target / "keep.txt").exists()
+
+
 class TestCandidateDetection:
     """Integration tests for candidate detection."""
 
@@ -842,6 +1168,22 @@ class TestCandidateDetection:
         finally:
             wipe.resolve_config_dir = original_resolve
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_linked_project_folder_skipped(self, tmp_path):
+        config_dir = tmp_path / "store"
+        projects_root = config_dir / "projects"
+        projects_root.mkdir(parents=True)
+        real_project = tmp_path / "real-project"
+        real_project.mkdir()
+        old_mtime = time.time() - 40 * 86400
+        (real_project / "s1.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(real_project / "s1.jsonl"), (old_mtime, old_mtime))
+        import _winapi
+        _winapi.CreateJunction(str(real_project), str(projects_root / "linked"))
+
+        candidates = collect_candidates(str(config_dir), 30, None)
+        assert candidates == []
+
 
 class TestDryRunMode:
     """Tests for dry-run behavior."""
@@ -861,7 +1203,7 @@ class TestDryRunMode:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
@@ -888,7 +1230,7 @@ class TestDryRunMode:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
@@ -916,7 +1258,7 @@ class TestDryRunMode:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
@@ -939,7 +1281,7 @@ class TestDryRunMode:
         os.utime(str(paste_old), (old_mtime, old_mtime))
 
         import wipe
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
 
         wipe.main(["--session", "session-id-1", "--yes"])
         assert paste_old.exists()
@@ -959,7 +1301,7 @@ class TestDryRunMode:
         os.utime(str(paste_old), (old_mtime, old_mtime))
 
         import wipe
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(config_dir))
 
         wipe.main(["--project", "proj", "--yes"])
         assert not (projects_root / "s1.jsonl").exists()
@@ -1427,7 +1769,7 @@ class TestCliArgsParsing:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(tmp_path))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
         (tmp_path / "projects").mkdir()
@@ -1442,7 +1784,7 @@ class TestCliArgsParsing:
         import wipe
         # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
         # out of the machine running the suite.
-        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(wipe, "discover_stores", lambda: single_store(tmp_path))
         monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
         monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
         (tmp_path / "projects").mkdir()
@@ -1715,6 +2057,194 @@ class TestAuditSuggestAction:
         out = capsys.readouterr().out
         assert "ask your running assistant to walk through the manual steps" in out
         assert "or run:" not in out
+
+
+class TestMultiStoreAutoWipe:
+    """Auto mode across two discovered stores."""
+
+    def _setup(self, tmp_path, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
+        return store_a, store_b
+
+    def test_yes_deletes_in_both_stores(self, tmp_path, capsys, monkeypatch):
+        store_a, store_b = self._setup(tmp_path, monkeypatch)
+        import wipe
+
+        wipe.main(["--yes"])
+        out = capsys.readouterr().out
+        assert f"Scanning 2 store(s): {store_a}, {store_b}" in out
+        assert out.count("Store: ") == 2
+        assert "[current store]" in out
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert not (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+        # Per-store history rewrite
+        assert (store_a / "history.jsonl").read_text() == ""
+        assert (store_b / "history.jsonl").read_text() == ""
+
+    def test_active_session_in_b_protects_only_b(self, tmp_path, capsys, monkeypatch):
+        store_a, store_b = self._setup(tmp_path, monkeypatch)
+        # Fresh transcript in store B's project marks it active there
+        fresh = store_b / "projects" / "proj-1" / "session-1.jsonl"
+        now = time.time()
+        os.utime(str(fresh), (now, now))
+        import wipe
+
+        wipe.main(["--yes"])
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert fresh.exists()
+
+
+class TestMultiStoreDryRun:
+    """--dry-run lists both stores, deletes nothing."""
+
+    def test_dry_run_across_stores(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
+
+        wipe.main(["--dry-run"])
+        out = capsys.readouterr().out
+        assert "Dry run: nothing was deleted" in out
+        assert (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_a / "history.jsonl").read_text() != ""
+
+
+class TestSessionAcrossStores:
+    """--session searches all stores."""
+
+    def test_found_in_one_store(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        # Give store B a different session id so no ambiguity
+        other = store_b / "projects" / "proj-1" / "other-session.jsonl"
+        other.write_text("{}", encoding="utf-8")
+        old = time.time() - 40 * 86400
+        os.utime(str(other), (old, old))
+        os.remove(str(store_b / "projects" / "proj-1" / "session-1.jsonl"))
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+
+        wipe.main(["--session", "session-1", "--yes"])
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert other.exists()
+
+    def test_ambiguous_across_two_stores_refused(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+
+        with pytest.raises(SystemExit) as exc_info:
+            wipe.main(["--session", "session-1", "--yes"])
+        assert exc_info.value.code == 1
+        out = capsys.readouterr()
+        assert "matches multiple stores" in out.err
+        assert str(store_a) in out.err
+        assert str(store_b) in out.err
+        # Nothing deleted in either store
+        assert (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+
+
+class TestProjectAcrossStores:
+    """--project matches in all stores and combines plans."""
+
+    def test_combined_wipe(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+
+        wipe.main(["--project", "proj-1", "--yes"])
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert not (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_a / "history.jsonl").read_text() == ""
+        assert (store_b / "history.jsonl").read_text() == ""
+
+    def test_active_match_anywhere_refuses_whole_run(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        # Active session in store B
+        fresh = store_b / "projects" / "proj-1" / "session-1.jsonl"
+        now = time.time()
+        os.utime(str(fresh), (now, now))
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [
+            {"path": str(store_a), "realpath": str(store_a), "origin": "env", "current": True},
+            {"path": str(store_b), "realpath": str(store_b), "origin": "separate", "current": False},
+        ])
+
+        with pytest.raises(SystemExit) as exc_info:
+            wipe.main(["--project", "proj-1", "--yes"])
+        assert exc_info.value.code == 1
+        # Nothing deleted anywhere
+        assert (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert fresh.exists()
+
+
+class TestStoreFlagRestricts:
+    """--store limits the wipe to the given store(s)."""
+
+    def test_single_store_flag(self, tmp_path, capsys, monkeypatch):
+        store_a = make_store(tmp_path, "store-a")
+        store_b = make_store(tmp_path, "store-b")
+        import wipe
+        # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
+        # out of the machine running the suite.
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
+
+        wipe.main(["--store", str(store_a), "--yes"])
+        assert not (store_a / "projects" / "proj-1" / "session-1.jsonl").exists()
+        assert (store_b / "projects" / "proj-1" / "session-1.jsonl").exists()
+        out = capsys.readouterr().out
+        assert f"Scanning 1 store(s): {store_a}" in out
+
+    def test_nonexistent_store_path_rejected(self, tmp_path, capsys):
+        import wipe
+
+        with pytest.raises(SystemExit) as exc_info:
+            wipe.main(["--store", str(tmp_path / "missing"), "--yes"])
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "not an existing directory" in err
+
+
+class TestEmptyDiscovery:
+    """No stores found: refuse with exit 1."""
+
+    def test_empty_discovery_exits_1(self, tmp_path, capsys, monkeypatch):
+        import wipe
+        monkeypatch.setattr(wipe, "discover_stores", lambda: [])
+
+        with pytest.raises(SystemExit) as exc_info:
+            wipe.main(["--dry-run"])
+        assert exc_info.value.code == 1
+        assert "no Claude data stores found" in capsys.readouterr().err
 
 
 if __name__ == "__main__":
