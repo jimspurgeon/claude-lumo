@@ -275,6 +275,8 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `wipe.py` | Finds and deletes finished conversation data (inactive 30+ days, branch merged/removed, project folder gone): run as `claude-lumo wipe` |
 | `privacy_audit.py` | Reads data safety posture (encryption, cloud sync, stale data volume): run as `claude-lumo privacy-audit` |
 | `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair (splits multi-tool-call chunks that LiteLLM would merge), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
+| `proxy/sniffer.mjs` | Buffer non-SSE chat responses; extract error type/code; retry no_db_connection once |
+| `proxy/sniffer.test.mjs` | Sniffer tests: `node --test proxy/sniffer.test.mjs` |
 | `proxy/edit-hints.mjs` | Adds the closest real text to a failed Edit (and a reminder to Read before Edit or Write), so the retry copies it instead of guessing again. Claude Code checks edits before any hook runs, so this has to live in the proxy |
 | `proxy/tool-guard.mjs` | Holds tool calls until the stream ends, then checks each one: repairs arguments leaked as `<arg_key>` tags, retries the request once when Lumo announced a call but sent none or a broken one, and otherwise ends the turn with a visible message (#11). Tests: `node --test proxy/tool-guard.test.mjs` |
 | `proxy/creds.mjs` | Reads Lumo login from any browser's cookies (Firefox, Chrome, Edge, Brave, Vivaldi, Opera) |

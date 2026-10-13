@@ -4,6 +4,9 @@
 // - Retries connection errors, 429 (honouring Retry-After, max 30s), 5xx, and requests with no response within LUMO_FIRST_BYTE_MS
 //   (default 240s), before any bytes are streamed (2 retries, backoff).
 // - Logs time-to-first-byte and duration of every chat request to proxy.log.
+// - Detects Lumo error payloads returned with HTTP 200 (non-SSE JSON bodies) and logs their
+//   type/code (never message content); a transient no_db_connection error is retried once
+//   after a short backoff (see sniffer.mjs, issue #43).
 // - Streams responses (SSE) through, re-emitting tool calls one per chunk (see splitToolCallChunks). Listens on 127.0.0.1 only.
 // - Holds tool calls until the stream ends and checks them; a lost or broken call is repaired or
 //   retried once, else the turn ends with a visible message (see tool-guard.mjs, issue #11).
@@ -14,6 +17,7 @@ import { join } from "node:path";
 import { readLumoCredentials } from "./creds.mjs";
 import { addEditHints } from "./edit-hints.mjs";
 import { createToolGuard, escapeDone } from "./tool-guard.mjs";
+import { upstreamChat } from "./sniffer.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
@@ -113,13 +117,24 @@ http.createServer(async (req, res) => {
   const headers = {}; for (const h of ["content-type", "accept"]) if (req.headers[h]) headers[h] = req.headers[h];
   const t0 = Date.now(); let tFirst = 0, bytes = 0;
   try {
-    const up = await upstream(path, req.method, body, headers);
-    if (up.status >= 400) log(`${req.method} ${path} -> ${up.status}`);
+    // Chat responses are inspected for error payloads (buffering non-SSE bodies);
+    // a no_db_connection error is retried once with a short backoff (see sniffer.mjs, issue #43).
+    const { response: up, buffered, errMeta } = await upstreamChat({ upstream, path, method: req.method, body, headers, log });
+    // Buffered chat responses already had their status/error logged by the sniffer; only
+    // non-buffered paths (non-chat routes, SSE error responses) still need the status log.
+    if (up.status >= 400 && buffered === null) log(`${req.method} ${path} -> ${up.status}`);
     const out = {}; up.headers.forEach((v, k) => { if (!["content-encoding", "content-length", "transfer-encoding", "connection"].includes(k)) out[k] = v; });
     res.writeHead(up.status, out);
+    let model = "-"; try { model = JSON.parse(body).model; } catch {};
+    let extra = "";
+    if (buffered !== null) {
+      // Non-SSE chat response, already consumed for inspection: forward the buffered text.
+      bytes = Buffer.byteLength(buffered); tFirst = Date.now();
+      if (errMeta) extra = ` err=${errMeta.type}/${errMeta.code}`;
+      res.end(buffered);
+    } else {
     const sse = (up.headers.get("content-type") || "").includes("event-stream") ? splitToolCallChunks() : null;
     const dec = new TextDecoder();
-    let model = "-"; try { model = JSON.parse(body).model; } catch {}
     const row = { id: ++nextId, model, t0, last: Date.now(), bytes: 0, stats: sse?.stats }; if (sse) live.set(row.id, row);
     try {
       if (up.body) for await (const c of up.body) { if (!tFirst) tFirst = Date.now(); bytes += c.length; row.bytes = bytes; row.last = Date.now(); if (process.env.LUMO_CAPTURE) row.raw = (row.raw || "") + (row.dec2 ||= new TextDecoder()).decode(c, { stream: true }); res.write(sse ? sse.push(dec.decode(c, { stream: true })) : c); }
@@ -128,10 +143,10 @@ http.createServer(async (req, res) => {
     if (sse) {
       res.write(sse.end() + dec.decode());
       // A lost tool call is retried with the same request; only its tool calls are forwarded.
+      // TODO(#43): this retry bypasses upstreamChat (no sniff/retry for no_db_connection); see sniffer.mjs.
       res.write(await sse.finish(async () => { const r = await upstream(path, req.method, body, headers); return r.ok ? await r.text() : ""; }));
     }
     res.end();
-    let extra = "";
     if (sse) {
       const s = sse.stats; let req = {}; try { req = JSON.parse(body); } catch {}
       extra = ` model=${req.model} max_tokens=${req.max_tokens ?? req.max_completion_tokens ?? "-"} reasoning=${s.reasoning.length}c content=${s.content}c tools=${s.tools} finish=${s.finish || "none"} dropped_tool=${sse.guard.dropped} repaired_tool=${sse.guard.repaired} tool_retry=${sse.guard.retry}`;
@@ -139,6 +154,7 @@ http.createServer(async (req, res) => {
         const f = join(DEBUG, `${new Date().toISOString().replace(/[:.]/g, "-")}.txt`);
         try { mkdirSync(DEBUG, { recursive: true }); writeFileSync(f, s.reasoning); extra += ` dump=${f}`; } catch {}
       }
+    }
     }
     if (path.startsWith("/chat")) log(`${path} ${up.status} in=${body ? body.length : 0}B first=${tFirst ? ((tFirst - t0) / 1000).toFixed(1) : "-"}s total=${((Date.now() - t0) / 1000).toFixed(1)}s out=${bytes}B${extra}`);
   } catch (e) {
