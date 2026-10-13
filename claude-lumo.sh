@@ -49,5 +49,19 @@ if [ "${CLAUDE_LUMO_UPDATE_CHECK:-1}" != "0" ] && [ -f "$D/update-check.py" ]; t
   (nohup "$PY" "$(native "$D")/update-check.py" "$(native "$D")" >/dev/null 2>&1 &)
 fi
 
+# Separate data (optional): when enabled, build link layout and export CLAUDE_CONFIG_DIR so
+# transcripts, history, and per-session state go into ~/.claude-lumo/data, not the shared store.
+# Enable via env CLAUDE_LUMO_SEPARATE_DATA=1 or marker ~/.claude-lumo/separate-data.on.
+if [ "${CLAUDE_LUMO_SEPARATE_DATA:-}" = "1" ] || [ -f "$S/separate-data.on" ]; then
+  info_sep() { echo "info: $*" >&2; }
+  if ! "$PY" "$(native "$D")/scripts/separate_data.py" setup \
+       --config-dir "$S/data" --shared "$HOME/.claude"; then
+    echo "claude-lumo: could not run separate_data.py setup; leaving CLAUDE_CONFIG_DIR unset" >&2
+  else
+    export CLAUDE_CONFIG_DIR="$S/data"
+    info_sep "CLAUDE_CONFIG_DIR=$S/data (separate data enabled)"
+  fi
+fi
+
 export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL"
 exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "${AGENTS[@]}" "$@"
