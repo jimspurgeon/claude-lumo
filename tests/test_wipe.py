@@ -279,6 +279,9 @@ class TestWalkHomeForStores:
         found = walk_home_for_stores(str(home))
         assert os.path.normcase(str(top_store)) in [os.path.normcase(p) for p in found]
         assert os.path.normcase(str(deep_store)) in [os.path.normcase(p) for p in found]
+        # The walker never pathed through the loop, so nothing appears twice.
+        assert len(found) == len(set(os.path.normcase(p) for p in found))
+        assert not any("loop" in p for p in found)
 
     def test_deep_store_beyond_cap_not_found(self, tmp_path):
         home = tmp_path / "home"

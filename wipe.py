@@ -729,7 +729,7 @@ def delete_all(target_groups, store_root=None):
     return results
 
 
-def print_report(store_groups, temp_paths, log_paths, days):
+def print_report(store_groups, temp_paths, log_paths):
     """One combined report across every scanned store.
 
     Each store group is {"store": record, "plans": [...], "store_paths": [...]}
@@ -870,7 +870,7 @@ def main(argv=None):
         store_groups = [{"store": p["store"], "plans": [p], "store_paths": []}
                          for p in plans]
 
-    print_report(store_groups, temp_paths, log_paths, args.days)
+    print_report(store_groups, temp_paths, log_paths)
     print_orca_section(describe_orca(resolve_orca_dir()))
 
     if args.dry_run:
@@ -933,8 +933,13 @@ def main(argv=None):
         sys.exit(1)
 
     # Interactive runs only: offer a read-only audit of what is left. Dry runs
-    # return above, so this is a completed deletion pass.
-    if sys.stdin.isatty():
+    # return above, so this is a completed deletion pass. Skipped whenever the
+    # pass failed (sys.exit above) or stdin cannot be probed.
+    try:
+        is_tty = sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        is_tty = False
+    if is_tty:
         try:
             answer = input("Run a privacy audit to check what's left? [y/N] ")
         except (AttributeError, EOFError, OSError):
