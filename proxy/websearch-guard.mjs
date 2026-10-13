@@ -14,10 +14,17 @@
 // open-source client, ProtonMail/WebClients packages/lumo-api-client:
 // types-api.ts ChatCompletionsBuiltInTool, core/chat-completions.ts). Lumo runs
 // the search server-side and streams an ordinary answer; sources arrive as URLs
-// in the text. So the side-request is rewritten to ask for that search, and the
-// answer is only passed on when it cites at least one URL. Anything else (an
-// upstream error, an answer without sources) still gets the unavailability
-// message, so no invented search result reaches the model.
+// in the text. So the side-request is rewritten to ask for that search.
+//
+// With tool_choice "auto" Lumo may still answer from memory, URLs included, so a
+// URL alone proves nothing. The plaintext API sends no chat.tool_call or
+// chat.tool_result chunks (the web client's streaming.ts parses them; probes on
+// 2026-10-13 never received any), but the search results are fed into the prompt:
+// usage.prompt_tokens rose from 433 without the tool to 4,339 to 6,943 with it.
+// So the answer is passed on only when the usage shows that jump (or a
+// tool_call/tool_result pair for web_search does arrive) AND it cites a URL.
+// Anything else (an upstream error, a stall, a memory answer) gets the
+// unavailability message, so no invented search result reaches the model.
 
 export const WEBSEARCH_UNAVAILABLE_TEXT =
   "[claude-lumo] WebSearch did not return a usable result: Lumo's web search failed or "
@@ -59,25 +66,76 @@ export function toLumoSearchRequest(body, now = new Date()) {
   return JSON.stringify({ ...d, messages, tools: LUMO_SEARCH_TOOLS, tool_choice: "auto", stream: true });
 }
 
-// The answer text of a chat response: the content deltas of an SSE stream, or the
-// message content of a plain completion. Reasoning and malformed lines are skipped.
-export function answerText(raw) {
+// Reads a chat response: the answer text (content deltas of an SSE stream, or the
+// message content of a plain completion), the reported prompt_tokens, and whether
+// web_search tool_call / tool_result chunks arrived. Reasoning and malformed lines
+// are skipped.
+export function parseSearchResponse(raw) {
   const t = String(raw || "");
-  // A stream can open with SSE comments (Lumo sends ":ingesting" while it searches).
+  const out = { text: "", promptTokens: null, toolCall: false, toolResult: false };
+  const take = (d) => {
+    if (typeof d?.usage?.prompt_tokens === "number") out.promptTokens = d.usage.prompt_tokens;
+    if (d?.object === "chat.tool_call" && d.tool_call?.name === "web_search") out.toolCall = true;
+    if (d?.object === "chat.tool_result") out.toolResult = true;
+  };
+  // A stream can open with SSE comments (Lumo sends ":ingesting" while it works).
   if (!/^data:/m.test(t)) {
-    try { return JSON.parse(t)?.choices?.[0]?.message?.content || ""; } catch { return ""; }
+    try { const d = JSON.parse(t); take(d); out.text = d?.choices?.[0]?.message?.content || ""; } catch {}
+    return out;
   }
-  let out = "";
   for (const line of t.split(/\r?\n/)) {
     const m = line.match(/^data:\s*(.*)$/);
     if (!m || m[1] === "[DONE]") continue;
-    try { out += JSON.parse(m[1])?.choices?.[0]?.delta?.content || ""; } catch {}
+    try { const d = JSON.parse(m[1]); take(d); out.text += d?.choices?.[0]?.delta?.content || ""; } catch {}
   }
   return out;
 }
 
-// True when the answer cites at least one http(s) URL: the sign a search really ran.
+export const answerText = (raw) => parseSearchResponse(raw).text;
+
+// True when the answer cites at least one http(s) URL.
 export const citesSources = (text) => /https?:\/\/[^\s)>\]]+\.[^\s)>\]]+/i.test(text || "");
+
+// Search results added to the prompt: at least this many prompt tokens beyond what
+// the request itself can account for (measured: +3,900 or more when a search ran).
+export const SEARCH_TOKEN_MARGIN = 1500;
+
+// True when the response shows Lumo actually searched: a web_search tool_call and
+// tool_result pair, or prompt_tokens well beyond the request's own size (counted
+// generously as one token per 3 bytes, so a long request cannot pass by itself).
+export function searchRan(parsed, requestBytes) {
+  if (parsed.toolCall && parsed.toolResult) return true;
+  return typeof parsed.promptTokens === "number"
+    && parsed.promptTokens >= Math.ceil(requestBytes / 3) + SEARCH_TOKEN_MARGIN;
+}
+
+export const SEARCH_TIMEOUT_MS = 120000;
+
+// Runs a WebSearch side-request on Lumo's search. `upstreamChat` is the sniffer's
+// (retries included); `upstream` the proxy's fetch. Returns { outcome, text }:
+// outcome "ok" only with evidence of a search and a cited URL; text is "" otherwise.
+// Never throws. A stream that stalls past timeoutMs ends as "timeout".
+export async function runLumoSearch({ body, path, upstream, upstreamChat, log, now = new Date(), timeoutMs = SEARCH_TIMEOUT_MS }) {
+  let timer;
+  try {
+    const searchBody = toLumoSearchRequest(body, now);
+    const work = (async () => {
+      const { response: up, buffered, errMeta } = await upstreamChat({ upstream, path, method: "POST", body: searchBody, headers: { "content-type": "application/json", accept: "text/event-stream" }, log });
+      if (errMeta) return { outcome: `err_${errMeta.type}`, text: "" };
+      if (!up.ok) return { outcome: `http_${up.status}`, text: "" };
+      const parsed = parseSearchResponse(buffered ?? await up.text());
+      if (!searchRan(parsed, Buffer.byteLength(searchBody))) return { outcome: "no_search", text: "" };
+      if (!citesSources(parsed.text)) return { outcome: "no_sources", text: "" };
+      return { outcome: "ok", text: parsed.text };
+    })();
+    const stall = new Promise((resolve) => { timer = setTimeout(() => resolve({ outcome: "timeout", text: "" }), timeoutMs); });
+    return await Promise.race([work, stall]);
+  } catch (e) {
+    return { outcome: `error_${e?.name || "Error"}`, text: "" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const chunk = (model, delta, finish = null) =>
   "data:" + JSON.stringify({ id: "ws-guard", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, delta, finish_reason: finish }] }) + "\n\n";

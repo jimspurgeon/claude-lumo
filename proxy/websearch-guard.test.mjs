@@ -43,7 +43,7 @@ test("the message tells the model not to fabricate and points at WebFetch", () =
 });
 
 // Issue #73: the side-request runs on Lumo's built-in web search instead.
-import { answerText, chatResponse, citesSources, LUMO_SEARCH_TOOLS, toLumoSearchRequest } from "./websearch-guard.mjs";
+import { answerText, chatResponse, citesSources, LUMO_SEARCH_TOOLS, parseSearchResponse, runLumoSearch, searchRan, SEARCH_TOKEN_MARGIN, toLumoSearchRequest } from "./websearch-guard.mjs";
 
 const cap6 = { model: "lumo-lite", stream: false, max_tokens: 4096, web_search_options: {},
   messages: [{ role: "system", content: "You are an assistant for performing a web search tool use" },
@@ -86,7 +86,7 @@ test("answerText joins SSE content deltas and skips reasoning, [DONE] and bad li
   assert.equal(answerText(sse), "Node 26.11.1\nSources:\nhttps://nodejs.org/en/blog");
 });
 
-test("answerText reads a stream that starts with Lumo's ':ingesting' comment (search ran)", () => {
+test("answerText reads a stream that starts with an SSE comment (Lumo sends ':ingesting')", () => {
   const sse = ':ingesting\n\ndata:{"choices":[{"delta":{"content":"a https://x.org/b"}}]}\n\ndata:[DONE]\n\n';
   assert.equal(answerText(sse), "a https://x.org/b");
 });
@@ -108,4 +108,61 @@ test("chatResponse carries the search answer in both shapes", () => {
   assert.equal(lines.at(-1), "data:[DONE]");
   assert.equal(lines.slice(0, -1).map((l) => JSON.parse(l.slice(5)).choices[0].delta.content || "").join(""), text);
   assert.equal(JSON.parse(chatResponse("lumo-lite", false, text)).choices[0].message.content, text);
+});
+
+// Search evidence: a URL alone is not proof (Lumo can answer from memory with tool_choice auto).
+const sseWith = (text, promptTokens, extra = []) => [":ingesting", "",
+  ...extra.map((o) => "data:" + JSON.stringify(o)),
+  "data:" + JSON.stringify({ choices: [{ delta: { content: text } }] }),
+  "data:" + JSON.stringify({ choices: [], usage: { prompt_tokens: promptTokens } }),
+  "data:[DONE]", ""].join("\n");
+
+test("parseSearchResponse reads usage and web_search tool chunks", () => {
+  const p = parseSearchResponse(sseWith("t", 4339, [{ object: "chat.tool_call", tool_call: { name: "web_search" } }, { object: "chat.tool_result" }]));
+  assert.deepEqual(p, { text: "t", promptTokens: 4339, toolCall: true, toolResult: true });
+  assert.equal(parseSearchResponse(JSON.stringify({ choices: [{ message: { content: "x" } }], usage: { prompt_tokens: 9 } })).promptTokens, 9);
+});
+
+test("searchRan needs prompt tokens well beyond the request, or a tool_call/result pair", () => {
+  // Measured 2026-10-13: 433 prompt tokens without search, 4,339 to 6,943 with it, for a ~700 B request.
+  assert.equal(searchRan({ promptTokens: 433 }, 700), false);
+  assert.equal(searchRan({ promptTokens: 4339 }, 700), true);
+  assert.equal(searchRan({ promptTokens: null }, 700), false);
+  assert.equal(searchRan({ promptTokens: 4339 }, 30000), false, "a large request explains its own tokens");
+  assert.equal(searchRan({ promptTokens: Math.ceil(30000 / 3) + SEARCH_TOKEN_MARGIN }, 30000), true);
+  assert.equal(searchRan({ promptTokens: null, toolCall: true, toolResult: true }, 700), true);
+  assert.equal(searchRan({ promptTokens: null, toolCall: true, toolResult: false }, 700), false);
+});
+
+const fakeChat = (respond) => async ({ body }) => respond(JSON.parse(body));
+const sseResponse = (raw) => ({ response: new Response(raw, { status: 200, headers: { "content-type": "text/event-stream" } }), buffered: null, errMeta: null });
+const run = (upstreamChat, extra = {}) => runLumoSearch({ body: JSON.stringify(cap6), path: "/chat/completions", upstream: null, upstreamChat, log: () => {}, ...extra });
+
+test("runLumoSearch: ok only with search evidence and a URL", async () => {
+  let sent;
+  const r = await run(fakeChat((b) => { sent = b; return sseResponse(sseWith("Node 26\nSources:\nhttps://nodejs.org/en/blog", 5036)); }));
+  assert.deepEqual(r, { outcome: "ok", text: "Node 26\nSources:\nhttps://nodejs.org/en/blog" });
+  assert.deepEqual(sent.tools, [{ name: "web_search" }]);
+  assert.equal("web_search_options" in sent, false);
+});
+
+test("runLumoSearch: a memory answer with URLs but no search is refused", async () => {
+  assert.deepEqual(await run(fakeChat(() => sseResponse(sseWith("from memory https://nodejs.org", 433)))), { outcome: "no_search", text: "" });
+});
+
+test("runLumoSearch: a search without a cited URL is refused", async () => {
+  assert.deepEqual(await run(fakeChat(() => sseResponse(sseWith("nothing found", 5000)))), { outcome: "no_sources", text: "" });
+});
+
+test("runLumoSearch: upstream error payloads, HTTP errors and exceptions map to outcomes", async () => {
+  assert.deepEqual(await run(fakeChat(() => ({ response: new Response("{}", { status: 200 }), buffered: "{}", errMeta: { type: "no_db_connection", code: "400" } }))), { outcome: "err_no_db_connection", text: "" });
+  assert.deepEqual(await run(fakeChat(() => ({ response: new Response("x", { status: 502 }), buffered: "x", errMeta: null }))), { outcome: "http_502", text: "" });
+  assert.deepEqual(await run(async () => { throw new TypeError("boom"); }), { outcome: "error_TypeError", text: "" });
+  assert.deepEqual(await runLumoSearch({ body: "not json", path: "/chat/completions", upstreamChat: async () => { throw new Error("unreached"); }, log: () => {} }), { outcome: "error_SyntaxError", text: "" });
+});
+
+test("runLumoSearch: a stalled stream ends as timeout", async () => {
+  const stalled = new ReadableStream({ start() {} }); // never sends, never closes
+  const r = await run(fakeChat(() => ({ response: new Response(stalled, { status: 200, headers: { "content-type": "text/event-stream" } }), buffered: null, errMeta: null })), { timeoutMs: 50 });
+  assert.deepEqual(r, { outcome: "timeout", text: "" });
 });

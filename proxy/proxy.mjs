@@ -19,7 +19,7 @@ import { addEditHints } from "./edit-hints.mjs";
 import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 import { upstreamChat } from "./sniffer.mjs";
 import { createContextFit } from "./context-fit.mjs";
-import { answerText, chatResponse, citesSources, isWebSearchRequest, toLumoSearchRequest, webSearchUnavailable } from "./websearch-guard.mjs";
+import { chatResponse, isWebSearchRequest, runLumoSearch, webSearchUnavailable } from "./websearch-guard.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
@@ -119,18 +119,13 @@ const server = http.createServer(async (req, res) => {
   let body = chunks.length ? Buffer.concat(chunks) : undefined;
   if (body && path.startsWith("/chat")) body = addEditHints(body);
   // Claude Code's internal WebSearch delegation (web_search_options): run it on Lumo's own
-  // web search and pass the answer on only when it cites sources; otherwise answer with the
-  // unavailability message, so no fabricated sources reach the model (#59, #73).
+  // web search and pass the answer on only when it shows a search ran and cites sources;
+  // otherwise answer with the unavailability message, so no fabricated sources reach the
+  // model (#59, #73; see websearch-guard.mjs).
   if (body && path.startsWith("/chat") && isWebSearchRequest(body)) {
     let model = "-", stream = true; try { const r = JSON.parse(body); model = r.model || model; stream = r.stream ?? true; } catch {}
-    const t0 = Date.now(); let text = "", outcome = "error";
-    try {
-      const searchBody = toLumoSearchRequest(body);
-      const { response: up, buffered, errMeta } = await upstreamChat({ upstream, path, method: "POST", body: searchBody, headers: { "content-type": "application/json", accept: "text/event-stream" }, log });
-      const raw = buffered ?? (up.ok ? await up.text() : "");
-      text = up.ok && !errMeta ? answerText(raw) : "";
-      outcome = errMeta ? `err_${errMeta.type}` : !up.ok ? `http_${up.status}` : citesSources(text) ? "ok" : "no_sources";
-    } catch (e) { outcome = `error_${e.name || "Error"}`; }
+    const t0 = Date.now();
+    const { outcome, text } = await runLumoSearch({ body, path, upstream, upstreamChat, log });
     res.writeHead(200, { "content-type": stream ? "text/event-stream" : "application/json" });
     res.end(outcome === "ok" ? chatResponse(model, stream, text) : webSearchUnavailable(model, stream));
     // Only the outcome and sizes are logged, never the query or the answer.
