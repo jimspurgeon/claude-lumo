@@ -1068,6 +1068,63 @@ class TestDeleteAll:
         assert result[0][2] == "not found"
 
 
+class TestDeleteAllLinkGuards:
+    """Tests for delete_all's link and store-boundary refusals."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junction_target_refused(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "keep.txt").write_text("precious")
+        link = tmp_path / "link"
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+
+        result = delete_all([("dir", str(link))])
+        assert result[0][1] is False
+        assert "link" in result[0][2]
+        assert link.exists()
+        assert (target / "keep.txt").exists()
+
+    def test_store_root_escape_refused(self, tmp_path):
+        store = tmp_path / "store"
+        (store / "projects").mkdir(parents=True)
+        external = tmp_path / "external"
+        external.mkdir()
+        (external / "keep.txt").write_text("precious")
+
+        result = delete_all([("dir", str(external))], store_root=str(store))
+        assert result[0][1] is False
+        assert "outside" in result[0][2]
+        assert (external / "keep.txt").exists()
+
+    def test_inside_store_allowed(self, tmp_path):
+        store = tmp_path / "store"
+        project = store / "projects" / "old"
+        project.mkdir(parents=True)
+        (project / "s1.jsonl").write_text("{}")
+
+        result = delete_all([("dir", str(project))], store_root=str(store))
+        assert result[0][1] is True
+        assert not project.exists()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_dir_containing_junction_removed_leaves_target(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "keep.txt").write_text("precious")
+        holder = tmp_path / "holder"
+        holder.mkdir()
+        (holder / "local.txt").write_text("local")
+        import _winapi
+        _winapi.CreateJunction(str(target), str(holder / "junction"))
+
+        result = delete_all([("dir", str(holder))], store_root=str(tmp_path))
+        assert result[0][1] is True
+        assert not holder.exists()
+        assert (target / "keep.txt").exists()
+
+
 class TestCandidateDetection:
     """Integration tests for candidate detection."""
 
@@ -1101,6 +1158,22 @@ class TestCandidateDetection:
             assert candidates[0]["project"] == "old"
         finally:
             wipe.resolve_config_dir = original_resolve
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_linked_project_folder_skipped(self, tmp_path):
+        config_dir = tmp_path / "store"
+        projects_root = config_dir / "projects"
+        projects_root.mkdir(parents=True)
+        real_project = tmp_path / "real-project"
+        real_project.mkdir()
+        old_mtime = time.time() - 40 * 86400
+        (real_project / "s1.jsonl").write_text("{}", encoding="utf-8")
+        os.utime(str(real_project / "s1.jsonl"), (old_mtime, old_mtime))
+        import _winapi
+        _winapi.CreateJunction(str(real_project), str(projects_root / "linked"))
+
+        candidates = collect_candidates(str(config_dir), 30, None)
+        assert candidates == []
 
 
 class TestDryRunMode:

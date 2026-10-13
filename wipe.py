@@ -566,7 +566,8 @@ def collect_candidates(config_dir, days, allowlist_path):
         names = []
     candidates = []
     for project in names:
-        if not os.path.isdir(os.path.join(projects_root, project)):
+        project_path = os.path.join(projects_root, project)
+        if not os.path.isdir(project_path) or is_any_link(project_path):
             continue
         info = collect_project(config_dir, project)
         reasons = detect_reasons(info, config_dir, days, allowlist)
@@ -691,11 +692,23 @@ def print_orca_section(found):
     print("transcript files, so wiping above already removes the sessions from that list.")
 
 
-def delete_all(target_groups):
-    """Delete every (kind, path), return per-path results."""
+def delete_all(target_groups, store_root=None):
+    """Delete every (kind, path), return per-path results. Refuses to delete
+    through directory links, and with store_root set, anything that resolves
+    outside the store (targets stay theirs even if a stray link points there)."""
     results = []
+    store_real = os.path.normcase(os.path.realpath(store_root)) if store_root else None
     for _, path in target_groups:
         try:
+            if os.path.isdir(path) and is_any_link(path):
+                results.append((path, False, "is a link; not deleting through it"))
+                continue
+            if store_real:
+                real = os.path.normcase(os.path.realpath(path))
+                if real != store_real and not real.startswith(store_real + os.sep) \
+                        and not real.startswith(store_real + "/"):
+                    results.append((path, False, "resolves outside the store; refusing"))
+                    continue
             if os.path.isdir(path) and not os.path.islink(path):
                 shutil.rmtree(path)
             elif os.path.exists(path) or os.path.islink(path):
