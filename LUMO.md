@@ -52,3 +52,20 @@ lines) to commits, PRs, issues or comments: this session runs on Lumo models, no
 Claude, so crediting Claude would simply be false. The settings file turns off
 Claude Code's own attribution, and the `no-attribution` hook removes the lines from
 message files and blocks commands that still write them.
+
+## Data hygiene
+
+Conversation transcripts, file edits, plans and task data are treated as sensitive.
+Keep only what you need; delete the rest when a project finishes.
+
+- `claude-lumo wipe`: finds finished projects (inactive 30+ days, branch merged/removed,
+  project folder gone, or marked done) and permanently deletes their data. Use
+  `--dry-run` first to see exactly what would be removed.
+- `claude-lumo privacy-audit`: reads your data posture (encryption, cloud sync, stale
+  data volume) and gives recommendations. Runs occasionally, never changes anything.
+- Deletion is **logical**, not forensic: SSD wear levelling, backups, cloud sync and
+  other tools' copies may still hold the data. State this fact in any wipe output.
+- Orca keeps its own copies of session data in `%APPDATA%/orca`. The wipe command lists
+  these paths and their contents but never deletes them (V1 has no supported CLI for
+  Orca data). Manual cleanup: close unneeded Orca terminals, then delete their folders
+  under `terminal-history` yourself.

@@ -189,5 +189,30 @@ if [ "$EXTRA_RESUME_SHIM" = "1" ]; then
   bash "$D/scripts/resume-shim-setup.sh" install
 fi
 
+# === Optional plain-Claude opt-in: wipe-offer SessionStart hook in ~/.claude/settings.json ===
+# Idempotent: only added if missing; a backup of settings.json is taken first. Skip on plain
+# installs where claude-lumo is the only client (the hook is already in settings-lumo.json).
+if [ "${CLAUDE_LUMO_PLAIN_OFFER:-0}" = "1" ] && [ -f "$HOME/.claude/settings.json" ]; then
+  OFFER_CMD="python \"$D/hooks/session-start-offer.py\""
+  if ! grep -q "session-start-offer.py" "$HOME/.claude/settings.json" 2>/dev/null; then
+    cp "$HOME/.claude/settings.json" "$HOME/.claude/settings.json.bak-wipe-offer"
+    "$PY" - "$HOME/.claude/settings.json" "$OFFER_CMD" <<'EOF'
+import json, sys
+path, offer_cmd = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+hooks = data.setdefault("hooks", {}).setdefault("SessionStart", [])
+hooks.append({
+    "matcher": "startup",
+    "hooks": [{"type": "command", "command": offer_cmd, "timeout": 30}],
+})
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+EOF
+    echo "Added the wipe-offer SessionStart hook to ~/.claude/settings.json (backup: settings.json.bak-wipe-offer)."
+  fi
+fi
+
 echo "Installed into ~/.claude/lumo. If 'claude-lumo' is not found, add $BIN to PATH and reopen the terminal."
 echo "Test: claude-lumo -p 'reply with pong'"
