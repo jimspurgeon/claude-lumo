@@ -423,7 +423,10 @@ claude-lumo wipe --allowlist ~/.claude/allowlist.txt
   `image-cache/`, `shell-snapshots/`, `plans/`, `debug/`, `uploads/`
 
 The age-keyed stores hold no session key, so entries are swept by age in
-`wipe` auto mode only (not with `--session` or `--project`).
+`wipe` auto mode only (not with `--session` or `--project`). A store entry
+that is a Windows junction cannot be deleted by the sweep (Python refuses to
+rmtree through it); the wipe run reports it as failed and leaves the target
+folder untouched. Delete such an entry manually if you want it gone.
 
 **Protected:**
 - Sessions with recent activity (< 6 hours) or active env lock

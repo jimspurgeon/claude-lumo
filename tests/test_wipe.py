@@ -843,7 +843,7 @@ class TestCandidateDetection:
 class TestDryRunMode:
     """Tests for dry-run behavior."""
 
-    def test_dry_run_deletes_nothing(self, tmp_path, capsys):
+    def test_dry_run_deletes_nothing(self, tmp_path, capsys, monkeypatch):
         config_dir = tmp_path
         projects_root = config_dir / "projects"
         projects_root.mkdir()
@@ -856,22 +856,22 @@ class TestDryRunMode:
         os.utime(str(old_project / "s1.jsonl"), (old_mtime, old_mtime))
 
         import wipe
-        original_resolve = wipe.resolve_config_dir
-        wipe.resolve_config_dir = lambda: str(config_dir)
+        # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
+        # out of the machine running the suite.
+        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
-        try:
-            wipe.main(["--dry-run"])
-            out = capsys.readouterr().out
-            assert "old" in out
-            # Dry run: everything still on disk, nothing deleted
-            assert test_file.exists()
-            assert (old_project / "s1.jsonl").exists()
-            assert old_project.is_dir()
-        finally:
-            wipe.resolve_config_dir = original_resolve
+        wipe.main(["--dry-run"])
+        out = capsys.readouterr().out
+        assert "old" in out
+        # Dry run: everything still on disk, nothing deleted
+        assert test_file.exists()
+        assert (old_project / "s1.jsonl").exists()
+        assert old_project.is_dir()
 
 
-    def test_dry_run_lists_stale_store_entries_and_deletes_nothing(self, tmp_path, capsys):
+    def test_dry_run_lists_stale_store_entries_and_deletes_nothing(self, tmp_path, capsys, monkeypatch):
         # Auto mode: a stale paste-cache entry is listed and survives
         config_dir = tmp_path
         projects_root = config_dir / "projects"
@@ -883,19 +883,19 @@ class TestDryRunMode:
         os.utime(str(paste_old), (old_mtime, old_mtime))
 
         import wipe
-        original_resolve = wipe.resolve_config_dir
-        wipe.resolve_config_dir = lambda: str(config_dir)
+        # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
+        # out of the machine running the suite.
+        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
-        try:
-            wipe.main(["--dry-run"])
-            out = capsys.readouterr().out
-            assert "paste-cache" in out
-            assert str(paste_old) in out
-            assert paste_old.exists()
-        finally:
-            wipe.resolve_config_dir = original_resolve
+        wipe.main(["--dry-run"])
+        out = capsys.readouterr().out
+        assert "paste-cache" in out
+        assert str(paste_old) in out
+        assert paste_old.exists()
 
-    def test_yes_deletes_stale_store_entries(self, tmp_path, capsys):
+    def test_yes_deletes_stale_store_entries(self, tmp_path, capsys, monkeypatch):
         # Auto mode with --yes: a stale paste-cache file is gone afterwards
         config_dir = tmp_path
         projects_root = config_dir / "projects"
@@ -911,17 +911,17 @@ class TestDryRunMode:
         os.utime(str(paste_fresh), (time.time(), time.time()))
 
         import wipe
-        original_resolve = wipe.resolve_config_dir
-        wipe.resolve_config_dir = lambda: str(config_dir)
+        # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
+        # out of the machine running the suite.
+        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
 
-        try:
-            wipe.main(["--yes"])
-            assert not paste_old.exists()
-            assert paste_fresh.exists()
-        finally:
-            wipe.resolve_config_dir = original_resolve
+        wipe.main(["--yes"])
+        assert not paste_old.exists()
+        assert paste_fresh.exists()
 
-    def test_session_mode_skips_store_sweep(self, tmp_path, capsys):
+    def test_session_mode_skips_store_sweep(self, tmp_path, capsys, monkeypatch):
         # --session wipes only that session's paths, never the age-keyed stores
         config_dir = tmp_path
         projects_root = config_dir / "projects" / "proj"
@@ -936,14 +936,31 @@ class TestDryRunMode:
         os.utime(str(paste_old), (old_mtime, old_mtime))
 
         import wipe
-        original_resolve = wipe.resolve_config_dir
-        wipe.resolve_config_dir = lambda: str(config_dir)
+        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
 
-        try:
-            wipe.main(["--session", "session-id-1", "--yes"])
-            assert paste_old.exists()
-        finally:
-            wipe.resolve_config_dir = original_resolve
+        wipe.main(["--session", "session-id-1", "--yes"])
+        assert paste_old.exists()
+
+    def test_project_mode_skips_store_sweep(self, tmp_path, capsys, monkeypatch):
+        # --project wipes only that project's paths, never the age-keyed stores
+        config_dir = tmp_path
+        projects_root = config_dir / "projects" / "proj"
+        projects_root.mkdir(parents=True)
+        (projects_root / "s1.jsonl").write_text("{}", encoding="utf-8")
+        old_mtime = time.time() - 40 * 86400
+        os.utime(str(projects_root / "s1.jsonl"), (old_mtime, old_mtime))
+
+        paste_old = config_dir / "paste-cache" / "abc123.txt"
+        paste_old.parent.mkdir(parents=True)
+        paste_old.write_text("secret")
+        os.utime(str(paste_old), (old_mtime, old_mtime))
+
+        import wipe
+        monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(config_dir))
+
+        wipe.main(["--project", "proj", "--yes"])
+        assert not (projects_root / "s1.jsonl").exists()
+        assert paste_old.exists()
 
 
 class TestConfirmDeletion:
@@ -1405,7 +1422,11 @@ class TestCliArgsParsing:
     def test_default_args(self, tmp_path, capsys, monkeypatch):
         """main([]) with an empty store completes without error and reports nothing to wipe."""
         import wipe
+        # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
+        # out of the machine running the suite.
         monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
         (tmp_path / "projects").mkdir()
 
         # Empty store: collect_candidates finds nothing, main returns normally
@@ -1416,7 +1437,11 @@ class TestCliArgsParsing:
     def test_dry_run_flag_recognized(self, tmp_path, capsys, monkeypatch):
         """--dry-run is parsed and suppresses deletion."""
         import wipe
+        # Auto mode also sweeps the real %TEMP% and ~/.claude-lumo; keep those
+        # out of the machine running the suite.
         monkeypatch.setattr(wipe, "resolve_config_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(wipe, "resolve_temp_dir", lambda: str(tmp_path / "absent-temp"))
+        monkeypatch.setattr(wipe, "stale_lumo_logs", lambda days: [])
         (tmp_path / "projects").mkdir()
         old_project = tmp_path / "projects" / "old"
         old_project.mkdir()
