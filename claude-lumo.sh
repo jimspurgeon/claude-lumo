@@ -97,5 +97,5 @@ if [ "${CLAUDE_LUMO_SEPARATE_DATA:-}" = "1" ] || [ -f "$S/separate-data.on" ]; t
   fi
 fi
 
-export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL"
+export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
 exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "${AGENTS[@]}" "$@"
