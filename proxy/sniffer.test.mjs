@@ -223,6 +223,7 @@ test("a context-length 400 is retried once with a smaller max_tokens, then strea
   assert.equal(logs.length, 1);
   assert.match(logs[0], /context_refit est=\d+ max_tokens 32000->\d+; retrying once/);
   assert.doesNotMatch(logs[0], /maximum context length/);
+  assert.equal(JSON.parse(r.sent).max_tokens, sent[1].max_tokens, "the caller gets the body that was actually sent");
 });
 
 test("without a refit hook a context-length 400 is returned as before", async () => {

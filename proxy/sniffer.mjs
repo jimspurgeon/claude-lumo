@@ -48,19 +48,20 @@ function stripCacheKey(body) {
 }
 
 // Fetches the upstream chat response, buffering non-SSE bodies to detect error
-// payloads. Returns { response, buffered, errMeta, retried }: buffered is the
+// payloads. Returns { response, buffered, errMeta, retried, sent }: buffered is the
 // response text when it was consumed for inspection (null to stream normally),
-// errMeta the parsed error metadata when the final response is an error.
+// errMeta the parsed error metadata when the final response is an error, and sent
+// the body of the last request made (a retry may have changed it).
 // `refit(errorText, body)` (context-fit.mjs) turns a context-length 400 into one retry with a
 // smaller max_tokens (#65); without it such errors are returned as before.
 export async function upstreamChat({ upstream, method, path, body, headers, log, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), retryDelayMs = NO_DB_RETRY_MS, refit = null }) {
-  if (!path.startsWith("/chat")) return { response: await upstream(path, method, body, headers), buffered: null, errMeta: null, retried: false };
+  if (!path.startsWith("/chat")) return { response: await upstream(path, method, body, headers), buffered: null, errMeta: null, retried: false, sent: body };
   // noDb counts no_db_connection failures; the one context clamp retry is tracked apart.
   let retried = false, clamped = false, noDb = 0;
   for (;;) {
     let res = await upstream(path, method, body, headers);
     // SSE responses (and bodiless ones) stream through untouched.
-    if (isSSE(res) || !res.body) return { response: res, buffered: null, errMeta: null, retried };
+    if (isSSE(res) || !res.body) return { response: res, buffered: null, errMeta: null, retried, sent: body };
     let text = "";
     try { text = await res.text(); } catch (e) {
       // Non-SSE response whose body could not be read (mid-buffer network failure):
@@ -80,9 +81,9 @@ export async function upstreamChat({ upstream, method, path, body, headers, log,
         continue;
       }
       log(`${path} -> ${res.status}${errMeta ? ` type=${errMeta.type} code=${errMeta.code}` : ""}`);
-      return { response: res, buffered: text, errMeta, retried };
+      return { response: res, buffered: text, errMeta, retried, sent: body };
     }
-    if (!errMeta) return { response: res, buffered: text, errMeta: null, retried };
+    if (!errMeta) return { response: res, buffered: text, errMeta: null, retried, sent: body };
     // no_db_connection: retry once with backoff (issue #43), then once more with
     // prompt_cache_key stripped (issue #60). Give up after that.
     if (errMeta.isNoDb && noDb++ === 0) {
@@ -102,6 +103,6 @@ export async function upstreamChat({ upstream, method, path, body, headers, log,
       }
     }
     log(`${path} upstream error ${res.status} type=${errMeta.type} code=${errMeta.code}`);
-    return { response: res, buffered: text, errMeta, retried };
+    return { response: res, buffered: text, errMeta, retried, sent: body };
   }
 }
