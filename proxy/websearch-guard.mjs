@@ -21,7 +21,12 @@
 // chat.tool_result chunks (the web client's streaming.ts parses them; probes on
 // 2026-10-13 never received any), but the search results are fed into the prompt:
 // usage.prompt_tokens rose from 433 without the tool to 4,339 to 6,943 with it.
-// So the answer is passed on only when the usage shows that jump (or a
+// Offering the tool by itself costs far less: a control on 2026-10-13 with the tool
+// offered but a question Lumo answers without searching ("17 times 23", "say hello")
+// came back at 962 to 975 prompt tokens, against 514 for the same request without the
+// tool, while two real searches in the same run reached 4,556 and 6,401. So the tool
+// adds about 450 tokens and a search adds about 4,000; the margin sits between them.
+// The answer is passed on only when the usage shows that jump (or a
 // tool_call/tool_result pair for web_search does arrive) AND it cites a URL.
 // Anything else (an upstream error, a stall, a memory answer) gets the
 // unavailability message, so no invented search result reaches the model.
@@ -97,7 +102,8 @@ export const answerText = (raw) => parseSearchResponse(raw).text;
 export const citesSources = (text) => /https?:\/\/[^\s)>\]]+\.[^\s)>\]]+/i.test(text || "");
 
 // Search results added to the prompt: at least this many prompt tokens beyond what
-// the request itself can account for (measured: +3,900 or more when a search ran).
+// the request itself can account for (measured: +3,900 or more when a search ran,
+// about +450 when the tool was offered but not used).
 export const SEARCH_TOKEN_MARGIN = 1500;
 
 // True when the response shows Lumo actually searched: a web_search tool_call and
@@ -116,24 +122,37 @@ export const SEARCH_TIMEOUT_MS = 120000;
 // outcome "ok" only with evidence of a search and a cited URL; text is "" otherwise.
 // Never throws. A stream that stalls past timeoutMs ends as "timeout".
 export async function runLumoSearch({ body, path, upstream, upstreamChat, log, now = new Date(), timeoutMs = SEARCH_TIMEOUT_MS }) {
-  let timer;
+  let timer, reader;
   try {
     const searchBody = toLumoSearchRequest(body, now);
     const work = (async () => {
       const { response: up, buffered, errMeta } = await upstreamChat({ upstream, path, method: "POST", body: searchBody, headers: { "content-type": "application/json", accept: "text/event-stream" }, log });
       if (errMeta) return { outcome: `err_${errMeta.type}`, text: "" };
       if (!up.ok) return { outcome: `http_${up.status}`, text: "" };
-      const parsed = parseSearchResponse(buffered ?? await up.text());
+      const parsed = parseSearchResponse(buffered ?? await readAll(up));
       if (!searchRan(parsed, Buffer.byteLength(searchBody))) return { outcome: "no_search", text: "" };
       if (!citesSources(parsed.text)) return { outcome: "no_sources", text: "" };
       return { outcome: "ok", text: parsed.text };
     })();
-    const stall = new Promise((resolve) => { timer = setTimeout(() => resolve({ outcome: "timeout", text: "" }), timeoutMs); });
+    // On a stall, cancel the upstream read too, so the connection does not stay open.
+    const stall = new Promise((resolve) => { timer = setTimeout(() => { reader?.cancel().catch(() => {}); resolve({ outcome: "timeout", text: "" }); }, timeoutMs); });
     return await Promise.race([work, stall]);
   } catch (e) {
     return { outcome: `error_${e?.name || "Error"}`, text: "" };
   } finally {
     clearTimeout(timer);
+  }
+
+  async function readAll(res) {
+    if (!res.body) return "";
+    reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let out = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return out + dec.decode();
+      out += dec.decode(value, { stream: true });
+    }
   }
 }
 

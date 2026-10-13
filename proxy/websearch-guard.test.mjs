@@ -125,7 +125,9 @@ test("parseSearchResponse reads usage and web_search tool chunks", () => {
 
 test("searchRan needs prompt tokens well beyond the request, or a tool_call/result pair", () => {
   // Measured 2026-10-13: 433 prompt tokens without search, 4,339 to 6,943 with it, for a ~700 B request.
+  // Control, tool offered but not used ("17 times 23", "say hello"): 962 to 975 for ~560 B.
   assert.equal(searchRan({ promptTokens: 433 }, 700), false);
+  assert.equal(searchRan({ promptTokens: 975 }, 577), false, "offering the tool alone is not a search");
   assert.equal(searchRan({ promptTokens: 4339 }, 700), true);
   assert.equal(searchRan({ promptTokens: null }, 700), false);
   assert.equal(searchRan({ promptTokens: 4339 }, 30000), false, "a large request explains its own tokens");
@@ -161,8 +163,11 @@ test("runLumoSearch: upstream error payloads, HTTP errors and exceptions map to 
   assert.deepEqual(await runLumoSearch({ body: "not json", path: "/chat/completions", upstreamChat: async () => { throw new Error("unreached"); }, log: () => {} }), { outcome: "error_SyntaxError", text: "" });
 });
 
-test("runLumoSearch: a stalled stream ends as timeout", async () => {
-  const stalled = new ReadableStream({ start() {} }); // never sends, never closes
+test("runLumoSearch: a stalled stream ends as timeout and the upstream read is cancelled", async () => {
+  let cancelled = false;
+  const stalled = new ReadableStream({ start() {}, cancel() { cancelled = true; } }); // never sends, never closes
   const r = await run(fakeChat(() => ({ response: new Response(stalled, { status: 200, headers: { "content-type": "text/event-stream" } }), buffered: null, errMeta: null })), { timeoutMs: 50 });
   assert.deepEqual(r, { outcome: "timeout", text: "" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cancelled, true);
 });
