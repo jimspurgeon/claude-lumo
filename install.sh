@@ -214,5 +214,9 @@ EOF
   fi
 fi
 
+# Fresh version probe: statusline.py caches the git tag for an hour, so a stale
+# cache would keep showing the old version (or "dev") after an update (#51).
+rm -f "$S/statusline-version.cache"
+
 echo "Installed into ~/.claude/lumo. If 'claude-lumo' is not found, add $BIN to PATH and reopen the terminal."
 echo "Test: claude-lumo -p 'reply with pong'"

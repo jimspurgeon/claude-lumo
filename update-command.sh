@@ -70,6 +70,10 @@ else
   echo "Skipping the installer rerun (install.sh not present in $D)."
 fi
 
+# Fresh version probe: statusline.py caches the git tag for an hour, so a stale
+# cache would keep showing the old version (or "dev") after an update (#51).
+rm -f "$S/statusline-version.cache"
+
 echo "Updated to $LATEST. Open claude-lumo sessions keep the old files until they are restarted."
 
 # Offer to restart sessions
