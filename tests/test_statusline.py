@@ -286,6 +286,209 @@ def assistant_entry(model):
     return {"type": "assistant", "message": {"role": "assistant", "model": model}}
 
 
+def assistant_entry_ts(model, ts_ms, sidechain=False):
+    """Assistant entry with an ISO timestamp (epoch-ms) and sidechain flag."""
+    from datetime import datetime, timezone
+    ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+    e = assistant_entry(model)
+    e["timestamp"] = ts
+    if sidechain:
+        e["isSidechain"] = True
+    return e
+
+
+def write_history(state_dir, entries):
+    """Write a fake proxy model-history.json into the state dir; returns its path."""
+    hist_dir = os.path.join(state_dir, "proxy")
+    os.makedirs(hist_dir, exist_ok=True)
+    path = os.path.join(hist_dir, "model-history.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(entries, f)
+    return path
+
+
+def run_served_model(state_dir: str, module_path: str, info_code: str, history: list):
+    """Run served_model_for() via subprocess with a fake history list; returns repr."""
+    env = os.environ.copy()
+    env["CLAUDE_LUMO_STATE_DIR"] = state_dir
+    cmd = ["python", "-c",
+           "from statusline import served_model_for; import sys; "
+           f"info = {info_code}; history = {history!r}; "
+           "sys.stderr.write(repr(served_model_for(info, history)) + chr(10))"]
+    result = subprocess.run(
+        cmd, env=env, cwd=str(Path(module_path).parent),
+        capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"subprocess failed: {result.stderr}")
+    return result.stderr.strip()
+
+
+class TestProxyHistoryAttribution:
+    """Issue #63: attributing a session's model from the proxy request history."""
+
+    def test_latest_completed_request_wins(self, temp_state_dir, statusline_module_path):
+        # Entry at t=100s; two requests completed nearby, the later one is the truth.
+        out = run_served_model(temp_state_dir, statusline_module_path,
+                               "{'model': 'lumo-max', 'ts': 100_000, 'sidechain': False}",
+                               [{"model": "lumo-lite", "t0": 10_000, "tEnd": 80_000},
+                                {"model": "lumo-max", "t0": 40_000, "tEnd": 95_000}])
+        assert out == "'lumo-max'"
+
+    def test_concurrent_stream_does_not_shadow_completed_request(self, temp_state_dir, statusline_module_path):
+        # A subagent stream still in flight at entry time (t0 <= ts <= tEnd) must not
+        # beat the session's own already-completed request.
+        out = run_served_model(temp_state_dir, statusline_module_path,
+                               "{'model': 'lumo-max', 'ts': 100_000, 'sidechain': False}",
+                               [{"model": "lumo-lite", "t0": 60_000, "tEnd": 200_000},
+                                {"model": "lumo-max", "t0": 40_000, "tEnd": 95_000}])
+        assert out == "'lumo-max'"
+
+    def test_lumolite_completion_right_before_entry(self, temp_state_dir, statusline_module_path):
+        out = run_served_model(temp_state_dir, statusline_module_path,
+                               "{'model': 'lumo-max', 'ts': 100_000, 'sidechain': False}",
+                               [{"model": "lumo-lite", "t0": 40_000, "tEnd": 92_000}])
+        assert out == "'lumo-lite'"
+
+    def test_sidechain_entry_never_attributed(self, temp_state_dir, statusline_module_path):
+        """Defense in depth: even if a sidechain info dict reaches it,
+        served_model_for refuses to attribute."""
+        out = run_served_model(temp_state_dir, statusline_module_path,
+                               "{'model': 'lumo-lite', 'ts': 100_000, 'sidechain': True}",
+                               [{"model": "lumo-lite", "t0": 40_000, "tEnd": 95_000}])
+        assert out == "None"
+
+    def test_entry_without_timestamp_never_attributed(self, temp_state_dir, statusline_module_path):
+        out = run_served_model(temp_state_dir, statusline_module_path,
+                               "{'model': 'lumo-max', 'ts': None, 'sidechain': False}",
+                               [{"model": "lumo-lite", "t0": 40_000, "tEnd": 95_000}])
+        assert out == "None"
+
+    def test_stale_history_no_match(self, temp_state_dir, statusline_module_path):
+        out = run_served_model(temp_state_dir, statusline_module_path,
+                               "{'model': 'lumo-max', 'ts': 500_000, 'sidechain': False}",
+                               [{"model": "lumo-lite", "t0": 40_000, "tEnd": 95_000}])
+        assert out == "None"
+
+    def test_far_future_request_no_match(self, temp_state_dir, statusline_module_path):
+        out = run_served_model(temp_state_dir, statusline_module_path,
+                               "{'model': 'lumo-max', 'ts': 100_000, 'sidechain': False}",
+                               [{"model": "lumo-lite", "t0": 200_000, "tEnd": 300_000}])
+        assert out == "None"
+
+
+class TestLoadProxyHistory:
+    """load_proxy_history() tolerance of bad state files."""
+
+    def run_load(self, state_dir, module_path, raw):
+        path = os.path.join(state_dir, "hist.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(raw)
+        env = os.environ.copy()
+        env["CLAUDE_LUMO_STATE_DIR"] = state_dir
+        cmd = ["python", "-c",
+               "from statusline import load_proxy_history; import sys; "
+               f"sys.stderr.write(repr(load_proxy_history({path!r})) + chr(10))"]
+        result = subprocess.run(
+            cmd, env=env, cwd=str(Path(module_path).parent),
+            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"subprocess failed: {result.stderr}")
+        return result.stderr.strip()
+
+    def run_load_path(self, state_dir, module_path, path):
+        env = os.environ.copy()
+        env["CLAUDE_LUMO_STATE_DIR"] = state_dir
+        cmd = ["python", "-c",
+               "from statusline import load_proxy_history; import sys; "
+               f"sys.stderr.write(repr(load_proxy_history({path!r})) + chr(10))"]
+        result = subprocess.run(
+            cmd, env=env, cwd=str(Path(module_path).parent),
+            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"subprocess failed: {result.stderr}")
+        return result.stderr.strip()
+
+    def test_missing_file_returns_empty(self, temp_state_dir, statusline_module_path):
+        assert self.run_load_path(temp_state_dir, statusline_module_path,
+                                  os.path.join(temp_state_dir, "no-such-file.json")) == "[]"
+
+    def test_valid_entries_kept_and_invalid_dropped(self, temp_state_dir, statusline_module_path):
+        out = self.run_load(temp_state_dir, statusline_module_path,
+                            '[{"model": "lumo-lite", "t0": 1, "tEnd": 2},'
+                            ' {"model": "", "t0": 1, "tEnd": 2},'
+                            ' {"t0": 1, "tEnd": 2},'
+                            ' {"model": "lumo-max", "t0": "x", "tEnd": 2},'
+                            ' "junk", null]')
+        assert out == "[{'model': 'lumo-lite', 't0': 1, 'tEnd': 2}]"
+
+    def test_corrupt_json_returns_empty(self, temp_state_dir, statusline_module_path):
+        assert self.run_load(temp_state_dir, statusline_module_path,
+                             "{not json") == "[]"
+
+    def test_non_list_returns_empty(self, temp_state_dir, statusline_module_path):
+        assert self.run_load(temp_state_dir, statusline_module_path,
+                             '{"model": "lumo-lite"}') == "[]"
+
+
+class TestStatuslineFallbackViaHistory:
+    """End to end: a lumo-max session that was really served lumo-lite (issue #63)."""
+
+    ENTRY_TS = 1_800_000  # entry ts; request completed 8s before it
+
+    def _payload(self, transcript):
+        return {"model": {"id": "lumo-max", "display_name": "Lumo Max"},
+                "transcript_path": transcript}
+
+    def test_transcript_echo_plus_lite_history_shows_fallback(self, temp_state_dir, statusline_module_path):
+        # Transcript says lumo-max (the echoed request name) but the proxy
+        # recorded a lumo-lite request completing just before the entry.
+        p = write_transcript([assistant_entry_ts("lumo-max", self.ENTRY_TS)])
+        try:
+            write_history(temp_state_dir,
+                          [{"model": "lumo-lite", "t0": 1_600_000, "tEnd": self.ENTRY_TS - 8_000}])
+            out = run_statusline(temp_state_dir, statusline_module_path, self._payload(p))
+            assert "lumo-lite (fallback from lumo-max)" in out
+        finally:
+            os.unlink(p)
+
+    def test_transcript_echo_plus_matching_history_no_fallback(self, temp_state_dir, statusline_module_path):
+        p = write_transcript([assistant_entry_ts("lumo-max", self.ENTRY_TS)])
+        try:
+            write_history(temp_state_dir,
+                          [{"model": "lumo-max", "t0": 1_600_000, "tEnd": self.ENTRY_TS - 8_000}])
+            out = run_statusline(temp_state_dir, statusline_module_path, self._payload(p))
+            assert "fallback" not in out
+        finally:
+            os.unlink(p)
+
+    def test_no_history_shows_configured_no_fallback(self, temp_state_dir, statusline_module_path):
+        # Stale/absent history: attribution impossible, fall back to pre-#63 behaviour.
+        p = write_transcript([assistant_entry_ts("lumo-max", self.ENTRY_TS)])
+        try:
+            out = run_statusline(temp_state_dir, statusline_module_path, self._payload(p))
+            assert "fallback" not in out
+        finally:
+            os.unlink(p)
+
+    def test_sidechain_last_entry_not_attributed(self, temp_state_dir, statusline_module_path):
+        # Last transcript entry is a subagent's; its lite history must not
+        # paint the main session as fallen back.
+        p = write_transcript([
+            assistant_entry_ts("lumo-max", self.ENTRY_TS - 60_000),
+            assistant_entry_ts("lumo-lite", self.ENTRY_TS, sidechain=True),
+        ])
+        try:
+            write_history(temp_state_dir,
+                          [{"model": "lumo-lite", "t0": self.ENTRY_TS - 20_000, "tEnd": self.ENTRY_TS - 1_000}])
+            out = run_statusline(temp_state_dir, statusline_module_path, self._payload(p))
+            assert "fallback" not in out
+        finally:
+            os.unlink(p)
+
+
 class TestLastTranscriptModel:
     def _dir(self):
         d = tempfile.mkdtemp(prefix="transcripts-")

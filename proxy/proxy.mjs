@@ -14,8 +14,10 @@
 import http from "node:http";
 import { appendFileSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { readLumoCredentials } from "./creds.mjs";
 import { addEditHints } from "./edit-hints.mjs";
+import { createModelHistory } from "./model-history.mjs";
 import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 import { upstreamChat } from "./sniffer.mjs";
 
@@ -23,6 +25,10 @@ const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
 const LOG = join(import.meta.dirname, "proxy.log");
 const DEBUG = join(import.meta.dirname, "debug");
+// Model request history for the status line (issue #63); same state dir convention
+// as statusline.py (CLAUDE_LUMO_STATE_DIR override, default ~/.claude-lumo).
+const STATE_DIR = process.env.CLAUDE_LUMO_STATE_DIR || join(homedir(), ".claude-lumo");
+const history = createModelHistory({ file: join(STATE_DIR, "proxy", "model-history.json") });
 const log = (m) => { try { appendFileSync(LOG, `${new Date().toISOString()} ${m}\n`); } catch {} };
 let creds = readLumoCredentials();
 log(`start port=${PORT} creds=${creds ? "ok" : "MISSING"}`);
@@ -156,7 +162,13 @@ http.createServer(async (req, res) => {
       }
     }
     }
-    if (path.startsWith("/chat")) log(`${path} ${up.status} in=${body ? body.length : 0}B first=${tFirst ? ((tFirst - t0) / 1000).toFixed(1) : "-"}s total=${((Date.now() - t0) / 1000).toFixed(1)}s out=${bytes}B${extra}`);
+    if (path.startsWith("/chat")) {
+      // Model history for the status line (issue #63): record only successful,
+      // error-free completions, so a failed request never claims to have served
+      // a model. Recorded after the response finished, with t0/tEnd spanning it.
+      if (up.status < 400 && !errMeta && model && model !== "-") history.record({ model, t0, tEnd: Date.now() });
+      log(`${path} ${up.status} in=${body ? body.length : 0}B first=${tFirst ? ((tFirst - t0) / 1000).toFixed(1) : "-"}s total=${((Date.now() - t0) / 1000).toFixed(1)}s out=${bytes}B${extra}`);
+    }
   } catch (e) {
     log(`proxy error ${e.message}`);
     if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });

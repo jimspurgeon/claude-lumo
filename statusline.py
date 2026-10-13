@@ -48,14 +48,17 @@ def install_version():
 TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024  # read only the tail; transcripts grow unboundedly
 
 
-def last_transcript_model(transcript_path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
-    """Model id of the last assistant message in the session transcript, or None.
+def last_assistant_info(transcript_path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
+    """Details of the last main-chain assistant entry in the transcript tail,
+    or None: {"model": str, "ts": epoch-ms int}.
 
-    Transcripts are JSONL, appended as the session progresses, so recent turns live
-    in the tail: read only the last `tail_bytes` of the file. Assistant entries
-    carry the producing model in message["model"]. A partially written final line
-    (the writer can flush mid-record) and any other unparsable lines are skipped.
-    Never raises: any problem yields None.
+    Sidechain (subagent) entries are skipped: subagents legitimately run other
+    models, so the last one must not paint the main session as fallen back.
+    Same tail-reading rules as last_transcript_model() (partial lines skipped,
+    never raises). Used both for the transcript comparison (issue #42) and to
+    correlate the session's activity against the proxy's request history
+    (issue #63): the entry is written moments after the serving stream ended,
+    so its timestamp identifies which proxy request carried it.
     """
     if not transcript_path or not isinstance(transcript_path, str):
         return None
@@ -81,11 +84,34 @@ def last_transcript_model(transcript_path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
             continue
         if not isinstance(entry, dict) or entry.get("type") != "assistant":
             continue
+        if entry.get("isSidechain"):
+            continue
         msg = entry.get("message")
         model = (msg.get("model") if isinstance(msg, dict) else None) or entry.get("model")
-        if isinstance(model, str) and model:
-            return model
+        if not (isinstance(model, str) and model):
+            continue
+        ts = None
+        if isinstance(entry.get("timestamp"), str):
+            try:
+                ts = int(datetime.fromisoformat(
+                    entry["timestamp"].replace("Z", "+00:00")).timestamp() * 1000)
+            except ValueError:
+                ts = None
+        return {"model": model, "ts": ts}
     return None
+
+
+def last_transcript_model(transcript_path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
+    """Model id of the last assistant message in the session transcript, or None.
+
+    Transcripts are JSONL, appended as the session progresses, so recent turns live
+    in the tail: read only the last `tail_bytes` of the file. Assistant entries
+    carry the producing model in message["model"]. A partially written final line
+    (the writer can flush mid-record) and any other unparsable lines are skipped.
+    Never raises: any problem yields None.
+    """
+    info = last_assistant_info(transcript_path, tail_bytes)
+    return info["model"] if info else None
 
 
 def normalize_model(model_id):
@@ -108,6 +134,60 @@ def looks_like_fallback(actual, configured):
     return normalize_model(actual) != normalize_model(configured)
 
 
+# Issue #63: on Lumo the transcript cannot reveal a fallback - LiteLLM echoes the
+# requested model name back to Claude Code, so every transcript entry of a
+# lumo-max session that was served lumo-lite still says lumo-max. The proxy is
+# the only component that sees the model actually sent downstream; it records a
+# rolling history of served requests (proxy/model-history.json, see
+# proxy/model-history.mjs). The session is attributed by time: the transcript's
+# last main-chain assistant entry is written moments after its stream ended.
+PROXY_HISTORY_PATH = os.path.join(STATE_DIR, "proxy", "model-history.json")
+HISTORY_MATCH_BEFORE_MS = 30 * 1000   # entry ts may lag the request end by this much
+HISTORY_MATCH_AFTER_MS = 5 * 1000     # ... or lead it slightly (write-order jitter)
+
+
+def load_proxy_history(path=PROXY_HISTORY_PATH):
+    """Entries of the proxy's model request history, validated; [] on any problem."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    out = []
+    if isinstance(data, list):
+        for e in data:
+            if (isinstance(e, dict) and isinstance(e.get("model"), str) and e["model"]
+                    and isinstance(e.get("t0"), (int, float))
+                    and isinstance(e.get("tEnd"), (int, float))):
+                out.append({"model": e["model"], "t0": e["t0"], "tEnd": e["tEnd"]})
+    return out
+
+
+def served_model_for(info, history, before_ms=HISTORY_MATCH_BEFORE_MS,
+                     after_ms=HISTORY_MATCH_AFTER_MS):
+    """Model the proxy served for the session behind `info`, or None.
+
+    An assistant entry is written moments after its stream ends, so the request
+    that produced it is the most recently *completed* one at the entry's
+    timestamp - not merely the closest [t0, tEnd] window, which would let a
+    concurrently streaming subagent request (it legitimately uses lumo-lite)
+    shadow the session's own already-finished request. Requests completing
+    within `before_ms` before or `after_ms` after the entry ts are candidates;
+    among them the latest tEnd wins. A sidechain (subagent) entry or one
+    without a timestamp is never attributed; no candidate means None (the
+    history is stale or predates this fix being deployed).
+    """
+    if not info or info.get("sidechain") or not isinstance(info.get("ts"), int):
+        return None
+    ts = info["ts"]
+    best = None  # (tEnd, model)
+    for e in history:
+        if ts - before_ms <= e["tEnd"] <= ts + after_ms:
+            if best is None or e["tEnd"] > best[0]:
+                best = (e["tEnd"], e["model"])
+    return best[1] if best else None
+
+
 raw = sys.stdin.buffer.read()
 try:
     d = json.loads(raw or b"{}")
@@ -119,7 +199,14 @@ configured = m.get("id") or name
 # Issue #42: after a fallback the configured model lies about who is answering.
 # Compare the configured id against the model that produced the last assistant
 # message in the transcript; when they differ, show the actual one with a note.
-actual = last_transcript_model(d.get("transcript_path"))
+info = last_assistant_info(d.get("transcript_path"))
+actual = info["model"] if info else None
+# Issue #63: on Lumo the transcript cannot reveal a fallback - it records the
+# model name LiteLLM echoed back, not what served the request. When the proxy's
+# history can attribute this session, that model is the truth and wins.
+served = served_model_for(info, load_proxy_history()) if info else None
+if served:
+    actual = served
 if looks_like_fallback(actual, configured):
     shown = f"{actual} (fallback from {configured})"
 else:
