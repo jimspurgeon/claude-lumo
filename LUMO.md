@@ -63,6 +63,14 @@ Keep only what you need; delete the rest when a project finishes.
   `--dry-run` first to see exactly what would be removed.
 - `claude-lumo privacy-audit`: reads your data posture (encryption, cloud sync, stale
   data volume) and gives recommendations. Runs occasionally, never changes anything.
+When the wipe offer fires or the user asks for cleanup, the default is to do it
+together in this conversation: run `claude-lumo privacy-audit` (or `claude-lumo wipe
+--dry-run`), then assess beyond the script's classification — unpushed commits, open
+worktrees, terminals still attached, work the heuristics can't see. Recommend per
+project, let the user decide borderline items, then execute with `claude-lumo wipe
+--mode intelligent` (or whichever mode the user picks). The script's own modes
+remain: `--mode auto` is the plain batch run, `--mode manual` prints the report for
+doing it by hand.
 - Deletion is **logical**, not forensic: SSD wear levelling, backups, cloud sync and
   other tools' copies may still hold the data. State this fact in any wipe output.
 - Orca keeps its own copies of session data in `%APPDATA%/orca`. The wipe command lists

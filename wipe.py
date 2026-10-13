@@ -785,6 +785,59 @@ def confirm(prompt="Type 'yes' to permanently delete: "):
     return answer.strip().lower() == "yes"
 
 
+def classify_candidate(candidate, config_dir):
+    """Classify a wipe candidate as REMOVE (clearly safe), ASK (borderline)
+    or KEEP (protect), with a short plain-language reason.
+
+    Used by intelligent mode: REMOVE plans are deleted without further
+    prompting, ASK plans are surfaced one by one for a per-project decision,
+    KEEP plans are never deleted.
+    """
+    # Already protected by active check, so we focus on removal eligibility
+    reasons = candidate.get("reasons", [])
+
+    # Explicitly selected by the user (--session/--project): theirs to confirm.
+    if any(r.startswith("selected by ") for r in reasons):
+        return "REMOVE", "you selected it explicitly"
+
+    # "marked done" is explicitly safe
+    if "marked done" in reasons:
+        return "REMOVE", "explicitly marked as complete"
+
+    # "project folder gone" is safe (nothing left to lose)
+    if "project folder gone" in reasons:
+        return "REMOVE", "working folder no longer exists"
+
+    if reasons == ["empty project folder"]:
+        return "REMOVE", "empty project folder"
+
+    # Pure inactivity is generally safe
+    if len(reasons) == 1 and "inactive for" in reasons[0]:
+        return "REMOVE", reasons[0]
+
+    # Branch merged/removed: potentially safe but unpushed work may remain
+    if "branch merged or removed" in reasons:
+        return "ASK", "branch is merged or removed; verify no unpushed work remains"
+
+    # Allowlist mode (outside allowlist): defer to user
+    if "outside allowlist" in reasons:
+        return "ASK", "project not in allowlist; confirm it is safe to remove"
+
+    # Mixed signals: play it safe
+    if len(reasons) > 1:
+        return "ASK", f"multiple signals: {'; '.join(reasons)}"
+
+    # Unknown: keep to be safe
+    return "KEEP", "insufficient signals to classify as safe removal"
+
+
+def _stdin_is_tty():
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="claude-lumo wipe",
@@ -797,7 +850,17 @@ def main(argv=None):
     parser.add_argument("--store", action="append", metavar="PATH",
                         help="restrict the wipe to this store (repeatable)")
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    parser.add_argument("--mode", choices=["intelligent", "auto", "manual"],
+                        help="deletion mode: intelligent (execute REMOVE, defer ASK), auto (batch delete), manual (show commands only)")
     args = parser.parse_args(argv)
+
+    # Determine mode: --yes implies auto, pipe implies auto, otherwise interactive/intelligent
+    if args.mode:
+        mode = args.mode
+    elif args.yes or not sys.stdin.isatty():
+        mode = "auto"
+    else:
+        mode = "intelligent"
 
     if args.days < 1:
         print("Error: --days must be at least 1.", file=sys.stderr)
@@ -877,17 +940,147 @@ def main(argv=None):
         print("\nDry run: nothing was deleted. Re-run without --dry-run to delete.")
         return
 
-    if not args.yes and not confirm():
-        print("Aborted, nothing was deleted.")
+    # Mode-specific execution
+    if mode == "manual":
+        # Manual mode: show commands, delete nothing
+        print("\n=== Manual mode: commands to run ===\n")
+        for group in store_groups:
+            for plan in group["plans"]:
+                proj = plan.get("project", "unknown")
+                print(f"claude-lumo wipe --project {proj}  # {', '.join(plan.get('reasons', []))}")
+        if temp_paths:
+            print("# Temp scratch folders:")
+            for _, p in temp_paths:
+                print(f"# rm -rf {p}")
+        if log_paths:
+            print("# Stale logs:")
+            for _, p in log_paths:
+                print(f"# rm -f {p}")
+        print("\nTo enable automatic deletion, re-run with --mode auto or --yes.")
         return
+
+    if mode == "intelligent":
+        # Intelligent mode: classify, delete REMOVE automatically, prompt per ASK.
+        deleted, failed, freed = 0, 0, 0
+        remove_plans, ask_plans, keep_plans = [], [], []
+        deleted_plans = set()  # ids of plans actually deleted
+
+        for group in store_groups:
+            for plan in group["plans"]:
+                cls, reason = classify_candidate(plan, group["store"]["path"])
+                plan["_classification"] = (cls, reason)
+                if cls == "REMOVE":
+                    remove_plans.append((group, plan))
+                elif cls == "ASK":
+                    ask_plans.append((group, plan))
+                else:
+                    keep_plans.append((group, plan))
+
+        # Print classification summary
+        print(f"\nClassification: {len(remove_plans)} REMOVE, "
+              f"{len(ask_plans)} ASK, {len(keep_plans)} KEEP\n")
+
+        def delete_plan(group, plan):
+            """Delete one plan's paths (plus its store's stale entries once)
+            and record it for the history rewrite."""
+            nonlocal deleted, failed, freed
+            paths = list(plan["paths"])
+            # Stale store-level entries ride along with the first deletion
+            # from that store, exactly once.
+            if group.get("store_paths"):
+                paths += group["store_paths"]
+                group["store_paths"] = []
+            store_root = group["store"]["realpath"]
+            freed += sum(tree_size(p) for _, p in paths)
+            for path, ok, err in delete_all(paths, store_root=store_root):
+                if ok:
+                    deleted += 1
+                    print(f"  DELETED: {path}")
+                else:
+                    failed += 1
+                    print(f"  FAILED: {path} ({err})", file=sys.stderr)
+            deleted_plans.add(id(plan))
+
+        # Delete REMOVE plans without global confirm
+        print("--- Auto-deleting REMOVE items ---")
+        for group, plan in remove_plans:
+            delete_plan(group, plan)
+
+        # Prompt per ASK plan (interactive runs only)
+        if ask_plans and _stdin_is_tty():
+            print("\n--- Borderline items (ASK) ---")
+            for group, plan in ask_plans:
+                _, reason = plan["_classification"]
+                proj = plan.get("project", "unknown")
+                print(f"\n{proj}: {reason}")
+                try:
+                    ans = input(f"Delete {proj}? [y/N] ")
+                except (AttributeError, EOFError, OSError):
+                    ans = "n"
+                if ans.strip().lower() in ("y", "yes"):
+                    delete_plan(group, plan)
+                else:
+                    print(f"  KEPT: {proj}")
+
+        # Keep plans are reported only
+        if keep_plans:
+            print("\n--- Kept items (KEEP) ---")
+            for group, plan in keep_plans:
+                _, reason = plan["_classification"]
+                print(f"  {plan.get('project', 'unknown')}: {reason}")
+
+        # Handle temp/log paths (always delete in intelligent mode)
+        for group in temp_paths, log_paths:
+            if not group:
+                continue
+            freed += sum(tree_size(p) for _, p in group)
+            for path, ok, err in delete_all(group):
+                if ok:
+                    deleted += 1
+                    print(f"  deleted: {path}")
+                else:
+                    failed += 1
+                    print(f"  FAILED: {path} ({err})", file=sys.stderr)
+
+        # History rewrite only for plans that were actually deleted.
+        for group in store_groups:
+            session_ids = set()
+            for plan in group["plans"]:
+                if id(plan) in deleted_plans:
+                    session_ids |= plan["session_ids"]
+            if not session_ids:
+                continue
+            removed, err = history_rewrite(
+                os.path.join(group["store"]["path"], "history.jsonl"), session_ids)
+            if err:
+                failed += 1
+                print(f"  FAILED: history.jsonl ({err})", file=sys.stderr)
+            elif removed:
+                deleted += 1
+                print(f"  removed {removed} history.jsonl line(s) for "
+                      f"{group['store']['path']}")
+
+        print(f"\nDone: {deleted} path(s) deleted, {failed} failed, {format_size(freed)} freed.")
+        if failed:
+            sys.exit(1)
+        return
+
+    # Auto mode: original behavior. A piped (non-TTY) run that did not pass
+    # --yes never prompts: it explains how to proceed and deletes nothing.
+    if not args.yes:
+        if not _stdin_is_tty():
+            print("Non-interactive run: pass --yes to delete these, "
+                  "or --mode manual for commands. Nothing was deleted.")
+            return
+        if not confirm():
+            print("Aborted, nothing was deleted.")
+            return
 
     deleted, failed, freed = 0, 0, 0
     for group in store_groups:
         paths = [p for c in group["plans"] for p in c["paths"]] + group["store_paths"]
         if not paths:
             continue
-        # Targets are checked against the owning store so a stray link can
-        # never pull a deletion outside it.
         store_root = group["store"]["realpath"]
         freed += sum(tree_size(p) for _, p in paths)
         for path, ok, err in delete_all(paths, store_root=store_root):
@@ -932,14 +1125,8 @@ def main(argv=None):
     if failed:
         sys.exit(1)
 
-    # Interactive runs only: offer a read-only audit of what is left. Dry runs
-    # return above, so this is a completed deletion pass. Skipped whenever the
-    # pass failed (sys.exit above) or stdin cannot be probed.
-    try:
-        is_tty = sys.stdin.isatty()
-    except (AttributeError, ValueError, OSError):
-        is_tty = False
-    if is_tty:
+    # Interactive runs only: offer a read-only audit of what is left.
+    if _stdin_is_tty():
         try:
             answer = input("Run a privacy audit to check what's left? [y/N] ")
         except (AttributeError, EOFError, OSError):

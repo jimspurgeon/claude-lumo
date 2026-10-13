@@ -2,9 +2,10 @@
 """SessionStart hook: offer to wipe old conversations.
 
 Rate-limited to at most once per day via a timestamp marker. Surfaces one short line
-when candidates exist: "X old conversations in Y projects could be wiped: run `claude-lumo wipe`".
-Silent when nothing qualifies. Disable by setting CLAUDE_LUMO_WIPE_OFFER=0 in your
-environment, or by removing the SessionStart hook entry from settings (plain installs).
+when candidates exist: summary + offer for assistant-led assessment, or alternatives
+(run script directly, manual report). Silent when nothing qualifies. Disable by
+setting CLAUDE_LUMO_WIPE_OFFER=0 in your environment, or by removing the SessionStart
+hook entry from settings (plain installs).
 
 Input/output format for hooks:
   stdin: {"hookEventName": "SessionStart", ...}
@@ -187,7 +188,10 @@ def main():
         return
 
     mark_called(marker)
-    message = f"{stale_count} old conversation(s) in {len(stale_projects)} project(s) could be wiped: run `claude-lumo wipe`"
+    message = (f"{stale_count} old conversation(s) in {len(stale_projects)} project(s) could be wiped. "
+              "Offer to go through them together: run the privacy audit, assess each finding beyond the script's "
+              "classification, recommend what to remove, then execute with the user's chosen mode. Alternatives: "
+              "`claude-lumo wipe` runs the script directly, `--mode manual` prints a do-it-yourself report.")
     output = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",

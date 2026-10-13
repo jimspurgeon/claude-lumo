@@ -18,6 +18,11 @@ The full audit always runs when asked; only --suggest is rate-limited (weekly).
 Modes:
   --suggest: Weekly rate-limited suggestion to run privacy audit
   (default): Full audit output
+  --mode {intelligent,auto,manual}: how findings are acted on
+    intelligent - print the recommended next step for medium/high findings
+    auto - current behavior (interactive offer on a TTY only)
+    manual - print the suggested action and command for every finding,
+             execute nothing
 """
 
 import argparse
@@ -355,13 +360,55 @@ def offer_help(findings, days):
         print("claude-lumo: ask your running assistant to walk through the manual steps.")
 
 
-def main():
+def _stdin_is_tty():
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def print_actions(findings, days, notable_only=True):
+    """Print the suggested action (and command, if any) per finding.
+
+    Read-only: nothing is executed. With notable_only, only medium/high
+    findings are listed; otherwise every finding gets its line.
+    """
+    selected = [f for f in findings
+                if not notable_only or f["severity"] in ("medium", "high")]
+    if not selected:
+        return
+    actions = [suggest_action(f, days) for f in selected]
+    print()
+    for num, (line, _) in enumerate(actions, 1):
+        print(f"{num}. {line}")
+    commands = []
+    for _, command in actions:
+        if command and command not in commands:
+            commands.append(command)
+    if commands:
+        print("claude-lumo: ask your running assistant to help, or run: "
+              + " ".join(commands))
+    else:
+        print("claude-lumo: ask your running assistant to walk through the manual steps.")
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Privacy audit for claude-lumo")
     parser.add_argument("--suggest", action="store_true",
         help="Weekly rate-limited suggestion to run privacy audit (quiet mode)")
     parser.add_argument("--days", type=int, default=30,
         help="Staleness threshold in days (default: 30)")
-    args = parser.parse_args()
+    parser.add_argument("--mode", choices=["intelligent", "auto", "manual"],
+        help="how to act on findings: intelligent (recommended next step), "
+             "auto (current behavior), manual (commands for every finding)")
+    args = parser.parse_args(argv)
+
+    if args.mode:
+        mode = args.mode
+    elif _stdin_is_tty():
+        mode = "intelligent"
+    else:
+        mode = "auto"
 
     config_dir = resolve_config_dir()
 
@@ -521,7 +568,20 @@ def main():
     except OSError:
         pass
 
-    offer_help(findings, args.days)
+    # Act on findings per mode. Non-interactive runs never prompt.
+    if mode == "manual":
+        # Commands and plain-language steps for every finding; nothing executed.
+        print("\n=== Manual mode: recommended next steps ===")
+        print_actions(findings, args.days, notable_only=False)
+    elif mode == "intelligent":
+        # Recommended next step for the medium/high findings, no prompt.
+        notable = [f for f in findings if f["severity"] in ("medium", "high")]
+        if notable:
+            print("\n=== Recommended next steps ===")
+            print_actions(findings, args.days, notable_only=True)
+    else:
+        # Auto: current behavior (interactive offer on a TTY only).
+        offer_help(findings, args.days)
 
 
 if __name__ == "__main__":
