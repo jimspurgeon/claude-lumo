@@ -15,6 +15,9 @@ esac
 # `claude-lumo update`: bring this install to the latest release (v1.3.0+).
 [ "$1" = "update" ] && exec bash "$D/update-command.sh"
 
+# `claude-lumo revert <version>|last`: roll back to a previous release (see revert-command.sh).
+[ "$1" = "revert" ] && exec bash "$D/revert-command.sh" "${@:2}"
+
 # Offline subcommands: data hygiene, no proxy or Lumo login needed.
 case "$1" in
   wipe|privacy-audit)

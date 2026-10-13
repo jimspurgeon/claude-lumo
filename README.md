@@ -78,6 +78,26 @@ Idle detection for the restart offer: every session writes a busy flag to
 cleared when the turn ends), which the update command reads to tell busy from
 idle sessions.
 
+### Reverting to a previous release
+
+To roll the installation back to a previous released version (a code rollback
+only — your data in `~/.claude` and `~/.claude-lumo` is never touched):
+
+```bash
+claude-lumo revert v1.3.0   # or: claude-lumo revert 1.3.0
+claude-lumo revert last     # the release immediately before the installed one
+```
+
+It checks out the given release tag, re-runs the installer so any changed
+wiring takes effect, and offers to restart open sessions exactly like
+`claude-lumo update` does. The same guards apply (refuses when `~/.claude/lumo`
+has local changes, when it is not a clone or not at a release tag, and when
+the remote cannot be reached), plus: reverting to the currently installed
+version is a friendly no-op, and reverting to a version that does not exist is
+refused with the list command to run. After a revert, the status line's update
+notice and version cache are cleared, and `claude-lumo update` brings you back
+to the latest release at any time.
+
 ---
 
 ## Manual install (step by step, per OS)
@@ -261,6 +281,7 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `uninstall.ps1` | Windows entry-point for the uninstaller |
 | `claude-lumo.sh` | Launcher: starts proxy and LiteLLM if down, then runs Claude Code; `claude-lumo update` runs `update-command.sh` |
 | `update-command.sh` | `claude-lumo update`: checks out the newest `v*` release tag, re-runs the installer, offers session restarts |
+| `revert-command.sh` | `claude-lumo revert <version>\|last`: checks out a previous `v*` release tag, re-runs the installer, offers session restarts |
 | `update-check.py` | Silent background check for a newer release at each launch; writes the one-line status-line notice |
 | `session-restart.py` | After an update: finds running sessions, offers restarts (wait until idle / interrupt now / skip) via Orca or tmux |
 | `migrate-to-lumo.sh` | Moves Lumo sessions from `~/.claude` into the separate store (see "Separate data") |
@@ -283,6 +304,7 @@ ln -s "$PWD/scripts/pre-push" "$(git rev-parse --git-dir)/hooks/pre-push"
 | `proxy/litellm.yaml` | LiteLLM route table |
 | `test_render.py` | Tests for the personal agents in `render.py`: `python test_render.py` |
 | `test_update_check.py` | Tests for the update check, `claude-lumo update`, the busy-flag registry and the restart offer: `python test_update_check.py` |
+| `tests/test_revert.py` | Tests for `claude-lumo revert` version parsing and guard behavior: `python -m pytest tests/test_revert.py` |
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 | `hooks/busy-mark.py` | Session registry for the restart offer: writes a per-session busy flag (set on prompt submit, cleared when the turn ends) |
