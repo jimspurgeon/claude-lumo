@@ -21,6 +21,12 @@ from wipe import (
     resolve_config_dir,
     resolve_temp_dir,
     resolve_orca_dir,
+    is_mount_point,
+    is_any_link,
+    looks_like_store,
+    resolve_known_stores,
+    walk_home_for_stores,
+    discover_stores,
     run_git,
     format_size,
     tree_size,
@@ -74,6 +80,260 @@ hook_session_is_active = hook_module.session_is_active
 probe_cwd = hook_module.probe_cwd
 hook_last_activity = hook_module.last_activity
 detect_stale = hook_module.detect_stale
+
+
+class TestIsAnyLink:
+    """Tests for is_any_link/is_mount_point: junctions count as links."""
+
+    def _make_junction(self, target, link):
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junction_detected(self, tmp_path):
+        # A junction is not a symlink (islink is False) but must count as a link.
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "junction"
+        self._make_junction(target, link)
+        assert os.path.islink(str(link)) is False
+        assert is_mount_point(str(link)) is True
+        assert is_any_link(str(link)) is True
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_plain_dir_not_link(self, tmp_path):
+        assert is_any_link(str(tmp_path)) is False
+        assert is_mount_point(str(tmp_path)) is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_symlink_detected(self, tmp_path):
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "sym"
+        try:
+            os.symlink(str(target), str(link), target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation requires privileges")
+        assert is_any_link(str(link)) is True
+
+
+class TestTreeSizeLinks:
+    """tree_size never follows links."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junctioned_content_excluded(self, tmp_path):
+        import _winapi
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "big.txt").write_text("x" * 1000)
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / "local.txt").write_text("y" * 100)
+        _winapi.CreateJunction(str(target), str(outer / "junction"))
+        assert tree_size(str(outer)) == 100
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junction_loop_returns(self, tmp_path):
+        # A junction pointing back at an ancestor must not hang the size walk.
+        import _winapi
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / "file.txt").write_text("z" * 10)
+        _winapi.CreateJunction(str(tmp_path), str(outer / "loop"))
+        assert tree_size(str(outer)) == 10
+
+
+def make_store(root, name="store"):
+    """Fixture store: old transcript, history.jsonl and session-env marker."""
+    store = root / name
+    projects = store / "projects" / "proj-1"
+    projects.mkdir(parents=True)
+    old = time.time() - 40 * 86400
+    transcript = projects / "session-1.jsonl"
+    cwd_json = str(root / "cwd").replace("\\", "\\\\")
+    transcript.write_text('{"cwd": "' + cwd_json + '"}\n', encoding="utf-8")
+    os.utime(str(transcript), (old, old))
+    (store / "history.jsonl").write_text('{"sessionId": "session-1"}\n')
+    (store / "session-env" / "session-1").mkdir(parents=True)
+    return store
+
+
+class TestLooksLikeStore:
+    """Tests for the strict store discriminator."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_full_fixture_passes(self, tmp_path):
+        store = make_store(tmp_path)
+        assert looks_like_store(str(store)) is True
+
+    def test_missing_secondary_marker_fails(self, tmp_path):
+        # Transcript without history/session-env/file-history: not a store.
+        store = tmp_path / "almost"
+        projects = store / "projects" / "p"
+        projects.mkdir(parents=True)
+        (projects / "s.jsonl").write_text("{}", encoding="utf-8")
+        assert looks_like_store(str(store)) is False
+
+    def test_projects_without_jsonl_fails(self, tmp_path):
+        store = tmp_path / "empty-projects"
+        (store / "projects" / "p").mkdir(parents=True)
+        (store / "session-env" / "s").mkdir(parents=True)
+        assert looks_like_store(str(store)) is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junctioned_projects_fails(self, tmp_path):
+        import _winapi
+        real_store = make_store(tmp_path, "real")
+        fake = tmp_path / "fake"
+        fake.mkdir()
+        _winapi.CreateJunction(str(real_store / "projects"), str(fake / "projects"))
+        assert looks_like_store(str(fake)) is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_junctioned_session_env_marker_fails(self, tmp_path):
+        # A linked session-env does not satisfy the secondary marker.
+        import _winapi
+        real_store = make_store(tmp_path, "real")
+        fake = tmp_path / "fake-session-env"
+        projects = fake / "projects" / "p"
+        projects.mkdir(parents=True)
+        (projects / "s.jsonl").write_text("{}", encoding="utf-8")
+        _winapi.CreateJunction(str(real_store / "session-env"),
+                               str(fake / "session-env"))
+        assert looks_like_store(str(fake)) is False
+
+
+class TestResolveKnownStores:
+    """Tests for resolve_known_stores."""
+
+    def test_order_and_origins(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".claude").mkdir()
+        env_store = home / "custom"
+        env_store.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
+        result = resolve_known_stores()
+        assert result[0][1] == "env"
+        assert os.path.normcase(result[0][0]) \
+            == os.path.normcase(os.path.realpath(str(env_store)))
+        # ~/.claude exists (just made) and is second
+        assert result[1][1] == "default"
+
+    def test_env_equals_default_deduped(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        claude_dir = home / ".claude"
+        claude_dir.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
+        origins = [origin for _, origin in resolve_known_stores()]
+        # The env path wins; the identical default path is deduped away.
+        assert origins == ["env"]
+
+    def test_nonexistent_dropped(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".claude").mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / "missing"))
+        # ~/.claude-lumo/data does not exist either: only ~/.claude survives
+        origins = [origin for _, origin in resolve_known_stores()]
+        assert "env" not in origins
+        assert origins == ["default"]
+
+    def test_legacy_config_included(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        legacy = home / ".claude-lumo" / "config"
+        legacy.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        origins = [origin for _, origin in resolve_known_stores()]
+        assert "legacy" in origins
+
+
+class TestWalkHomeForStores:
+    """Tests for the bounded, link-safe home walk."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_stores_at_various_depths_and_noise(self, tmp_path):
+        import _winapi
+        home = tmp_path / "home"
+        (home / "noise" / "node_modules").mkdir(parents=True)
+        deep_store = make_store(home / "nested" / "deeper", "store")
+        top_store = make_store(home, "top-store")
+        # Junction loop: home points back into itself
+        _winapi.CreateJunction(str(home), str(home / "loop"))
+        found = walk_home_for_stores(str(home))
+        assert os.path.normcase(str(top_store)) in [os.path.normcase(p) for p in found]
+        assert os.path.normcase(str(deep_store)) in [os.path.normcase(p) for p in found]
+
+    def test_deep_store_beyond_cap_not_found(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        store = make_store(home / "a" / "b" / "c" / "d", "too-deep")
+        found = walk_home_for_stores(str(home), max_depth=4)
+        assert not any("too-deep" in p for p in found)
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows junctions")
+    def test_no_walk_into_accepted_store(self, tmp_path):
+        # A store nested inside a found store is not re-listed (single hit).
+        home = tmp_path / "home"
+        home.mkdir()
+        make_store(home, "store")
+        found = walk_home_for_stores(str(home))
+        assert len(found) == 1
+
+
+class TestDiscoverStores:
+    """Tests for discover_stores assembly."""
+
+    def test_known_first_and_current_flag(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        env_store = make_store(home, "env-store")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
+        import wipe
+        monkeypatch.setattr(wipe, "walk_home_for_stores", lambda home=None, max_depth=4: [])
+        records = discover_stores()
+        assert records[0]["origin"] == "env"
+        assert records[0]["current"] is True
+
+    def test_walker_refind_deduped(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        env_store = make_store(home, "env-store")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
+        import wipe
+        monkeypatch.setattr(wipe, "walk_home_for_stores",
+                            lambda home=None, max_depth=4: [str(env_store)])
+        records = discover_stores()
+        env_paths = [r for r in records if r["origin"] == "env"]
+        assert len(env_paths) == 1
+
+    def test_discovered_origin_recorded(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        stray = make_store(home, "stray")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        import wipe
+        monkeypatch.setattr(wipe, "walk_home_for_stores", lambda home=None, max_depth=4: [str(stray)])
+        records = discover_stores()
+        assert any(r["origin"] == "discovered"
+                   and os.path.normcase(r["realpath"]) == os.path.normcase(str(stray))
+                   for r in records)
 
 
 class TestFormatSize:

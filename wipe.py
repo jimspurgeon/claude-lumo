@@ -89,6 +89,155 @@ def resolve_orca_dir():
     return os.path.expanduser("~/.local/share/orca")
 
 
+# Directory names the home walk never enters: dependency caches, build output
+# and app internals that can never hold a store but can hold millions of files.
+WALK_SKIP_NAMES = frozenset((
+    "node_modules", ".git", "__pycache__", "venv", ".venv", "Cache", "Caches",
+    "Code Cache", "GPUCache", "dist", "build", "target", ".cargo", ".npm",
+    ".rustup", "site-packages", "electron", "Temp", "Tmp",
+))
+
+# Top-level home folders the walk never enters: app data, cloud sync mounts.
+WALK_SKIP_TOPLEVEL = frozenset((
+    "AppData", "OneDrive", "Dropbox", "Google Drive", "iCloudDrive", "iCloud Drive",
+))
+
+# How many projects/ subfolders looks_like_store inspects before giving up.
+STORE_PROBE_LIMIT = 50
+
+
+def resolve_known_stores():
+    """Store roots at fixed locations: realpath'd, deduped, priority order.
+    Returns (path, origin) pairs; nonexistent paths are dropped."""
+    candidates = []
+    env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if env_dir:
+        candidates.append((os.path.expanduser(env_dir), "env"))
+    candidates.append((os.path.expanduser("~/.claude"), "default"))
+    candidates.append((os.path.expanduser("~/.claude-lumo/data"), "separate"))
+    legacy = os.path.expanduser("~/.claude-lumo/config")
+    if os.path.isdir(legacy):
+        candidates.append((legacy, "legacy"))
+    out = []
+    seen = set()
+    for path, origin in candidates:
+        if not os.path.isdir(path):
+            continue
+        real = os.path.realpath(path)
+        key = os.path.normcase(real)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((real, origin))
+    return out
+
+
+def looks_like_store(path):
+    """Strict check that a folder is a Claude/claude-lumo conversation store:
+    real projects/ dir with a *.jsonl transcript in one of its first 50
+    subfolders, plus at least one secondary marker (history.jsonl file,
+    session-env/ or file-history/ real dir). Links satisfy nothing."""
+    if is_any_link(path):
+        return False
+    projects = os.path.join(path, "projects")
+    if not os.path.isdir(projects) or is_any_link(projects):
+        return False
+    has_transcripts = False
+    try:
+        with os.scandir(projects) as it:
+            entries = list(it)
+    except OSError:
+        return False
+    scanned = 0
+    for entry in entries:
+        scanned += 1
+        if scanned > STORE_PROBE_LIMIT:
+            break
+        if is_any_link(entry.path):
+            continue
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        try:
+            with os.scandir(entry.path) as sub:
+                if any(e.name.endswith(".jsonl") and not is_any_link(e.path)
+                       and e.is_file(follow_symlinks=False) for e in sub):
+                    has_transcripts = True
+                    break
+        except OSError:
+            pass
+    if not has_transcripts:
+        return False
+    history = os.path.join(path, "history.jsonl")
+    if os.path.isfile(history) and not is_any_link(history):
+        return True
+
+    def real_dir(name):
+        p = os.path.join(path, name)
+        return os.path.isdir(p) and not is_any_link(p)
+
+    return real_dir("session-env") or real_dir("file-history")
+
+
+def walk_home_for_stores(home=None, max_depth=4):
+    """Bounded scandir walk of the user profile looking for stores.
+    Never descends into a link (junction loops would hang) or an accepted
+    store; depth is capped at max_depth levels below home."""
+    if home is None:
+        home = os.path.expanduser("~")
+    found = []
+
+    def visit(dir_path, depth):
+        try:
+            with os.scandir(dir_path) as it:
+                entries = list(it)
+        except OSError:
+            return
+        for entry in entries:
+            if entry.name in WALK_SKIP_NAMES:
+                continue
+            if depth == 1 and entry.name in WALK_SKIP_TOPLEVEL:
+                continue
+            if is_any_link(entry.path):
+                continue
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if looks_like_store(entry.path):
+                found.append(os.path.abspath(entry.path))
+                continue
+            if depth < max_depth:
+                visit(entry.path, depth + 1)
+
+    visit(home, 1)
+    return found
+
+
+def discover_stores():
+    """Every conversation store on the machine: known locations first, then
+    whatever the home walk finds. Deduped by realpath, ordered."""
+    current = os.path.normcase(os.path.realpath(resolve_config_dir()))
+    out = []
+    seen = set()
+
+    def add(path, origin):
+        real = os.path.realpath(path)
+        key = os.path.normcase(real)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append({
+            "path": os.path.abspath(path),
+            "realpath": real,
+            "origin": origin,
+            "current": key == current,
+        })
+
+    for path, origin in resolve_known_stores():
+        add(path, origin)
+    for path in walk_home_for_stores():
+        add(path, "discovered")
+    return out
+
+
 def run_git(args, cwd):
     """Run a git command, return stdout on success, None on any failure."""
     try:
