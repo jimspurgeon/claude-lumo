@@ -111,6 +111,80 @@ def looks_like_fallback(actual, configured):
     return normalize_model(actual) != normalize_model(configured)
 
 
+# Issue #65: Claude Code compacts well before the model's window is full, so a percentage of the
+# window (context_window.used_percentage) read "ctx 35%" moments before a compaction. The trigger
+# point is not documented and not in the status JSON, so this is an approximation calibrated on
+# 35 automatic compactions in lumo sessions (Claude Code 2.1.296, compact_boundary preTokens):
+# at autoCompactWindow 100000 they fired between 64K and 81K, mostly 66K to 72K; at 110000 (one
+# session so far) between 77K and 84K. That fits window - min(max output, 20000) - 13000 to
+# within a few percent, so the bar can read about 96% when a compaction fires.
+COMPACT_OUTPUT_RESERVE_CAP = 20000
+COMPACT_BUFFER = 13000
+
+
+def _int_or_none(v):
+    try:
+        n = int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def compact_window(settings_path=None):
+    """The window auto-compact uses: CLAUDE_CODE_AUTO_COMPACT_WINDOW (it overrides the setting),
+    else autoCompactWindow from the settings file the wrapper passes, else None."""
+    env = _int_or_none(os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW"))
+    if env:
+        return env
+    path = settings_path or os.path.join(STATE_DIR, "settings.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return _int_or_none(json.load(f).get("autoCompactWindow"))
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def compact_threshold(window, context_size=None, max_output=None):
+    """Token count at which auto-compact fires for `window` (capped at the model's own size)."""
+    if not window:
+        return None
+    if context_size:
+        window = min(window, context_size)
+    reserve = min(max_output or COMPACT_OUTPUT_RESERVE_CAP, COMPACT_OUTPUT_RESERVE_CAP)
+    t = window - reserve - COMPACT_BUFFER
+    return t if t > 0 else None
+
+
+def context_used_tokens(cw):
+    """Input tokens of the last request (what compaction measures), or None."""
+    cu = cw.get("current_usage")
+    if isinstance(cu, dict):
+        keys = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+        vals = [cu.get(k) for k in keys]
+        if any(isinstance(v, (int, float)) for v in vals):
+            return sum(v for v in vals if isinstance(v, (int, float)))
+    pct, size = cw.get("used_percentage"), cw.get("context_window_size")
+    if isinstance(pct, (int, float)) and isinstance(size, (int, float)) and size > 0:
+        return pct * size / 100
+    return None
+
+
+def context_text(cw, settings_path=None, lumo=True):
+    """'  ctx N%' measured against the auto-compact trigger when it is known (100% = compaction
+    is due), else Claude Code's own used_percentage; '' when there is nothing to show."""
+    if not isinstance(cw, dict):
+        return ""
+    threshold = lumo and compact_threshold(compact_window(settings_path),
+                                  _int_or_none(cw.get("context_window_size")),
+                                  _int_or_none(os.environ.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS")))
+    used = context_used_tokens(cw)
+    if threshold and used is not None:
+        return f"  ctx {min(used / threshold * 100, 100):.0f}%"
+    if cw.get("used_percentage") is not None:
+        return f"  ctx {cw['used_percentage']:.0f}%"
+    return ""
+
+
 raw = sys.stdin.buffer.read()
 try:
     d = json.loads(raw or b"{}")
@@ -129,10 +203,8 @@ else:
     # What to show when nothing fell back: the [LUMO] branch prefers the model
     # id, the [CLAUDE] branch the display name (pre-#42 behaviour preserved).
     shown = configured if os.environ.get("CLAUDE_LUMO") == "1" else name
-pct = ""
-cw = d.get("context_window") or {}
-if isinstance(cw, dict) and cw.get("used_percentage") is not None:
-    pct = f"  ctx {cw['used_percentage']:.0f}%"
+# Lumo installs know their compaction settings; plain Claude keeps its own percentage.
+pct = context_text(d.get("context_window") or {}, lumo=os.environ.get("CLAUDE_LUMO") == "1")
 ver = install_version()
 ver_txt = f"  {ver}" if ver else ""  # tag already starts with 'v'; 'dev' has no prefix
 if os.environ.get("CLAUDE_LUMO") == "1":
