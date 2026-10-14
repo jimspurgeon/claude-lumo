@@ -12,7 +12,7 @@ def run_render(personal, state, *extra):
 
 
 def run_script(path, args, env_extra=None, stdin="{}"):
-    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_LUMO", "CLAUDE_LUMO_WRAPPER")}
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_LUMO",)}
     env.update(env_extra or {})
     return subprocess.run([sys.executable, os.path.join(HERE, path), *args], input=stdin, env=env,
                           capture_output=True, text=True, encoding="utf-8", check=True)
@@ -77,7 +77,7 @@ class PersonalAgents(unittest.TestCase):
 
 class RehostedSessions(unittest.TestCase):
     """#77: a session Claude Code re-hosts by itself keeps --settings but loses the launcher's
-    environment and --append-system-prompt-file, so the settings must carry both."""
+    environment and every flag but --settings, so the settings must carry the env and the prompt hooks."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -147,14 +147,31 @@ class RehostedSessions(unittest.TestCase):
         self.assertEqual(len(os.listdir(os.path.join(self.state, "prompt-parts"))), len(self.parts()))
         self.assertNotIn("STALE-PART-77", "".join(self.parts()))
 
-    def test_hook_prints_a_part_only_without_the_launcher(self):
+    def test_hook_prints_its_part_whatever_the_environment(self):
+        # The hook is the only source of the prompt, so no inherited variable may silence it.
         self.settings()
-        alone = run_script("hooks/lumo-prompt.py", [self.state, "1"]).stdout
-        self.assertEqual(alone, self.parts()[0])
-        self.assertIn("Running on Proton Lumo", alone)
-        wrapped = run_script("hooks/lumo-prompt.py", [self.state, "1"], {"CLAUDE_LUMO_WRAPPER": "1"}).stdout
-        self.assertEqual(wrapped, "")
+        out = run_script("hooks/lumo-prompt.py", [self.state, "1"]).stdout
+        self.assertEqual(out, self.parts()[0])
+        self.assertIn("Running on Proton Lumo", out)
+        inherited = run_script("hooks/lumo-prompt.py", [self.state, "1"], {"CLAUDE_LUMO": "1", "CLAUDE_LUMO_WRAPPER": "1"}).stdout
+        self.assertEqual(inherited, out)
         self.assertEqual(run_script("hooks/lumo-prompt.py", [self.state, "99"]).stdout, "")
+
+    def test_launcher_passes_no_prompt_flag(self):
+        with open(os.path.join(HERE, "claude-lumo.sh"), encoding="utf-8") as f:
+            launcher = f.read()
+        self.assertNotIn("--append-system-prompt", launcher)
+        self.assertNotIn("CLAUDE_LUMO_WRAPPER", launcher)
+
+    def test_settings_template_has_no_duplicate_keys(self):
+        # json.load keeps only the last of two equal keys, which once dropped a SessionStart hook.
+        def no_dupes(pairs):
+            keys = [k for k, _ in pairs]
+            dupes = {k for k in keys if keys.count(k) > 1}
+            self.assertFalse(dupes, f"duplicate keys: {dupes}")
+            return dict(pairs)
+        with open(os.path.join(HERE, "settings-lumo.json"), encoding="utf-8") as f:
+            json.load(f, object_pairs_hook=no_dupes)
 
     def test_api_key_helper_prints_the_key(self):
         os.makedirs(self.state)

@@ -307,7 +307,7 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `test-resume-shim.sh` | Resume shim tests: fake transcripts and stub binaries, no real sessions |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
 | `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
-| `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
+| `render.py` | Builds `~/.claude-lumo/settings.json`, `system-prompt.md` and its hook parts (`prompt-parts/`) at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
 | `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; chains to `statusline-next.sh` from your personal additions if present |
 | `wipe.py` | Finds and deletes finished conversation data (inactive 30+ days, branch merged/removed, project folder gone): run as `claude-lumo wipe` |
 | `privacy_audit.py` | Reads data safety posture (encryption, cloud sync, stale data volume): run as `claude-lumo privacy-audit` |
@@ -326,7 +326,7 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 | `hooks/busy-mark.py` | Session registry for the restart offer: writes a per-session busy flag (set on prompt submit, cleared when the turn ends) |
-| `hooks/lumo-prompt.py` | SessionStart hook: replays the system prompt (LUMO.md plus the personal one) in parts when a session started without the launcher, for example one Claude Code re-hosted after the agents view (#77); silent in normal launches |
+| `hooks/lumo-prompt.py` | SessionStart hook (startup, clear, compact): the only way the system prompt (LUMO.md plus the personal one) reaches a session, printed in parts under the hook output cap, so a session Claude Code re-hosts after the agents view gets it exactly like a launched one (#77) |
 | `scripts/api-key.py` | `apiKeyHelper`: prints the local LiteLLM key, so a re-hosted session still authenticates (#77) |
 | `hooks/session-start-offer.py` | SessionStart hook: offers to wipe old conversations, at most once per day, silent when nothing qualifies |
 | `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |

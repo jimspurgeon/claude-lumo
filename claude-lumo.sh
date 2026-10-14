@@ -103,9 +103,9 @@ if [ "${CLAUDE_LUMO_UPDATE_CHECK:-1}" != "0" ] && [ -f "$D/update-check.py" ]; t
 fi
 
 # A session Claude Code re-hosts by itself (agents view) keeps --settings but none of these exports
-# and no --append-system-prompt-file (#77), so the settings carry the same values (env, apiKeyHelper)
-# and hooks/lumo-prompt.py replays the prompt. CLAUDE_LUMO_WRAPPER tells that hook the prompt is
-# already here.
-export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0 \
-  CLAUDE_LUMO_WRAPPER=1
-exec claude --settings "$S/settings.json" --append-system-prompt-file "$S/system-prompt.md" "${AGENTS[@]}" "$@"
+# and none of the other flags (#77), so the settings carry the same values (env, apiKeyHelper), and
+# the system prompt comes only from hooks/lumo-prompt.py (SessionStart on startup, clear and
+# compact), never from a flag: that way a re-hosted session gets it exactly like a launched one,
+# and it can never arrive twice.
+export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
+exec claude --settings "$S/settings.json" "${AGENTS[@]}" "$@"
