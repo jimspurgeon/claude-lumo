@@ -974,28 +974,35 @@ AGENT_EXIT = 10
 AGENT_PROMPT_FILE = "wipe-agent-prompt.txt"
 AGENT_PROMPT = (
     "Help me safely wipe as much old local conversation data as I am comfortable with. "
-    "Nothing has been deleted yet. "
-    "1) Look at every location: run `claude-lumo wipe --dry-run`, then "
-    "`claude-lumo wipe --dry-run --days 7 --session-days 2` for more recent leftovers, and `claude-lumo privacy-audit`. "
-    "Cover every Claude data store, temp scratch, Lumo logs and Orca's own copies (terminal "
-    "scrollback, session data, orchestration database under %APPDATA%/orca). "
-    "2) Check each finding beyond the script's rules: is the project folder really gone, is its "
-    "branch pushed or merged, does an open Orca terminal or a running session still use it. "
-    "3) Show me a grouped list with sizes and your recommendation (delete, keep, or ask me), "
+    "Nothing has been deleted yet. Work with my actual setup; do not assume any particular tool, "
+    "folder layout or operating system. "
+    "1) Learn the setup first: the OS, which Claude data stores exist (the wipe report lists "
+    "them), and which tools on this machine keep their own copies of sessions or run them "
+    "(terminal or session managers, IDEs, worktree tools; the wipe report names the ones it "
+    "knows). Check what is installed and running instead of guessing, and ask me if unsure. "
+    "2) Look at every location: run `claude-lumo wipe --dry-run`, then "
+    "`claude-lumo wipe --dry-run --days 7 --session-days 2` for more recent leftovers, and "
+    "`claude-lumo privacy-audit --mode manual`. Never run a command that waits for input. "
+    "Cover every Claude data store, temp scratch, Lumo logs and other tools' copies. "
+    "3) Check each finding beyond the script's rules, from evidence rather than assumed paths: "
+    "the working folder recorded in the transcript (its cwd), `git worktree list` in that "
+    "repository to find worktrees wherever they live, whether the branch is pushed or merged, "
+    "and whether a running process, open terminal or session still uses it. "
+    "4) Show me a grouped list with sizes and your recommendation (delete, keep, or ask me), "
     "and ask which to delete, with a 'delete all recommended' option. "
-    "4) Delete only what I approve: `claude-lumo wipe --project <name> --yes` for a finished "
+    "5) Delete only what I approve: `claude-lumo wipe --project <name> --yes` for a finished "
     "project, `claude-lumo wipe --project <name> --old-sessions --yes` for the old sessions of a "
-    "project still in use, or "
-    "`--session <id> --yes`. For Orca data, tell me which terminals to close first and delete "
-    "only what I name. Never delete settings, credentials, memory or config, and never this "
-    "session. Temp scratch and Lumo logs: list them and delete only the paths I approve. "
-    "5) Report what was deleted and how much space was freed."
+    "project still in use, or `--session <id> --yes`. Other tools' copies: prefer that tool's "
+    "own way to close or remove them, tell me what to close first, and delete only what I name. "
+    "Never delete settings, credentials, memory or config, and never this session. Temp scratch "
+    "and Lumo logs: list them and delete only the paths I approve. "
+    "6) Report what was deleted and how much space was freed."
 )
 
 MENU = """
 How do you want to go ahead? Nothing has been deleted.
   1) Go through it with a claude-lumo agent (recommended): it checks every location,
-     Orca's copies included, and deletes only what you approve
+     other tools' copies included, and deletes only what you approve
   2) Delete everything listed above (asks you to confirm)
   3) Show the commands to do it by hand
   4) Cancel"""
