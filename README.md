@@ -70,6 +70,8 @@ Each launch also runs a silent background check for a newer release (at most
 once a day, 5 second timeout, nothing leaves your machine except release-tag
 requests to this repo's remote). When a newer release is out, the status line
 shows a one-line notice, once per version, until you update or 7 days pass.
+After an update, a session that started on the older release shows
+`restart to load vX` in yellow: it still runs the old files until you restart it.
 Disable it with `CLAUDE_LUMO_UPDATE_CHECK=0`; set the interval with
 `CLAUDE_LUMO_UPDATE_CHECK_INTERVAL` (hours, default 24).
 
@@ -327,7 +329,7 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 | `hooks/busy-mark.py` | Session registry for the restart offer: writes a per-session busy flag (set on prompt submit, cleared when the turn ends) |
 | `hooks/lumo-prompt.py` | SessionStart hook (startup, clear, compact; on resume and fork only when the transcript lacks the prompt): the only way the system prompt (LUMO.md plus the personal one) reaches a session, printed in parts under the hook output cap, so a session Claude Code re-hosts after the agents view gets it exactly like a launched one (#77) |
-| `scripts/api-key.py` | `apiKeyHelper`: prints the local LiteLLM key, so a re-hosted session still authenticates (#77) |
+| `scripts/api-key.py` | `apiKeyHelper`: prints the local LiteLLM key; the only way the key reaches Claude Code, so a re-hosted session still authenticates (#77). The launcher clears `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` so an inherited token never competes with it (#86) |
 | `hooks/session-start-offer.py` | SessionStart hook: offers to wipe old conversations, at most once per day, silent when nothing qualifies |
 | `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |
 | `scripts/separate_data.py` | Optional data separation: build/repair the link layout, migrate sessions between stores, status. Tests: `python scripts/test_separate_data.py` |
