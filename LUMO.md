@@ -69,16 +69,20 @@ Keep only what you need; delete the rest when a project finishes.
   data volume) and gives recommendations. Runs occasionally; reads your data, never
   modifies or deletes it, and writes only small rate-limit marker files under ~/.claude-lumo.
 When the wipe offer fires or the user asks for cleanup, the default is to do it
-together in this conversation: run `claude-lumo privacy-audit` (or `claude-lumo wipe
---dry-run`), then assess beyond the script's classification — unpushed commits, open
-worktrees, terminals still attached, work the heuristics can't see. Recommend per
-project, ask the user which items to delete, then delete only what they approve with
-`claude-lumo wipe --project <name> --yes` or `--session <id> --yes`. Never run a bare
-`claude-lumo wipe --yes` or `--mode intelligent --yes`: those delete every candidate at
-once. Temp scratch and logs: delete only the paths the user approves.
+together in this conversation: run `claude-lumo privacy-audit --mode manual` and
+`claude-lumo wipe --dry-run`, then assess beyond the script's classification from evidence
+on this machine, not assumed paths or tools: the transcript's working folder, `git worktree
+list` in its repository, unpushed commits, running processes and open terminals, work the
+heuristics can't see. Recommend per project, ask the user which items to delete, then
+delete only what they approve with `claude-lumo wipe --project <name> --yes`,
+`--project <name> --old-sessions --yes` or `--session <id> --yes`. Do not run a bare
+`claude-lumo wipe --yes` (it deletes every finished project, every scripted-only old
+session and all stale caches, temp scratch and logs at once) or `--mode intelligent
+--yes` (it deletes every REMOVE item and all stale caches, temp scratch and logs at once).
+Temp scratch and logs: delete only the paths the user approves.
 - Deletion is **logical**, not forensic: SSD wear levelling, backups, cloud sync and
   other tools' copies may still hold the data. State this fact in any wipe output.
-- Orca keeps its own copies of session data in `%APPDATA%/orca`. The wipe command lists
-  these paths and their contents but never deletes them (V1 has no supported CLI for
-  Orca data). Manual cleanup: close unneeded Orca terminals, then delete their folders
-  under `terminal-history` yourself.
+- Other tools may keep their own copies of session data (terminal or session managers,
+  IDEs). The wipe command reports the ones it knows (currently Orca, under its app-data
+  folder) but never deletes them. Prefer the tool's own way to close or remove sessions;
+  delete its files by hand only when the user names them.

@@ -12,6 +12,9 @@ model_list:
   - model_name: "*"
     litellm_params: { model: hosted_vllm/lumo-max, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
 litellm_settings:
+  # Adds the server_tool_use + web_search_tool_result blocks Claude Code counts for WebSearch
+  # (lumo_websearch.py, loaded from this file's directory).
+  callbacks: lumo_websearch.handler
   drop_params: true
   request_timeout: 900
 general_settings:

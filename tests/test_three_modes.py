@@ -467,6 +467,9 @@ class TestPrivacyAuditAgentMenu:
         assert code == privacy_audit.AGENT_EXIT
         text = prompt.read_text(encoding="utf-8")
         assert "privacy-audit --mode manual" in text and "Ask me before changing" in text
+        # Generic for any setup (#112): no tool assumed, evidence over guessed paths.
+        assert "Orca" not in text and "git worktree list" in text
+        assert "waits for input" in text and "only what I approve" in text
         assert "How do you want to go ahead?" in capsys.readouterr().out
 
     def test_next_steps_and_done_start_nothing(self, tmp_path, monkeypatch, capsys):
@@ -510,7 +513,8 @@ class TestAgentMenu:
         assert done.exists()
         assert code == wipe.AGENT_EXIT
         text = prompt.read_text(encoding="utf-8")
-        assert "Orca" in text and "only what I approve" in text
+        assert "only what I approve" in text and "git worktree list" in text
+        assert "Orca" not in text  # generic: no tool assumed (works for any setup)
         assert "Nothing has been deleted" in capsys.readouterr().out
 
     def test_auto_choice_still_asks_for_yes(self, tmp_path, capsys, monkeypatch):

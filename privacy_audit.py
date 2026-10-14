@@ -367,13 +367,18 @@ def offer_help(findings, days):
 AGENT_EXIT = 10
 AGENT_PROMPT_FILE = "privacy-audit-agent-prompt.txt"
 AGENT_PROMPT = (
-    "Help me address the findings of the claude-lumo privacy audit. "
+    "Help me address the findings of the claude-lumo privacy audit. Work with my actual setup; "
+    "do not assume any particular tool, folder layout or operating system. "
     "1) Run `claude-lumo privacy-audit --mode manual` to see every finding and its suggested step. "
-    "2) Explain each finding in plain words, say how much it matters, and recommend what to do. "
+    "Never run a command that waits for input. "
+    "2) Explain each finding in plain words, say how much it matters on this machine (check the "
+    "OS, disk encryption, backup and sync tools actually in use), and recommend what to do. "
     "3) Ask me before changing anything: settings, disk encryption, backups, sync folders. "
-    "4) For stale conversations, run `claude-lumo wipe --dry-run`, check every location (Orca's "
-    "copies included), and delete only what I approve with `claude-lumo wipe --project <name> "
-    "--yes` or `--session <id> --yes`. Never delete settings, credentials, memory or config, and "
+    "4) For stale conversations, run `claude-lumo wipe --dry-run`, check every location (other "
+    "tools' copies included, verified from evidence such as the transcript's cwd and "
+    "`git worktree list`, not assumed paths), and delete only what I approve with "
+    "`claude-lumo wipe --project <name> --yes`, `--project <name> --old-sessions --yes` or "
+    "`--session <id> --yes`. Never delete settings, credentials, memory or config, and "
     "never this session. 5) Finish with what changed and what is left."
 )
 
