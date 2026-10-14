@@ -1,7 +1,7 @@
 // Run: node --test proxy/sniffer.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { errorMetaFrom, upstreamChat } from "./sniffer.mjs";
+import { errorMetaFrom, upstreamChat, retryText } from "./sniffer.mjs";
 
 const errBody = (type, code, message = "secret prompt content") =>
   JSON.stringify({ error: { message, type, param: null, code } });
@@ -253,4 +253,24 @@ test("no_db_connection after a context refit still gets both of its retries", as
   assert.equal(sent.length, 4, "refit, plain retry, stripped retry");
   assert.equal("prompt_cache_key" in sent[3], false);
   assert.equal(sent[3].max_tokens, sent[1].max_tokens);
+});
+
+test("the tool-guard retry (retryText) retries no_db_connection and returns the stream text (issue #49)", async () => {
+  const replies = [res(errBody("no_db_connection", "400")), res("data:{\"ok\":1}", 200, "text/event-stream")];
+  const logs = [];
+  const text = await retryText({
+    upstream: async () => replies.shift(), method: "POST", path: "/chat/completions",
+    body: "{}", headers: {}, log: (l) => logs.push(l), sleep: async () => {},
+  });
+  assert.equal(text, "data:{\"ok\":1}");
+  assert.equal(replies.length, 0);
+  assert.ok(logs.some((l) => l.includes("no_db_connection") && l.includes("retrying")), logs.join(" | "));
+});
+
+test("the tool-guard retry (retryText) gives up with an empty string on a lasting error", async () => {
+  const text = await retryText({
+    upstream: async () => res(errBody("invalid_request_error", "400"), 400), method: "POST",
+    path: "/chat/completions", body: "{}", headers: {}, log: () => {}, sleep: async () => {},
+  });
+  assert.equal(text, "");
 });

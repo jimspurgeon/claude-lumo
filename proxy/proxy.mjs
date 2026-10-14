@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { readLumoCredentials } from "./creds.mjs";
 import { addEditHints } from "./edit-hints.mjs";
 import { createToolGuard, escapeDone } from "./tool-guard.mjs";
-import { upstreamChat } from "./sniffer.mjs";
+import { upstreamChat, retryText } from "./sniffer.mjs";
 import { createContextFit } from "./context-fit.mjs";
 import { chatResponse, isWebSearchRequest, runLumoSearch, webSearchUnavailable } from "./websearch-guard.mjs";
 
@@ -166,8 +166,8 @@ const server = http.createServer(async (req, res) => {
     if (sse) {
       res.write(sse.end() + dec.decode());
       // A lost tool call is retried with the same request; only its tool calls are forwarded.
-      // TODO(#43): this retry bypasses upstreamChat (no sniff/retry for no_db_connection); see sniffer.mjs.
-      res.write(await sse.finish(async () => { const r = await upstream(path, req.method, body, headers); return r.ok ? await r.text() : ""; }));
+      // It goes through upstreamChat, so a no_db_connection answer is retried there too (#49).
+      res.write(await sse.finish(() => retryText({ upstream, path, method: req.method, body, headers, log })));
     }
     res.end();
     if (sse) {
