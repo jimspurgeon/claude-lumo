@@ -217,6 +217,8 @@ def estimate_stale_size(config_dir, days=30):
         if mtimes and max(mtimes) < cutoff:
             stale_count += 1
             for name in os.listdir(folder):
+                if name == "memory":
+                    continue  # a wipe keeps per-project memory (#36), so it frees nothing here
                 path = os.path.join(folder, name)
                 if os.path.isfile(path):
                     total += os.path.getsize(path)

@@ -1602,6 +1602,16 @@ class TestEstimateStaleSize:
         assert stale_count == 1
         assert stale_size == 10000
 
+    def test_memory_not_counted(self, tmp_path):
+        # A wipe keeps projects/<project>/memory/ (#36), so it frees none of that space.
+        old_project = tmp_path / "projects" / "old"
+        (old_project / "memory").mkdir(parents=True)
+        old_mtime = time.time() - 40 * 86400
+        (old_project / "s.jsonl").write_text("x" * 100)
+        os.utime(str(old_project / "s.jsonl"), (old_mtime, old_mtime))
+        (old_project / "memory" / "note.md").write_text("m" * 5000)
+        assert estimate_stale_size(str(tmp_path), 30) == (1, 100)
+
     def test_no_projects(self, tmp_path):
         stale_count, stale_size = estimate_stale_size(str(tmp_path), 30)
         assert stale_count == 0
@@ -2347,9 +2357,6 @@ class TestScanRootOverride:
             == os.path.normcase(os.path.realpath(str(state / "data")))
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
 
 class TestAuditUpdateRepo:
     """check_update_status must look at the claude-lumo checkout, not its parent (~/.claude)."""
@@ -2371,3 +2378,6 @@ class TestAuditUpdateRepo:
         privacy_audit.check_update_status()
         own = os.path.dirname(os.path.abspath(privacy_audit.__file__))
         assert seen and all(os.path.normcase(p) == os.path.normcase(own) for p in seen)
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

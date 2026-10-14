@@ -164,7 +164,8 @@ def main():
         return
 
     config_dir = resolve_config_dir()
-    marker = os.path.join(os.path.expanduser("~/.claude-lumo"), MARKER_NAME)
+    state_dir = os.environ.get("CLAUDE_LUMO_STATE_DIR") or os.path.expanduser("~/.claude-lumo")
+    marker = os.path.join(state_dir, MARKER_NAME)
 
     if rate_limited(marker):
         output = {"hookSpecificOutput": {"hookEventName": "SessionStart"}}
