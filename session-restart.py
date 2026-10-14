@@ -64,11 +64,37 @@ def normalize_path(path):
     return resolved.lower() if os.name == "nt" else resolved
 
 
+def is_pid_alive(pid):
+    """True when a process with the given pid exists. Unverifiable means alive, so a
+    failing check never hides a live session. pid None is unverifiable the same way."""
+    if pid is None:
+        return True
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # tasklist prints an "INFO: No tasks ..." line when the pid is gone; the pid
+            # appears as its own whitespace-delimited column only when the process exists.
+            return str(pid) in result.stdout.split()
+        except (subprocess.TimeoutExpired, OSError):
+            return True
+    try:
+        os.kill(pid, 0)  # POSIX: signal 0 only probes for existence.
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # PermissionError or similar: the process exists but is not ours.
+    return True
+
+
 def sessions_from_registry(sdir, exclude_self=None):
     """Load <state>/sessions/*.json into session dicts (session_id, cwd, pid, busy, path).
 
     Entries with an updated timestamp older than STALE_AFTER are pruned from disk and
     skipped. Unreadable files are skipped. The self session is excluded from the list.
+    Entries whose pid is recorded but no longer exist are also skipped (orphaned registry).
     """
     sessions = []
     for path in sorted(glob.glob(os.path.join(sdir, "sessions", "*.json"))):
@@ -88,10 +114,14 @@ def sessions_from_registry(sdir, exclude_self=None):
         session_id = data.get("session_id")
         if not session_id or session_id == exclude_self:
             continue
+        pid = data.get("pid")
+        # Skip orphaned entries: if a pid was recorded, verify it still exists.
+        if pid is not None and not is_pid_alive(pid):
+            continue
         sessions.append({
             "session_id": session_id,
             "cwd": data.get("cwd", ""),
-            "pid": data.get("pid"),
+            "pid": pid,
             "busy": bool(data.get("busy")),
             "path": path,
         })
