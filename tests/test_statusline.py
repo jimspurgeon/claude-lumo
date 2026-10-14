@@ -13,6 +13,13 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def no_update_check(monkeypatch):
+    """Every env these tests build copies os.environ, so no statusline here starts a real update
+    check (#120), as test_render.py does for its own."""
+    monkeypatch.setenv("CLAUDE_LUMO_UPDATE_CHECK", "0")
+
+
 @pytest.fixture
 def temp_state_dir():
     """Create a fresh temp directory for CLAUDE_LUMO_STATE_DIR."""

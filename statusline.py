@@ -74,7 +74,7 @@ def start_update_check(now=None):
     network call (update-check-state.json) and writes update-notice.txt, which a later redraw
     shows. A lock directory (mkdir is atomic) plus a timestamp file keep concurrent statuslines
     from spawning it together. Respects CLAUDE_LUMO_UPDATE_CHECK=0. True when it spawned."""
-    if os.environ.get("CLAUDE_LUMO_UPDATE_CHECK", "").lower() in ("0", "false", "no"):
+    if os.environ.get("CLAUDE_LUMO_UPDATE_CHECK") == "0":  # the launcher's and README's switch
         return False
     here = os.path.dirname(os.path.abspath(__file__))
     script = os.path.join(here, "update-check.py")
@@ -88,11 +88,14 @@ def start_update_check(now=None):
         os.mkdir(lock)
     except FileExistsError:
         try:
-            if now - os.path.getmtime(lock) > SPAWN_LOCK_STALE:
-                os.rmdir(lock)  # the next refresh claims it
+            if now - os.path.getmtime(lock) <= SPAWN_LOCK_STALE:
+                return False  # a concurrent statusline holds it
+            # Left by a statusline that died: clear it and claim it in this same refresh. Two
+            # clearing it at once can both spawn; update-check.py's own rate limit absorbs that.
+            os.rmdir(lock)
+            os.mkdir(lock)
         except OSError:
-            pass
-        return False
+            return False
     except OSError:
         return False
     try:

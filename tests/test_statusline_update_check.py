@@ -75,10 +75,15 @@ class StatuslineUpdateCheck(unittest.TestCase):
         self.assertEqual(len(self.spawns), 2)
 
     def test_disabled_by_env(self):
-        for value in ("0", "false", "no"):
-            with mock.patch.dict(os.environ, {"CLAUDE_LUMO_UPDATE_CHECK": value}):
-                self.assertFalse(self.mod.start_update_check())
+        with mock.patch.dict(os.environ, {"CLAUDE_LUMO_UPDATE_CHECK": "0"}):
+            self.assertFalse(self.mod.start_update_check())
         self.assertEqual(self.spawns, [])
+
+    def test_only_0_disables_like_the_launcher(self):
+        """claude-lumo.sh and the README switch the check off with exactly 0."""
+        with mock.patch.dict(os.environ, {"CLAUDE_LUMO_UPDATE_CHECK": "false"}):
+            self.assertTrue(self.mod.start_update_check())
+        self.assertEqual(len(self.spawns), 1)
 
     def test_dev_or_untagged_install_is_not_checked(self):
         with self.git_says(""):  # no exact tag, but rev-parse succeeds: a dev checkout
@@ -96,9 +101,10 @@ class StatuslineUpdateCheck(unittest.TestCase):
         now = time.time()
         self.assertFalse(self.mod.start_update_check(now))
         self.assertTrue(os.path.isdir(lock))  # fresh: another statusline holds it
-        self.assertFalse(self.mod.start_update_check(now + self.mod.SPAWN_LOCK_STALE + 1))
-        self.assertFalse(os.path.exists(lock))  # stale: cleared for the next refresh
-        self.assertTrue(self.mod.start_update_check(now + self.mod.SPAWN_LOCK_STALE + 2))
+        self.assertEqual(self.spawns, [])
+        # Stale: the same refresh clears it, takes it and spawns, rather than waiting an hour.
+        self.assertTrue(self.mod.start_update_check(now + self.mod.SPAWN_LOCK_STALE + 1))
+        self.assertFalse(os.path.exists(lock))  # released afterwards
         self.assertEqual(len(self.spawns), 1)
 
     def test_concurrent_statuslines_spawn_once(self):
