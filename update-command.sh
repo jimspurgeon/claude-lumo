@@ -58,8 +58,10 @@ if ! git -C "$D" checkout -q "$LATEST"; then
   exit 1
 fi
 
-# Clear pending notice
-rm -f "$S/update-notice.txt"
+# Clear the pending notice and the status line's cached version right after the checkout, before
+# the slow installer rerun: statusline.py caches the git tag for an hour, so a cache left behind by
+# an update interrupted during the installer kept showing the old version (#51, #84).
+rm -f "$S/update-notice.txt" "$S/statusline-version.cache"
 
 # Re-run installer (idempotent; skipped when absent, e.g. trimmed test clones)
 echo ""
@@ -69,10 +71,6 @@ if [ -f "$D/install.sh" ]; then
 else
   echo "Skipping the installer rerun (install.sh not present in $D)."
 fi
-
-# Fresh version probe: statusline.py caches the git tag for an hour, so a stale
-# cache would keep showing the old version (or "dev") after an update (#51).
-rm -f "$S/statusline-version.cache"
 
 echo "Updated to $LATEST. Open claude-lumo sessions keep the old files until they are restarted."
 

@@ -213,6 +213,17 @@ def restart_in_terminal(send, session_id, choice, registry_path):
     return True, "restarted"
 
 
+def ask_choice(question):
+    """The user's answer to `question`, or 's' (skip) when there is no terminal to ask: stdin is
+    not a tty, is None under pythonw (#39), or closes before an answer."""
+    try:
+        if not sys.stdin.isatty():
+            return "s"
+        return input(question).strip().lower() or "s"
+    except (AttributeError, EOFError, OSError):
+        return "s"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Offer to restart running claude-lumo sessions.")
     parser.add_argument("--new-version", required=True, help="new version tag, e.g. v1.3.0")
@@ -254,11 +265,8 @@ def main():
             if args.dry_run:
                 print(f"  [dry run] would restart {short_sid(s['session_id'])} via {controller} {target}")
                 continue
-            if not sys.stdin.isatty():
-                choice = "s"
-            else:
-                choice = input(f"  Restart {short_sid(s['session_id'])}? [w]ait until idle, "
-                               f"[i]nterrupt now, [s]kip (default s): ").strip().lower() or "s"
+            choice = ask_choice(f"  Restart {short_sid(s['session_id'])}? [w]ait until idle, "
+                                f"[i]nterrupt now, [s]kip (default s): ")
             if choice not in ("w", "i", "s"):
                 print("  Unknown choice; skipping.")
                 continue

@@ -261,6 +261,22 @@ class UpdateCommandTest(RepoFixture):
                                capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.strip(), "v1.3.0")
 
+    def test_version_cache_cleared_even_if_installer_is_interrupted(self):
+        """The status line version cache goes right after the checkout (#84): an update stopped
+        during the slow installer rerun must not leave the old version showing for an hour."""
+        with open(os.path.join(self.work_dir, "install.sh"), "w", newline="\n") as f:
+            f.write("kill -TERM $PPID\nsleep 5\n")  # stands in for Ctrl-C during the installer
+        subprocess.run(["git", "-C", self.work_dir, "add", "install.sh"], capture_output=True, check=True)
+        self.add_release("v1.3.0", "add installer")
+        cache = os.path.join(self.state_dir, "statusline-version.cache")
+        with open(cache, "w") as f:
+            f.write("v1.2.9")
+        self.run_update(stdin=subprocess.DEVNULL)
+        result = subprocess.run(["git", "-C", self.clone_dir, "describe", "--tags", "--exact-match", "HEAD"],
+                               capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.strip(), "v1.3.0")
+        self.assertFalse(os.path.exists(cache))
+
     def test_already_latest(self):
         """Already at latest tag: success with 'already on the latest release' message."""
         proc = self.run_update(stdin=subprocess.DEVNULL)
@@ -342,6 +358,17 @@ class SessionRestartTest(unittest.TestCase):
             json.dump(record, f, indent=2)
             f.write("\n")
         return path
+
+    def test_ask_choice_without_a_terminal_skips(self):
+        """No usable stdin (None under pythonw, closed, or not a tty) means skip, not a crash (#39)."""
+        from unittest import mock
+        with mock.patch.object(sys, "stdin", None):
+            self.assertEqual(session_restart.ask_choice("? "), "s")
+        tty = mock.Mock(isatty=mock.Mock(return_value=True))
+        with mock.patch.object(sys, "stdin", tty), mock.patch("builtins.input", side_effect=EOFError):
+            self.assertEqual(session_restart.ask_choice("? "), "s")
+        with mock.patch.object(sys, "stdin", tty), mock.patch("builtins.input", return_value=" W "):
+            self.assertEqual(session_restart.ask_choice("? "), "w")
 
     def test_sessions_from_registry(self):
         """Fresh busy + idle returned; stale deleted; self excluded."""
