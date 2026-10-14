@@ -1,7 +1,8 @@
 """Silent periodic update check for claude-lumo.
 
 Checks whether a newer release tag (v*) exists on the remote. Runs in the background from
-the launcher so it never delays startup, and never prints anything: on success or failure
+the launcher so it never delays startup, and about once an hour from the status line so a
+long-running session hears of a release too (#120). It never prints anything: on success or failure
 it just exits 0. If a newer release exists, it writes a one-line notice to
 <state-dir>/update-notice.txt, which the status line then shows until the next update.
 

@@ -80,7 +80,11 @@ If a step fails it prints the manual command and carries on.
 
 Each launch also runs a silent background check for a newer release (at most
 once a day, 5 second timeout, nothing leaves your machine except release-tag
-requests to this repo's remote). When a newer release is out, the status line
+requests to this repo's remote). A session that stays open for days still hears
+about a release: about once an hour the status line starts the same check in the
+background (one spawn shared by all open sessions, never on the redraw itself,
+and only for an install at a release tag), and the notice appears on a later
+redraw. When a newer release is out, the status line
 shows a one-line notice, once per version, until you update or 7 days pass.
 After an update, a session that started on the older release shows its own
 version followed by `restart to load vX` in yellow (for example
@@ -314,7 +318,7 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `claude-lumo.sh` | Launcher: starts proxy and LiteLLM if down, then runs Claude Code; `claude-lumo update` runs `update-command.sh` |
 | `update-command.sh` | `claude-lumo update`: checks out the newest `v*` release tag, re-runs the installer, offers session restarts |
 | `revert-command.sh` | `claude-lumo revert <version>\|last`: checks out a previous `v*` release tag, re-runs the installer, offers session restarts |
-| `update-check.py` | Silent background check for a newer release at each launch; writes the one-line status-line notice |
+| `update-check.py` | Silent background check for a newer release at each launch and, about hourly, from the status line; writes the one-line status-line notice |
 | `session-restart.py` | After an update: finds running sessions, offers one choice for all of them (wait for all / interrupt all / one by one / skip all) and restarts them via Orca or tmux |
 | `service_restart.py` | Restarts the proxy and LiteLLM so they run the new release (after "wait for all" / "interrupt all", or by hand; `--dry-run` prints the plan) |
 | `migrate-to-lumo.sh` | Moves Lumo sessions from `~/.claude` into the separate store (see "Separate data") |
