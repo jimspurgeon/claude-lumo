@@ -70,8 +70,9 @@ Each launch also runs a silent background check for a newer release (at most
 once a day, 5 second timeout, nothing leaves your machine except release-tag
 requests to this repo's remote). When a newer release is out, the status line
 shows a one-line notice, once per version, until you update or 7 days pass.
-After an update, a session that started on the older release shows
-`restart to load vX` in yellow: it still runs the old files until you restart it.
+After an update, a session that started on the older release shows its own
+version followed by `restart to load vX` in yellow (for example
+`v1.4.2  restart to load v1.4.4`): it still runs the old files until you restart it.
 Disable it with `CLAUDE_LUMO_UPDATE_CHECK=0`; set the interval with
 `CLAUDE_LUMO_UPDATE_CHECK_INTERVAL` (hours, default 24).
 

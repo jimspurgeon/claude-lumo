@@ -219,6 +219,7 @@ started = os.environ.get("CLAUDE_LUMO_SESSION_VERSION", "")
 restart_txt = ""
 if LUMO and started and ver and ver != "dev" and started != ver:
     restart_txt = f"  \x1b[33mrestart to load {ver}\x1b[0m"
+    ver_txt = f"  {started}"  # the version slot names what this session runs, not the install (#117)
 if LUMO:
     sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} via local proxy{pct}{ver_txt}{restart_txt}  (Claude: run `claude`)")
 else:
