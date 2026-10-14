@@ -224,7 +224,7 @@ class RestartServices(unittest.TestCase):
         self.assertEqual(self.kinds(w), [("stop", 111), ("start", 8790)])
         msg = [o for o in w.out if "PID 222" in o][0]
         self.assertIn("does not answer http://127.0.0.1:4000/health/liveliness", msg)
-        self.assertIn("a hung LiteLLM looks the same", msg)
+        self.assertIn("LiteLLM looks the same when it hangs", msg)
         w = self.world(images={111: "node", 222: "node"})
         self.assertFalse(w.restart(self.state))  # node is not LiteLLM's interpreter
         self.assertNotIn(("stop", 222), self.kinds(w))

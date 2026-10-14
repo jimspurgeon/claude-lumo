@@ -266,8 +266,8 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
             continue
         if foreign:
             out(f"  PID {', '.join(map(str, foreign))} on port {port} does not look like {name} (its "
-                f"process is not {name}'s, or it does not answer {svc['health']}; a hung {name} looks "
-                f"the same), so nothing was stopped. If it is {name}, stop it yourself "
+                f"process is not {name}'s, or it does not answer {svc['health']}; {name} looks the "
+                f"same when it hangs), so nothing was stopped. If it is {name}, stop it yourself "
                 f"({'; '.join(' '.join(stop_command(p, plat)) for p in foreign)}), then {manual}")
             all_ok = False
             continue
