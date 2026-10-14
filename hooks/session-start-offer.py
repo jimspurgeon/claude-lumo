@@ -118,6 +118,9 @@ def last_activity(project):
 
 
 def detect_stale(project, config_dir, days, allowlist):
+    # No sessions left (for example only memory/, which a wipe keeps): nothing to offer.
+    if not project["sessions"]:
+        return False
     if any(session_is_active(project, config_dir, s["id"], s["mtime"]) for s in project["sessions"]):
         return False
 

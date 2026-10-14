@@ -1693,6 +1693,14 @@ class TestHookProbeCwd:
 class TestHookDetectStale:
     """Tests for hook detect_stale function."""
 
+    def test_no_sessions_not_stale(self, tmp_path):
+        # A project with only memory/ left has nothing a wipe would delete.
+        project = tmp_path / "projects" / "memory-only"
+        (project / "memory").mkdir(parents=True)
+        proj_info = {"name": "memory-only", "folder": str(project), "sessions": []}
+        assert detect_stale(proj_info, str(tmp_path), 30, None) is False
+        assert detect_stale(proj_info, str(tmp_path), 30, ["/allowed"]) is False
+
     def test_detect_inactive(self, tmp_path):
         config_dir = tmp_path
         project = tmp_path / "projects" / "old"
@@ -2341,3 +2349,25 @@ class TestScanRootOverride:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestAuditUpdateRepo:
+    """check_update_status must look at the claude-lumo checkout, not its parent (~/.claude)."""
+
+    def test_runs_git_in_its_own_checkout(self, monkeypatch):
+        import privacy_audit
+        seen = []
+
+        class Done:
+            returncode = 1
+            stdout = ""
+
+        def fake_run(cmd, **kwargs):
+            seen.append(cmd[2])
+            return Done()
+
+        monkeypatch.setattr(privacy_audit.subprocess, "run", fake_run)
+        monkeypatch.setattr(privacy_audit.os.path, "isdir", lambda p: True)
+        privacy_audit.check_update_status()
+        own = os.path.dirname(os.path.abspath(privacy_audit.__file__))
+        assert seen and all(os.path.normcase(p) == os.path.normcase(own) for p in seen)
