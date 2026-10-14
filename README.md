@@ -512,7 +512,13 @@ ever deleted.
 
 **Protected:**
 - Sessions with recent activity (< 6 hours) or active env lock
-- Settings, memory, credentials, config files
+- Settings, memory, credentials, config files (including each project's
+  `projects/<project>/memory/` folder: a project wipe deletes everything beside it)
+
+**Scan roots:** `CLAUDE_LUMO_SCAN_ROOT` (default: your home folder) sets where the
+store scan looks for `.claude` and walks for other stores; `CLAUDE_LUMO_STATE_DIR`
+(default `~/.claude-lumo`) sets where it looks for Lumo logs and the separate data
+store. Point both at a test folder to keep a trial run away from your real data.
 
 **Important:** Deletion is logical, not forensic. SSD wear levelling, backups,
 cloud sync and other tools' copies may still hold the data.
@@ -524,10 +530,11 @@ Manual cleanup: close unneeded Orca terminals, then delete their folders under
 
 ### `claude-lumo privacy-audit`
 
-Read-only assessment of your data safety posture. Checks encryption, cloud sync,
+Assessment of your data safety posture. Checks encryption, cloud sync,
 cleanup settings, stale data volume and update status. Outputs findings with severity.
-Runs occasionally (rate-limited), never reads or writes your conversation data
-(the only files it writes are its own tiny rate-limit markers under `~/.claude-lumo`).
+Runs occasionally (rate-limited). It reads your data, never modifies or deletes it;
+it writes only small rate-limit marker files under `~/.claude-lumo` (`.audit-last`,
+`.audit-suggest-last`), and its update check may run `git fetch` for tags.
 
 **Usage:**
 ```bash
