@@ -597,8 +597,9 @@ class TestSetupIdempotency(unittest.TestCase):
 
         # Break the dst link by pointing it at a vanished target: replace the
         # link with one to a now-deleted path.
-        os.rmdir(str(self.data / "rules")) if os.path.isdir(str(self.data / "rules")) \
-            else os.remove(str(self.data / "rules"))
+        # remove_link handles a Windows junction and a POSIX symlink alike (os.rmdir refuses a
+        # symlink on Linux).
+        self.assertTrue(separate_data.remove_link(str(self.data / "rules")))
         vanished = Path(self.tmpdir.name) / "vanished"
         vanished.mkdir()
         separate_data.make_link(str(vanished), str(self.data / "rules"))

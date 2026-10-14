@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -398,7 +399,11 @@ class SessionRestartTest(unittest.TestCase):
             os.environ.clear()
             os.environ.update(saved_environ)
         os.environ["ORCA_WORKTREE_ID"] = "x"
-        self.assertEqual(session_restart.choose_controller(), "orca")
+        # The orca CLI need not be installed where the tests run (CI), so stand one in.
+        with mock.patch.object(session_restart.shutil, "which", return_value="/usr/bin/orca"):
+            self.assertEqual(session_restart.choose_controller(), "orca")
+        with mock.patch.object(session_restart.shutil, "which", return_value=None):
+            self.assertEqual(session_restart.choose_controller(), "none")
         del os.environ["ORCA_WORKTREE_ID"]
 
     def test_restart_in_terminal_wait_path(self):
