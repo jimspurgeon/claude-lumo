@@ -46,6 +46,7 @@ def install_version():
 
 
 TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024  # read only the tail; transcripts grow unboundedly
+SYNTHETIC_MODEL = "<synthetic>"  # Claude Code's model id on locally generated error turns
 
 
 def last_transcript_model(transcript_path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
@@ -83,7 +84,9 @@ def last_transcript_model(transcript_path, tail_bytes=TRANSCRIPT_TAIL_BYTES):
             continue
         msg = entry.get("message")
         model = (msg.get("model") if isinstance(msg, dict) else None) or entry.get("model")
-        if isinstance(model, str) and model:
+        # Issue #63: Claude Code writes failed turns (API errors) as assistant entries with the
+        # placeholder model "<synthetic>"; no model answered them, so look further back.
+        if isinstance(model, str) and model and model != SYNTHETIC_MODEL:
             return model
     return None
 

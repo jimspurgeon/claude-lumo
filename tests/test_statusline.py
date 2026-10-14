@@ -461,3 +461,56 @@ class TestStatuslineOutput:
         out = run_statusline(temp_state_dir, statusline_module_path, payload)
         assert "lumo-max" in out
         assert "fallback" not in out
+
+
+# ---------------------------------------------------------------------------
+# Issue #63: a fallback is visible in the transcript (the turns lumo-lite answers
+# are recorded as lumo-lite); failed turns are "<synthetic>" and name no model.
+# Entry shapes match real Claude Code 2.1.296 transcripts.
+# ---------------------------------------------------------------------------
+
+def fallback_entry():
+    return {"type": "system", "subtype": "model_fallback", "isMeta": False, "level": "warning",
+            "originalModel": "lumo-max", "fallbackModel": "lumo-lite", "trigger": "server_error",
+            "content": "Switched to lumo-lite due to high demand for lumo-max"}
+
+
+def synthetic_entry():
+    # Claude Code's record of a failed request: no model produced it.
+    return {"type": "assistant", "isApiErrorMessage": True, "isSidechain": False,
+            "message": {"role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence",
+                        "content": [{"type": "text", "text": "API Error: 400"}]}}
+
+
+class TestFallbackReplay:
+    def test_fallback_then_lite_answer_shows_fallback(self, temp_state_dir, statusline_module_path):
+        path = write_transcript([assistant_entry("lumo-max"), fallback_entry(),
+                                 assistant_entry("lumo-lite")])
+        try:
+            out = run_statusline(temp_state_dir, statusline_module_path,
+                                 {"model": {"id": "lumo-max"}, "transcript_path": path})
+        finally:
+            os.unlink(path)
+        assert "lumo-lite (fallback from lumo-max)" in out
+
+    def test_synthetic_error_turn_is_skipped(self, temp_state_dir, statusline_module_path):
+        path = write_transcript([assistant_entry("lumo-lite"), synthetic_entry()])
+        try:
+            out = run_statusline(temp_state_dir, statusline_module_path,
+                                 {"model": {"id": "lumo-max"}, "transcript_path": path})
+        finally:
+            os.unlink(path)
+        assert "lumo-lite (fallback from lumo-max)" in out
+        assert "synthetic" not in out
+
+    def test_fallback_that_never_answered_keeps_configured(self, temp_state_dir, statusline_module_path):
+        # The fallback request failed too: no model answered, so nothing fell back.
+        path = write_transcript([assistant_entry("lumo-max"), fallback_entry(),
+                                 synthetic_entry()])
+        try:
+            out = run_statusline(temp_state_dir, statusline_module_path,
+                                 {"model": {"id": "lumo-max"}, "transcript_path": path})
+        finally:
+            os.unlink(path)
+        assert "fallback" not in out and "synthetic" not in out
+        assert "lumo-max" in out
