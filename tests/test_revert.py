@@ -23,7 +23,7 @@ BASH = shutil.which("bash") or "bash"
 class Fixture:
     """Git fixture: remote with v1.2.9, v1.3.0, v1.3.1; clone checked out at v1.3.1."""
 
-    def __init__(self, releases=("v1.2.9", "v1.3.0", "v1.3.1"), checkout=None):
+    def __init__(self, releases=("v1.2.9", "v1.3.0", "v1.3.1"), checkout=None, installer=None):
         self.tmp = tempfile.TemporaryDirectory()
         self.state_dir = os.path.join(self.tmp.name, "state")
         os.makedirs(self.state_dir)
@@ -35,6 +35,10 @@ class Fixture:
         with open(readme, "w") as f:
             f.write("# Test repo\n")
         self._git("add", "README.md", cwd=self.work_dir)
+        if installer is not None:
+            with open(os.path.join(self.work_dir, "install.sh"), "w", newline="\n") as f:
+                f.write(installer)
+            self._git("add", "install.sh", cwd=self.work_dir)
         self._git("-c", "user.email=tests@example.com", "-c", "user.name=Tests",
                   "commit", "-m", "initial", cwd=self.work_dir)
 
@@ -243,3 +247,24 @@ class TestBehavior:
         assert os.path.exists(user_file)
         with open(user_file) as f:
             assert f.read() == "{}\n"
+
+
+# What every installer before #100 did on a release-channel clone: fetch, then check out the
+# newest tag, which used to undo a revert.
+OLD_INSTALLER = """#!/bin/bash
+D="$CLAUDE_LUMO_DIR"
+git -C "$D" fetch --tags 2>/dev/null \
+  && git -C "$D" checkout -q "$(git -C "$D" tag -l 'v*' --sort=-v:refname | head -n 1)" 2>/dev/null \
+  || echo "Note: could not update to the latest release tag (offline); keeping current files."
+"""
+
+
+def test_revert_survives_an_installer_that_checks_out_the_newest_tag():
+    fx = Fixture(installer=OLD_INSTALLER)
+    try:
+        code, out = fx.run_revert("v1.3.0")
+        assert code == 0, out
+        assert fx.clone_tag() == "v1.3.0", out
+        assert "Reverted to v1.3.0" in out
+    finally:
+        fx.cleanup()

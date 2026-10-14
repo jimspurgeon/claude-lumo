@@ -194,8 +194,9 @@ def main():
     mark_called(marker)
     message = (f"{stale_count} old conversation(s) in {len(stale_projects)} project(s) could be wiped. "
               "Offer to go through them together: run the privacy audit, assess each finding beyond the script's "
-              "classification, recommend what to remove, then execute with the user's chosen mode. Alternatives: "
-              "`claude-lumo wipe` runs the script directly, `--mode manual` prints a do-it-yourself report.")
+              "classification, recommend what to remove, then delete only what the user approves, "
+              "one project or session at a time (`claude-lumo wipe --project <name> --yes`). Alternatives: "
+              "`claude-lumo wipe` in a terminal shows the findings and a menu, `--mode manual` prints a do-it-yourself report.")
     output = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",

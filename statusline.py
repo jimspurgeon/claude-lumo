@@ -211,7 +211,7 @@ else:
     shown = configured if LUMO else name
 # Lumo installs know their compaction settings; plain Claude keeps its own percentage.
 pct = context_text(d.get("context_window") or {}, lumo=LUMO)
-ver = install_version()
+ver = install_version() if LUMO else ""  # plain Claude sessions show no claude-lumo version
 ver_txt = f"  {ver}" if ver else ""  # tag already starts with 'v'; 'dev' has no prefix
 # The launcher records the release the session started on; once the install has moved to another
 # release, this session still runs the old files until it is restarted (#35).
@@ -222,7 +222,7 @@ if LUMO and started and ver and ver != "dev" and started != ver:
 if LUMO:
     sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} via local proxy{pct}{ver_txt}{restart_txt}  (Claude: run `claude`)")
 else:
-    sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {shown}{pct}{ver_txt}  (Lumo: run `claude-lumo`)")
+    sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {shown}{pct}  (Lumo: run `claude-lumo`)")
 sys.stdout.flush()
 
 local = os.environ.get("CLAUDE_LUMO_LOCAL") or os.path.join(os.path.expanduser("~"), ".claude", "lumo-local")
@@ -236,7 +236,7 @@ if os.path.isfile(nxt):
 # Update notice (v1.3.0+): append if within 7 days.
 notice_path = os.path.join(STATE_DIR, "update-notice.txt")
 try:
-    if os.path.isfile(notice_path):
+    if LUMO and os.path.isfile(notice_path):  # a claude-lumo update means nothing to plain Claude
         mtime = os.path.getmtime(notice_path)
         if datetime.now().timestamp() - mtime < 7 * 24 * 3600:
             with open(notice_path, encoding="utf-8") as f:

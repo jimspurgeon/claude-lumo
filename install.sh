@@ -106,7 +106,9 @@ mkdir -p "$S" "$BIN"
 # follows the master branch (for development).
 CHANNEL="${CLAUDE_LUMO_CHANNEL:-release}"
 
-if [ -d "$D/.git" ]; then
+if [ -d "$D/.git" ] && [ "${CLAUDE_LUMO_KEEP_CHECKOUT:-}" = "1" ]; then
+  : # update or revert already checked out the release it wants: keep it (#100)
+elif [ -d "$D/.git" ]; then
   # Already a clone: update it, never overwrite it from another folder.
   if [ -n "$(git -C "$D" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
     echo "Note: $D has local changes; leaving it as is. Put personal changes in the lumo-local folder instead."

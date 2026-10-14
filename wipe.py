@@ -29,7 +29,9 @@ Usage:
     wipe.py [--dry-run] [--days N] [--store PATH] [--allowlist FILE]
     wipe.py --session <session-id> [--dry-run]
     wipe.py --project <name-or-path> [--dry-run]
-Repeat --store to limit multiple stores. Add --yes to skip the confirmation prompt.
+Repeat --store to limit multiple stores. On a terminal the run ends with a choice menu (go
+through it with a claude-lumo agent, delete all after typing yes, print commands, or cancel);
+nothing is deleted without a prompt. Add --yes to skip the prompts (for scripting).
 """
 
 import argparse
@@ -47,6 +49,13 @@ from datetime import datetime, timezone
 # as active and is protected from every wipe mode.
 ACTIVE_SECONDS = 6 * 3600
 GIT_TIMEOUT = 5
+
+# In a project that is still in use, single sessions become candidates by age: scripted
+# (non-interactive, entrypoint sdk-*) sessions after AUTOMATION_DAYS, others after SESSION_DAYS.
+# Before this, a project with one live session protected all of its old ones.
+SESSION_DAYS = 7
+AUTOMATION_DAYS = 1
+LISTED_PATHS_PER_PLAN = 10
 
 # Per-project memory notes (projects/<project>/memory/) survive every wipe mode.
 PROJECT_MEMORY_DIR = "memory"
@@ -332,7 +341,9 @@ def probe_transcript(path, read_bytes=65536):
             out["cwd"] = entry["cwd"]
         if out.get("branch") is None and entry.get("gitBranch"):
             out["branch"] = entry["gitBranch"]
-        if "cwd" in out and "branch" in out:
+        if out.get("entrypoint") is None and entry.get("entrypoint"):
+            out["entrypoint"] = entry["entrypoint"]
+        if "cwd" in out and "branch" in out and "entrypoint" in out:
             break
     return out
 
@@ -369,6 +380,8 @@ def collect_project(config_dir, project):
             "mtime": mtime,
             "cwd": info.get("cwd"),
             "branch": info.get("branch"),
+            # Scripted runs (claude -p, the SDK) record an sdk-* entrypoint; interactive ones "cli".
+            "automation": str(info.get("entrypoint") or "").startswith("sdk"),
             "active": session_is_active(config_dir, session_id, mtime),
         })
     return {"name": project, "folder": folder, "sessions": sessions}
@@ -491,6 +504,27 @@ def project_wipe_plan(config_dir, project_info):
     return paths, session_ids
 
 
+def history_matches(history_file, session_ids):
+    """Count history.jsonl lines whose sessionId is in the set (read-only, same match as
+    history_rewrite). A missing or unreadable file counts as 0."""
+    if not session_ids or not os.path.isfile(history_file):
+        return 0
+    count = 0
+    try:
+        with open(history_file, encoding="utf-8", newline="") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                sid = entry.get("sessionId") if isinstance(entry, dict) else None
+                if sid and sid in session_ids:
+                    count += 1
+    except OSError:
+        return 0
+    return count
+
+
 def history_rewrite(history_file, drop_session_ids):
     """Remove history.jsonl lines whose sessionId is in the set; keep everything else.
     Returns (removed_count, error_or_None). Lines without a sessionId are always kept."""
@@ -591,8 +625,56 @@ def find_project_of_session(config_dir, session_id):
     return None
 
 
-def collect_candidates(config_dir, days, allowlist_path):
-    """Auto mode: every project folder whose signals say it is finished."""
+def session_file_paths(config_dir, project_info, session):
+    """One session's files: its transcript, its folder beside it, and the id-keyed stores."""
+    paths = [("transcript", session["transcript"])] if os.path.exists(session["transcript"]) else []
+    folder = os.path.join(project_info["folder"], session["id"])
+    if os.path.isdir(folder):
+        paths.append(("session-folder", folder))
+    paths.extend(session_paths(config_dir, session["id"]))
+    return paths
+
+
+def old_sessions_plan(config_dir, project_info, session_days=SESSION_DAYS,
+                      automation_days=AUTOMATION_DAYS):
+    """Single old sessions in a project that is not finished as a whole: scripted ones older
+    than automation_days, others older than session_days. Active sessions are never picked.
+    Returns a plan marked "partial", or None when no session qualifies."""
+    now = time.time()
+    scripted, other = [], []
+    for s in project_info["sessions"]:
+        if s["active"] or s["mtime"] is None:
+            continue
+        age_days = (now - s["mtime"]) / 86400
+        if s.get("automation") and age_days >= automation_days:
+            scripted.append(s)
+        elif age_days >= session_days:
+            other.append(s)
+    picked = scripted + other
+    if not picked:
+        return None
+    reasons = []
+    if scripted:
+        reasons.append(f"{len(scripted)} automation session(s) older than {automation_days} day(s)")
+    if other:
+        reasons.append(f"{len(other)} session(s) older than {session_days} day(s)")
+    paths = [p for s in picked for p in session_file_paths(config_dir, project_info, s)]
+    return {
+        "project": project_info["name"],
+        "reasons": reasons,
+        "sessions": [s["id"] for s in picked],
+        "session_ids": {s["id"] for s in picked},
+        "paths": paths,
+        "size": sum(tree_size(p) for _, p in paths),
+        "last_activity": max(s["mtime"] for s in picked),
+        "partial": True,
+    }
+
+
+def collect_candidates(config_dir, days, allowlist_path, session_days=SESSION_DAYS,
+                       automation_days=AUTOMATION_DAYS):
+    """Auto mode: every project folder whose signals say it is finished, plus the old single
+    sessions of projects that are still in use (not in allowlist mode)."""
     allowlist = load_allowlist(allowlist_path) if allowlist_path else None
     if allowlist_path and allowlist is None:
         print(f"Error: cannot read allowlist file {allowlist_path}", file=sys.stderr)
@@ -623,6 +705,10 @@ def collect_candidates(config_dir, days, allowlist_path):
                 "size": size,
                 "last_activity": last_activity(info),
             })
+        elif allowlist is None:
+            plan = old_sessions_plan(config_dir, info, session_days, automation_days)
+            if plan:
+                candidates.append(plan)
     return candidates
 
 
@@ -645,11 +731,7 @@ def plan_for_named_session(config_dir, session_id):
         print("Error: this session looks active (recent transcript or env lock), refusing.",
               file=sys.stderr)
         sys.exit(1)
-    paths = [("transcript", match["transcript"])] if os.path.exists(match["transcript"]) else []
-    folder = os.path.join(info["folder"], session_id)
-    if os.path.isdir(folder):
-        paths.append(("session-folder", folder))
-    paths.extend(session_paths(config_dir, session_id))
+    paths = session_file_paths(config_dir, info, match)
     return {
         "project": project,
         "reasons": ["selected by session id"],
@@ -661,8 +743,11 @@ def plan_for_named_session(config_dir, session_id):
     }
 
 
-def plan_for_named_project(config_dir, name):
-    """--project mode: accept the encoded folder name or a real path."""
+def plan_for_named_project(config_dir, name, old_sessions=False, session_days=SESSION_DAYS,
+                           automation_days=AUTOMATION_DAYS):
+    """--project mode: accept the encoded folder name or a real path. With old_sessions, only
+    that project's old single sessions (see old_sessions_plan); active ones are skipped, not
+    refused, so a project in use can be cleaned."""
     projects_root = os.path.join(config_dir, "projects")
     # Treat ".", ".." and anything with a separator (either kind, so "/" counts on
     # Windows too) as a path, never a folder name: encoded project names contain
@@ -690,6 +775,11 @@ def plan_for_named_project(config_dir, name):
     if project is None:
         return None
     info = collect_project(config_dir, project)
+    if old_sessions:
+        plan = old_sessions_plan(config_dir, info, session_days, automation_days)
+        if plan:
+            plan["reasons"] = ["selected by project"] + plan["reasons"]
+        return plan
     if any(s["active"] for s in info["sessions"]):
         print("Error: this project has a session that looks active, refusing.", file=sys.stderr)
         sys.exit(1)
@@ -788,9 +878,15 @@ def print_report(store_groups, temp_paths, log_paths):
                 when = datetime.fromtimestamp(c["last_activity"], tz=timezone.utc).strftime("%Y-%m-%d")
             print(f"\nProject: {c['project']}  (last activity {when or 'unknown'})")
             print(f"Reasons: {'; '.join(c['reasons'])}")
-            for kind, path in c["paths"]:
+            for kind, path in c["paths"][:LISTED_PATHS_PER_PLAN]:
                 print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
-            print(f"  [history.jsonl] {len(c['session_ids'])} matching line(s)")
+            hidden = len(c["paths"]) - LISTED_PATHS_PER_PLAN
+            if hidden > 0:
+                print(f"  ... and {hidden} more path(s), {format_size(c['size'])} in all")
+            entries = history_matches(os.path.join(g["store"]["path"], "history.jsonl"),
+                                      set(c["session_ids"]))
+            if entries:
+                print(f"  [history.jsonl] {entries} entr{'y' if entries == 1 else 'ies'}")
         if store_paths:
             print("\nStale cache and snapshot stores:")
             for kind, path in store_paths:
@@ -823,8 +919,8 @@ def classify_candidate(candidate, config_dir):
     """Classify a wipe candidate as REMOVE (clearly safe), ASK (borderline)
     or KEEP (protect), with a short plain-language reason.
 
-    Used by intelligent mode: REMOVE plans are deleted without further
-    prompting, ASK plans are surfaced one by one for a per-project decision,
+    Used by intelligent mode: REMOVE plans are deleted after one confirmation
+    (or --yes), ASK plans are surfaced one by one for a per-project decision,
     KEEP plans are never deleted.
     """
     # Already protected by active check, so we focus on removal eligibility
@@ -837,6 +933,14 @@ def classify_candidate(candidate, config_dir):
     # "marked done" is explicitly safe
     if "marked done" in reasons:
         return "REMOVE", "explicitly marked as complete"
+
+    # Old single sessions of a project still in use: scripted runs that finished a while ago
+    # are safe; the user's own older conversations are theirs to decide.
+    old = [r for r in reasons if " session(s) older than " in r]
+    if old:
+        if all("automation session(s)" in r for r in old):
+            return "REMOVE", "scripted sessions that finished a while ago"
+        return "ASK", "older conversations in a project still in use"
 
     # "project folder gone" is safe (nothing left to lose)
     if "project folder gone" in reasons:
@@ -865,6 +969,64 @@ def classify_candidate(candidate, config_dir):
     return "KEEP", "insufficient signals to classify as safe removal"
 
 
+# Exit code that tells the launcher to start a claude-lumo session with the agent prompt.
+AGENT_EXIT = 10
+AGENT_PROMPT_FILE = "wipe-agent-prompt.txt"
+AGENT_PROMPT = (
+    "Help me safely wipe as much old local conversation data as I am comfortable with. "
+    "Nothing has been deleted yet. "
+    "1) Look at every location: run `claude-lumo wipe --dry-run`, then "
+    "`claude-lumo wipe --dry-run --days 7 --session-days 2` for more recent leftovers, and `claude-lumo privacy-audit`. "
+    "Cover every Claude data store, temp scratch, Lumo logs and Orca's own copies (terminal "
+    "scrollback, session data, orchestration database under %APPDATA%/orca). "
+    "2) Check each finding beyond the script's rules: is the project folder really gone, is its "
+    "branch pushed or merged, does an open Orca terminal or a running session still use it. "
+    "3) Show me a grouped list with sizes and your recommendation (delete, keep, or ask me), "
+    "and ask which to delete, with a 'delete all recommended' option. "
+    "4) Delete only what I approve: `claude-lumo wipe --project <name> --yes` for a finished "
+    "project, `claude-lumo wipe --project <name> --old-sessions --yes` for the old sessions of a "
+    "project still in use, or "
+    "`--session <id> --yes`. For Orca data, tell me which terminals to close first and delete "
+    "only what I name. Never delete settings, credentials, memory or config, and never this "
+    "session. Temp scratch and Lumo logs: list them and delete only the paths I approve. "
+    "5) Report what was deleted and how much space was freed."
+)
+
+MENU = """
+How do you want to go ahead? Nothing has been deleted.
+  1) Go through it with a claude-lumo agent (recommended): it checks every location,
+     Orca's copies included, and deletes only what you approve
+  2) Delete everything listed above (asks you to confirm)
+  3) Show the commands to do it by hand
+  4) Cancel"""
+
+
+def choose_mode():
+    """Ask how to proceed: 'agent', 'auto', 'manual', or None to cancel (also on no input)."""
+    print(MENU)
+    try:
+        answer = input("Choice [1]: ").strip()
+    except (AttributeError, EOFError, OSError, RuntimeError):
+        return None
+    return {"": "agent", "1": "agent", "2": "auto", "3": "manual"}.get(answer)
+
+
+def start_agent():
+    """Hand over to an agent session. Through the launcher (CLAUDE_LUMO_LAUNCHER=1): leave the
+    prompt where it reads it and exit with AGENT_EXIT. Run directly, no session can start, so
+    say how to get one instead."""
+    if os.environ.get("CLAUDE_LUMO_LAUNCHER") != "1":
+        print("\nRun `claude-lumo wipe` to go through it with an agent. Nothing was deleted.")
+        return
+    state = resolve_state_dir()
+    os.makedirs(state, exist_ok=True)
+    with open(os.path.join(state, AGENT_PROMPT_FILE), "w", encoding="utf-8") as f:
+        f.write(AGENT_PROMPT)
+    print("\nStarting a claude-lumo session to go through it with you. Nothing has "
+          "been deleted.")
+    sys.exit(AGENT_EXIT)
+
+
 def _stdin_is_tty():
     try:
         return sys.stdin.isatty()
@@ -881,23 +1043,38 @@ def main(argv=None):
     parser.add_argument("--allowlist", help="file of project paths; anything outside is a candidate")
     parser.add_argument("--session", help="wipe one session by id")
     parser.add_argument("--project", help="wipe one project by folder name or path")
+    parser.add_argument("--old-sessions", action="store_true",
+                        help="with --project: only its old single sessions, skipping active ones")
+    parser.add_argument("--session-days", type=int, default=SESSION_DAYS,
+                        help=f"single sessions older than this are candidates (default {SESSION_DAYS})")
+    parser.add_argument("--automation-days", type=int, default=AUTOMATION_DAYS,
+                        help="scripted sessions older than this are candidates "
+                             f"(default {AUTOMATION_DAYS})")
     parser.add_argument("--store", action="append", metavar="PATH",
                         help="restrict the wipe to this store (repeatable)")
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
-    parser.add_argument("--mode", choices=["intelligent", "auto", "manual"],
-                        help="deletion mode: intelligent (execute REMOVE, defer ASK), auto (batch delete), manual (show commands only)")
+    parser.add_argument("--mode", choices=["agent", "intelligent", "auto", "manual"],
+                        help="agent (choose how to proceed, default on a terminal), intelligent "
+                             "(classify, confirm REMOVE, ask per borderline item), auto (batch "
+                             "delete after one confirmation), manual (show commands only)")
     args = parser.parse_args(argv)
 
-    # Determine mode: --yes implies auto, pipe implies auto, otherwise interactive/intelligent
+    # Determine mode: --yes and pipes imply auto (which deletes nothing without --yes);
+    # a terminal gets the choice menu. Nothing is ever deleted without a prompt or --yes.
     if args.mode:
         mode = args.mode
     elif args.yes or not _stdin_is_tty():
         mode = "auto"
     else:
-        mode = "intelligent"
+        mode = "agent"
 
-    if args.days < 1:
-        print("Error: --days must be at least 1.", file=sys.stderr)
+    for flag, value in (("--days", args.days), ("--session-days", args.session_days),
+                        ("--automation-days", args.automation_days)):
+        if value < 1:
+            print(f"Error: {flag} must be at least 1.", file=sys.stderr)
+            sys.exit(1)
+    if args.old_sessions and not args.project:
+        print("Error: --old-sessions needs --project.", file=sys.stderr)
         sys.exit(1)
 
     if args.store:
@@ -938,17 +1115,32 @@ def main(argv=None):
         temp_paths, log_paths = [], []
     elif args.project:
         for store in stores:
-            plan = plan_for_named_project(store["path"], args.project)
+            plan = plan_for_named_project(store["path"], args.project, args.old_sessions,
+                                          args.session_days, args.automation_days)
             if plan is not None:
                 plan["store"] = store
                 plans.append(plan)
+        if not plans and args.old_sessions:
+            print(f"No old sessions to wipe in {args.project}.")
+            return
         if not plans:
             print(f"No project matching {args.project} found in any store's projects.")
             sys.exit(1)
         temp_paths, log_paths = [], []
     else:
         for store in stores:
-            plans_for_store = collect_candidates(store["path"], args.days, args.allowlist)
+            plans_for_store = collect_candidates(store["path"], args.days, args.allowlist,
+                                                 args.session_days, args.automation_days)
+            if mode == "auto" and args.yes:
+                # An unattended --yes run never deletes the user's own conversations from a
+                # project still in use; those need --project <name> --old-sessions.
+                kept = [p for p in plans_for_store if not p.get("partial")
+                        or classify_candidate(p, store["path"])[0] == "REMOVE"]
+                for p in plans_for_store:
+                    if p not in kept:
+                        print(f"Skipped with --yes: old sessions in {p['project']} "
+                              f"(use --project {p['project']} --old-sessions).")
+                plans_for_store = kept
             store_paths = stale_config_stores(store["path"], args.days)
             for plan in plans_for_store:
                 plan["store"] = store
@@ -974,6 +1166,15 @@ def main(argv=None):
         print("\nDry run: nothing was deleted. Re-run without --dry-run to delete.")
         return
 
+    if mode == "agent":
+        mode = choose_mode()
+        if mode == "agent":
+            start_agent()
+            return
+        if mode is None:
+            print("Cancelled, nothing was deleted.")
+            return
+
     # Mode-specific execution
     if mode == "manual":
         # Manual mode: show commands, delete nothing
@@ -981,7 +1182,9 @@ def main(argv=None):
         for group in store_groups:
             for plan in group["plans"]:
                 proj = plan.get("project", "unknown")
-                print(f"claude-lumo wipe --project {proj}  # {', '.join(plan.get('reasons', []))}")
+                only_old = " --old-sessions" if plan.get("partial") else ""
+                print(f"claude-lumo wipe --project {proj}{only_old}  "
+                      f"# {', '.join(plan.get('reasons', []))}")
         if temp_paths:
             print("# Temp scratch folders:")
             for _, p in temp_paths:
@@ -994,7 +1197,7 @@ def main(argv=None):
         return
 
     if mode == "intelligent":
-        # Intelligent mode: classify, delete REMOVE automatically, prompt per ASK.
+        # Intelligent mode: classify, confirm once for REMOVE, prompt per ASK.
         deleted, failed, freed = 0, 0, 0
         remove_plans, ask_plans, keep_plans = [], [], []
         deleted_plans = set()  # ids of plans actually deleted
@@ -1035,10 +1238,18 @@ def main(argv=None):
                     print(f"  FAILED: {path} ({err})", file=sys.stderr)
             deleted_plans.add(id(plan))
 
-        # Delete REMOVE plans without global confirm
-        print("--- Auto-deleting REMOVE items ---")
-        for group, plan in remove_plans:
-            delete_plan(group, plan)
+        # REMOVE plans, temp scratch and logs go only after one confirmation (or --yes).
+        # A run that cannot prompt deletes nothing.
+        has_bulk = bool(remove_plans or temp_paths or log_paths)
+        approved = has_bulk and (args.yes or (_stdin_is_tty() and confirm(
+            "Type 'yes' to permanently delete the REMOVE items, temp scratch and logs: ")))
+        if has_bulk and not approved:
+            print("REMOVE items, temp scratch and logs kept: nothing deleted without "
+                  "confirmation.")
+        if approved and remove_plans:
+            print("--- Deleting REMOVE items ---")
+            for group, plan in remove_plans:
+                delete_plan(group, plan)
 
         # Prompt per ASK plan (interactive runs only)
         if ask_plans and _stdin_is_tty():
@@ -1063,9 +1274,9 @@ def main(argv=None):
                 _, reason = plan["_classification"]
                 print(f"  {plan.get('project', 'unknown')}: {reason}")
 
-        # Handle temp/log paths (always delete in intelligent mode)
+        # Temp scratch and logs ride on the same confirmation as the REMOVE items.
         for group in temp_paths, log_paths:
-            if not group:
+            if not group or not approved:
                 continue
             freed += sum(tree_size(p) for _, p in group)
             for path, ok, err in delete_all(group):
