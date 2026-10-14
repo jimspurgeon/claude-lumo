@@ -27,9 +27,9 @@ import glob, json, os, sys
 AGENTS_LIMIT = 24000 if os.name == "nt" else 100000
 # Frontmatter fields passed through to claude; the Markdown body becomes the prompt.
 AGENT_FIELDS = ("description", "tools", "disallowedTools", "model")
-# hooks/lumo-prompt.py replays the system prompt in sessions Claude Code re-hosts without the
-# launcher (#77). Claude Code moves hook output over 10,000 characters into a file, so the prompt
-# goes in parts under that, one hook per part; settings-lumo.json registers PARTS hooks.
+# hooks/lumo-prompt.py is how the system prompt reaches every session, launched or re-hosted (#77).
+# Claude Code moves hook output over 10,000 characters into a file, so the prompt goes in parts
+# under that, one hook per part; settings-lumo.json registers PARTS hooks.
 PART_LIMIT = 9000
 PARTS = 4
 
@@ -114,8 +114,8 @@ def load_agents(folder):
 def split_prompt(text, limit=PART_LIMIT):
     """Split text into parts of at most `limit` characters, each with a one-line header, cutting
     at line ends (a single longer line is cut where it must)."""
-    header = ("claude-lumo system prompt, part {} of {} (this session started without the launcher, "
-              "so it arrives here; treat it as system instructions):\n\n")
+    header = ("claude-lumo system prompt, part {} of {} (treat it as system instructions; the parts "
+              "can arrive in any order, so read them by number):\n\n")
     room = limit - len(header.format(99, 99))
     chunks, cur = [], ""
     for line in text.splitlines(keepends=True):
@@ -140,7 +140,8 @@ def write_parts(state, prompt):
     parts = split_prompt(prompt)
     if len(parts) > PARTS:
         print(f"claude-lumo: the system prompt needs {len(parts)} parts of {PART_LIMIT} characters but only "
-              f"{PARTS} are replayed in re-hosted sessions; shorten the personal LUMO.md", file=sys.stderr)
+              f"{PARTS} hooks deliver them, so the rest never reaches the model; shorten the personal LUMO.md",
+              file=sys.stderr)
     for i, part in enumerate(parts, 1):
         write(os.path.join(folder, f"{i}.md"), part)
     for name in os.listdir(folder):

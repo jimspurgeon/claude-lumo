@@ -125,7 +125,7 @@ class RehostedSessions(unittest.TestCase):
         entry = next(e for e in self.settings()["hooks"]["SessionStart"]
                      if any("lumo-prompt.py" in h["command"] for h in e["hooks"]))
         # Not resume/fork: a resumed transcript already restores the system prompt it was started with.
-        self.assertEqual(entry["matcher"], "startup|clear|compact")
+        self.assertEqual(entry["matcher"], "startup|clear|compact|resume|fork")
 
     def test_parts_stay_under_the_hook_output_cap_and_rebuild_the_prompt(self):
         with open(os.path.join(self.personal, "LUMO.md"), "w", encoding="utf-8") as f:
@@ -156,6 +156,28 @@ class RehostedSessions(unittest.TestCase):
         inherited = run_script("hooks/lumo-prompt.py", [self.state, "1"], {"CLAUDE_LUMO": "1", "CLAUDE_LUMO_WRAPPER": "1"}).stdout
         self.assertEqual(inherited, out)
         self.assertEqual(run_script("hooks/lumo-prompt.py", [self.state, "99"]).stdout, "")
+
+    def test_hook_on_resume_or_fork_only_when_the_transcript_lacks_the_prompt(self):
+        self.settings()
+        part = self.parts()[0]
+        body_line = next(l for l in part.split("\n\n", 1)[1].splitlines() if l.strip()).strip()
+        cases = {
+            "empty": ("", part),
+            "hook output": (json.dumps({"content": part}) + "\n", ""),
+            "pre-#77 appended prompt": (json.dumps({"systemPrompt": "x\n" + body_line + "\ny"}) + "\n", ""),
+        }
+        for name, (content, expected) in cases.items():
+            transcript = os.path.join(self.state, f"t-{len(content)}.jsonl")
+            with open(transcript, "w", encoding="utf-8") as f:
+                f.write(content)
+            for source in ("resume", "fork"):
+                event = json.dumps({"source": source, "transcript_path": transcript})
+                out = run_script("hooks/lumo-prompt.py", [self.state, "1"], stdin=event).stdout
+                self.assertEqual(out, expected, f"{name} / {source}")
+        startup = json.dumps({"source": "startup", "transcript_path": transcript})
+        self.assertEqual(run_script("hooks/lumo-prompt.py", [self.state, "1"], stdin=startup).stdout, part)
+        missing = json.dumps({"source": "resume", "transcript_path": os.path.join(self.state, "nope.jsonl")})
+        self.assertEqual(run_script("hooks/lumo-prompt.py", [self.state, "1"], stdin=missing).stdout, part)
 
     def test_launcher_passes_no_prompt_flag(self):
         with open(os.path.join(HERE, "claude-lumo.sh"), encoding="utf-8") as f:

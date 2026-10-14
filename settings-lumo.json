@@ -55,7 +55,7 @@
         ]
       },
       {
-        "matcher": "startup|clear|compact",
+        "matcher": "startup|clear|compact|resume|fork",
         "hooks": [
           {
             "type": "command",

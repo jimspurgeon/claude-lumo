@@ -306,9 +306,9 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `scripts/resume-shim-setup.sh` | Adds/removes the resume shim profile lines (used by `install.sh --resume-shim` and the uninstaller) |
 | `test-resume-shim.sh` | Resume shim tests: fake transcripts and stub binaries, no real sessions |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
-| `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
+| `LUMO.md` | The system prompt, delivered by `hooks/lumo-prompt.py` at startup and after /clear and /compact: Lumo costs and speed, routing, editing rules |
 | `render.py` | Builds `~/.claude-lumo/settings.json`, `system-prompt.md` and its hook parts (`prompt-parts/`) at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
-| `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; chains to `statusline-next.sh` from your personal additions if present |
+| `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line (`--lumo` forces `[LUMO]`; keep that flag if your personal `settings.json` overrides `statusLine`); chains to `statusline-next.sh` from your personal additions if present |
 | `wipe.py` | Finds and deletes finished conversation data (inactive 30+ days, branch merged/removed, project folder gone): run as `claude-lumo wipe` |
 | `privacy_audit.py` | Reads data safety posture (encryption, cloud sync, stale data volume): run as `claude-lumo privacy-audit` |
 | `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair (splits multi-tool-call chunks that LiteLLM would merge), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
@@ -326,7 +326,7 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 | `hooks/busy-mark.py` | Session registry for the restart offer: writes a per-session busy flag (set on prompt submit, cleared when the turn ends) |
-| `hooks/lumo-prompt.py` | SessionStart hook (startup, clear, compact): the only way the system prompt (LUMO.md plus the personal one) reaches a session, printed in parts under the hook output cap, so a session Claude Code re-hosts after the agents view gets it exactly like a launched one (#77) |
+| `hooks/lumo-prompt.py` | SessionStart hook (startup, clear, compact; on resume and fork only when the transcript lacks the prompt): the only way the system prompt (LUMO.md plus the personal one) reaches a session, printed in parts under the hook output cap, so a session Claude Code re-hosts after the agents view gets it exactly like a launched one (#77) |
 | `scripts/api-key.py` | `apiKeyHelper`: prints the local LiteLLM key, so a re-hosted session still authenticates (#77) |
 | `hooks/session-start-offer.py` | SessionStart hook: offers to wipe old conversations, at most once per day, silent when nothing qualifies |
 | `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |
@@ -399,7 +399,7 @@ write to it or delete it. Everything is optional, and your files win over ours:
 | File | Effect |
 |---|---|
 | `settings.json` | Merged over `settings-lumo.json` at each launch: objects merge key by key, lists are appended (your hooks and permissions add to ours), anything else is replaced. Invalid JSON is skipped with a warning |
-| `LUMO.md` | Appended to the system prompt after this repo's `LUMO.md` (your agent names, project rules) |
+| `LUMO.md` | Added to the system prompt after this repo's `LUMO.md` (your agent names, project rules) |
 | `agents/*.md` | Your own versions of agents, in the usual Claude Code agent format (frontmatter with `name`, `description`, `tools`, `model`, then the prompt). Passed to claude with `--agents`, so in claude-lumo they replace the agents of the same name in `~/.claude/agents`, which stay untouched for plain `claude`. See below |
 | `statusline-next.sh` | Run with the same status-line JSON after `[LUMO]` is printed, for tools that read the status line (for example Orca); its output is ignored |
 
