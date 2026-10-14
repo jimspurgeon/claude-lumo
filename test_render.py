@@ -171,6 +171,7 @@ class RehostedSessions(unittest.TestCase):
             "pre-#77 prompt_snapshot": (attachment("prompt_snapshot", "x\n" + body_line + "\ny"), ""),
             "non-ASCII first line": (attachment("prompt_snapshot", body_line + " é"), ""),
             "only read the source": (read_source, part),
+            "attached as a file": (attachment("file", part), part),
             "bad lines around a snapshot": ("not json\n\"attachment\"\n" + attachment("prompt_snapshot", body_line), ""),
         }
         for n, (name, (content, expected)) in enumerate(cases.items()):
