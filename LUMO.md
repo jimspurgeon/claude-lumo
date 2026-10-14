@@ -61,7 +61,10 @@ Keep only what you need; delete the rest when a project finishes.
 
 - `claude-lumo wipe`: finds finished projects (inactive 30+ days, branch merged/removed,
   project folder gone, or marked done) and permanently deletes their data. Use
-  `--dry-run` first to see exactly what would be removed.
+  `--dry-run` first to see exactly what would be removed. In projects still in use it also
+  lists single old sessions (older than 7 days, or 1 day for scripted `sdk` sessions;
+  `--session-days` and `--automation-days` change this); `--project <name> --old-sessions`
+  deletes just those.
 - `claude-lumo privacy-audit`: reads your data posture (encryption, cloud sync, stale
   data volume) and gives recommendations. Runs occasionally; reads your data, never
   modifies or deletes it, and writes only small rate-limit marker files under ~/.claude-lumo.
@@ -69,10 +72,10 @@ When the wipe offer fires or the user asks for cleanup, the default is to do it
 together in this conversation: run `claude-lumo privacy-audit` (or `claude-lumo wipe
 --dry-run`), then assess beyond the script's classification — unpushed commits, open
 worktrees, terminals still attached, work the heuristics can't see. Recommend per
-project, let the user decide borderline items, then execute with `claude-lumo wipe
---mode intelligent` (or whichever mode the user picks). The script's own modes
-remain: `--mode auto` is the plain batch run, `--mode manual` prints the report for
-doing it by hand.
+project, ask the user which items to delete, then delete only what they approve with
+`claude-lumo wipe --project <name> --yes` or `--session <id> --yes`. Never run a bare
+`claude-lumo wipe --yes` or `--mode intelligent --yes`: those delete every candidate at
+once. Temp scratch and logs: delete only the paths the user approves.
 - Deletion is **logical**, not forensic: SSD wear levelling, backups, cloud sync and
   other tools' copies may still hold the data. State this fact in any wipe output.
 - Orca keeps its own copies of session data in `%APPDATA%/orca`. The wipe command lists

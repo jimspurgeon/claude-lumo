@@ -101,9 +101,29 @@ rm -f "$S/statusline-version.cache"
 echo ""
 if [ -f "$D/install.sh" ]; then
   echo "Re-running the installer so new files and settings take effect..."
-  bash "$D/install.sh" || echo "Warning: installer failed, but checkout to $TARGET already happened."
+  # The target's installer checks out the newest tag when it is older than #100, which undid the
+  # revert. Newer installers keep the checkout with CLAUDE_LUMO_KEEP_CHECKOUT=1; an older one's
+  # `git fetch` fails with GIT_ALLOW_PROTOCOL=none, and its checkout is chained after that fetch.
+  CLAUDE_LUMO_KEEP_CHECKOUT=1 GIT_ALLOW_PROTOCOL=none bash "$D/install.sh" \
+    || echo "Warning: installer failed, but checkout to $TARGET already happened."
 else
   echo "Skipping the installer rerun (install.sh not present in $D)."
+fi
+# Last guard: whatever the installer did, end on the target. An installer that moved the checkout
+# installed from the wrong tree, so check the target out again and rerun its installer in place.
+at_target() { [ "$(git -C "$D" rev-parse HEAD)" = "$(git -C "$D" rev-parse "$TARGET^{commit}")" ]; }
+back_to_target() {
+  git -C "$D" checkout -q "$TARGET" \
+    || { echo "claude-lumo: could not return to $TARGET; run: claude-lumo revert $TARGET" >&2; exit 1; }
+}
+if ! at_target; then
+  back_to_target
+  echo "Note: the installer moved the checkout; $TARGET is checked out again and reinstalled."
+  CLAUDE_LUMO_KEEP_CHECKOUT=1 GIT_ALLOW_PROTOCOL=none bash "$D/install.sh" >/dev/null 2>&1 || true
+  if ! at_target; then
+    back_to_target
+    echo "Warning: $TARGET's installer keeps moving the checkout; some installed files may come from a newer release."
+  fi
 fi
 
 echo "Reverted to $TARGET. Open claude-lumo sessions keep the old files until they are restarted."

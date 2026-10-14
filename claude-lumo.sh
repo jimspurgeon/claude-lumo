@@ -45,7 +45,15 @@ case "$1" in
   wipe|privacy-audit)
     SCRIPT="$D/${1//-/_}.py"
     [ -f "$SCRIPT" ] || { echo "claude-lumo: $SCRIPT not found" >&2; exit 1; }
-    exec "$PY" "$(native "$SCRIPT")" "${@:2}"
+    # Exit 10 means the user chose to go through the results with an agent (#99, #102): the script
+    # left the opening prompt in the state dir, and this launch continues as a session that starts
+    # with it. The script gets the same state dir, as a native path.
+    CLAUDE_LUMO_LAUNCHER=1 CLAUDE_LUMO_STATE_DIR="$(native "$S")" \
+      "$PY" "$(native "$SCRIPT")" "${@:2}"; rc=$?
+    PROMPT_FILE="$S/$1-agent-prompt.txt"
+    [ "$rc" -eq 10 ] || exit "$rc"
+    [ -f "$PROMPT_FILE" ] || { echo "claude-lumo: the agent prompt was not written ($PROMPT_FILE); nothing was deleted." >&2; exit 1; }
+    set -- "$(cat "$PROMPT_FILE")"; rm -f "$PROMPT_FILE"
     ;;
 esac
 up() { curl -s -o /dev/null -m 2 -w '%{http_code}' "$1" 2>/dev/null | grep -q 200; }

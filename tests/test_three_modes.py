@@ -223,23 +223,47 @@ class TestManualMode:
 
 
 class TestIntelligentMode:
-    """Intelligent mode: REMOVE executed, ASK deferred to user, KEEP untouched."""
+    """Intelligent mode: REMOVE after one confirmation, ASK per item, KEEP untouched."""
 
-    def test_intelligent_removes_clearly_safe_without_confirm(
+    def test_intelligent_never_deletes_without_confirmation(
             self, tmp_path, capsys, monkeypatch):
-        """Marked-done project is deleted with no global y/N confirm."""
+        """No terminal and no --yes: even a clearly safe REMOVE item is kept."""
         config_dir = tmp_path
         done = make_marked_done_project(config_dir)
         isolate(monkeypatch, config_dir, tmp_path)
-        # No tty -> ASK prompting skipped, but REMOVE must still execute.
         monkeypatch.setattr(sys, "stdin", io.StringIO())
 
         wipe.main(["--mode", "intelligent"])
 
         out = capsys.readouterr().out
+        assert done.exists()
+        assert "nothing deleted without confirmation" in out
+        assert "DELETED" not in out
+
+    def test_intelligent_deletes_remove_items_after_yes(
+            self, tmp_path, capsys, monkeypatch):
+        config_dir = tmp_path
+        done = make_marked_done_project(config_dir)
+        isolate(monkeypatch, config_dir, tmp_path)
+        monkeypatch.setattr(sys, "stdin", _TTYStdin("yes\n"))
+
+        wipe.main(["--mode", "intelligent"])
+
+        out = capsys.readouterr().out
         assert not done.exists()
-        assert "confirm" not in out.lower()
-        assert "Type 'yes'" not in out
+        assert "Type 'yes'" in out
+
+    def test_intelligent_declined_confirmation_keeps_remove_items(
+            self, tmp_path, capsys, monkeypatch):
+        config_dir = tmp_path
+        done = make_marked_done_project(config_dir)
+        isolate(monkeypatch, config_dir, tmp_path)
+        monkeypatch.setattr(sys, "stdin", _TTYStdin("n\n"))
+
+        wipe.main(["--mode", "intelligent"])
+
+        assert done.exists()
+        assert "DELETED" not in capsys.readouterr().out
 
     def test_intelligent_defers_ask_when_not_tty(self, tmp_path, capsys, monkeypatch):
         """Borderline item survives a non-interactive intelligent run."""
@@ -300,7 +324,7 @@ class TestIntelligentMode:
 
     def test_intelligent_mix_removes_and_defers(
             self, tmp_path, capsys, monkeypatch):
-        """REMOVE deleted, ASK kept on 'n', both reported.
+        """REMOVE deleted after 'yes', ASK kept on 'n', both reported.
 
         done-proj is marked done (REMOVE); merged-proj's branch is merged
         into master (ASK: unpushed work may remain).
@@ -309,7 +333,7 @@ class TestIntelligentMode:
         done = make_marked_done_project(config_dir)
         merged = make_merged_branch_project(config_dir)
         isolate(monkeypatch, config_dir, tmp_path)
-        monkeypatch.setattr(sys, "stdin", _TTYStdin("n\n"))
+        monkeypatch.setattr(sys, "stdin", _TTYStdin("yes\nn\n"))
 
         wipe.main(["--mode", "intelligent"])
 
@@ -321,7 +345,7 @@ class TestIntelligentMode:
 
 
 class TestModeDefaults:
-    """Mode resolution: --yes and pipes imply auto; TTY implies intelligent."""
+    """Mode resolution: --yes and pipes imply auto; a TTY gets the choice menu."""
 
     def test_yes_overrides_tty_to_auto(self, tmp_path, capsys, monkeypatch):
         """--yes on a TTY runs the auto path: everything deleted, no prompts."""
@@ -417,5 +441,96 @@ class TestPrivacyAuditModes:
         assert "Want claude-lumo to help fix these?" not in out
 
 
+class TestPrivacyAuditAgentMenu:
+    """On a terminal the audit ends with a menu whose default is an agent session (#102)."""
+
+    def run(self, tmp_path, monkeypatch, answers, launcher="1"):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        state = tmp_path / "state"
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(state))
+        monkeypatch.setenv("CLAUDE_LUMO_LAUNCHER", launcher)
+        projects = tmp_path / "projects" / "old"
+        projects.mkdir(parents=True)
+        (projects / "s.jsonl").write_text("{}", encoding="utf-8")
+        old = time.time() - 40 * 86400
+        os.utime(str(projects / "s.jsonl"), (old, old))
+        monkeypatch.setattr(sys, "stdin", _TTYStdin(answers))
+        code = None
+        try:
+            privacy_audit.main([])
+        except SystemExit as e:
+            code = e.code
+        return code, state / privacy_audit.AGENT_PROMPT_FILE
+
+    def test_enter_starts_agent(self, tmp_path, monkeypatch, capsys):
+        code, prompt = self.run(tmp_path, monkeypatch, "\n")
+        assert code == privacy_audit.AGENT_EXIT
+        text = prompt.read_text(encoding="utf-8")
+        assert "privacy-audit --mode manual" in text and "Ask me before changing" in text
+        assert "How do you want to go ahead?" in capsys.readouterr().out
+
+    def test_next_steps_and_done_start_nothing(self, tmp_path, monkeypatch, capsys):
+        code, prompt = self.run(tmp_path / "a", monkeypatch, "2\n")
+        assert code is None and not prompt.exists()
+        assert "claude-lumo wipe" in capsys.readouterr().out
+        # "Done" ends the run: no second offer follows (a "y" is queued in case one does).
+        code, prompt = self.run(tmp_path / "b", monkeypatch, "3\ny\n")
+        assert code is None and not prompt.exists()
+        assert "help fix" not in capsys.readouterr().out
+
+    def test_direct_run_explains_instead_of_exiting(self, tmp_path, monkeypatch, capsys):
+        code, prompt = self.run(tmp_path, monkeypatch, "1\n", launcher="0")
+        assert code is None and not prompt.exists()
+        assert "Run `claude-lumo privacy-audit`" in capsys.readouterr().out
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestAgentMenu:
+    """Default on a terminal: a choice menu; nothing is deleted before an answer (1.4.2)."""
+
+    def run(self, tmp_path, monkeypatch, answers, argv=(), launcher="1"):
+        done = make_marked_done_project(tmp_path)
+        isolate(monkeypatch, tmp_path, tmp_path)
+        state = tmp_path / "state"
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(state))
+        monkeypatch.setenv("CLAUDE_LUMO_LAUNCHER", launcher)
+        monkeypatch.setattr(sys, "stdin", _TTYStdin(answers))
+        code = None
+        try:
+            wipe.main(list(argv))
+        except SystemExit as e:
+            code = e.code
+        return done, state / wipe.AGENT_PROMPT_FILE, code
+
+    def test_enter_starts_agent_and_deletes_nothing(self, tmp_path, capsys, monkeypatch):
+        done, prompt, code = self.run(tmp_path, monkeypatch, "\n")
+        assert done.exists()
+        assert code == wipe.AGENT_EXIT
+        text = prompt.read_text(encoding="utf-8")
+        assert "Orca" in text and "only what I approve" in text
+        assert "Nothing has been deleted" in capsys.readouterr().out
+
+    def test_auto_choice_still_asks_for_yes(self, tmp_path, capsys, monkeypatch):
+        done, prompt, _ = self.run(tmp_path, monkeypatch, "2\nno\n")
+        assert done.exists() and not prompt.exists()
+        done2, _, _ = self.run(tmp_path / "b", monkeypatch, "2\nyes\n")
+        assert not done2.exists()
+
+    def test_manual_and_cancel_delete_nothing(self, tmp_path, capsys, monkeypatch):
+        for i, answer in enumerate(("3\n", "4\n", "")):
+            done, prompt, _ = self.run(tmp_path / str(i), monkeypatch, answer)
+            assert done.exists() and not prompt.exists(), answer
+
+    def test_direct_run_explains_instead_of_exiting(self, tmp_path, capsys, monkeypatch):
+        """Run without the launcher, choice 1 cannot start a session: no prompt file, no exit 10."""
+        done, prompt, code = self.run(tmp_path, monkeypatch, "1\n", launcher="0")
+        assert done.exists() and not prompt.exists() and code is None
+        assert "Run `claude-lumo wipe`" in capsys.readouterr().out
+
+    def test_named_project_reaches_the_menu(self, tmp_path, capsys, monkeypatch):
+        done, prompt, _ = self.run(tmp_path, monkeypatch, "4\n", argv=["--project", "done-proj"])
+        assert done.exists() and not prompt.exists()
+        assert "How do you want to go ahead?" in capsys.readouterr().out
