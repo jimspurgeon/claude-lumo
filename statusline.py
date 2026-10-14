@@ -119,7 +119,7 @@ def looks_like_fallback(actual, configured):
 # session so far) between 77K and 84K. That fits window - min(max output, 20000) - 13000 to
 # within a few percent, so the bar can read about 96% when a compaction fires. settings-lumo.json
 # sets 133000, so compaction fires near 100K, below Lumo's 131072-token window for prompt and
-# reply together (the proxy shrinks max_tokens when a long prompt needs room, see sniffer.mjs).
+# reply together (the proxy shrinks max_tokens to fit a long prompt, see context-fit.mjs).
 COMPACT_OUTPUT_RESERVE_CAP = 20000
 COMPACT_BUFFER = 13000
 
