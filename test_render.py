@@ -165,14 +165,19 @@ class RehostedSessions(unittest.TestCase):
             {"type": "attachment", "attachment": {"type": kind, "content": content}}) + "\n"
         read_source = json.dumps({"type": "user", "message": {"content": [
             {"type": "tool_result", "content": "header = (\"claude-lumo system prompt, part {} of {}\"\n" + body_line}]}}) + "\n"
+        hook = attachment("hook_success", part)
+        boundary = json.dumps({"type": "system", "subtype": "compact_boundary"}) + "\n"
         cases = {
             "empty": ("", part),
-            "hook output": (attachment("hook_success", part), ""),
-            "pre-#77 prompt_snapshot": (attachment("prompt_snapshot", "x\n" + body_line + "\ny"), ""),
-            "non-ASCII first line": (attachment("prompt_snapshot", body_line + " é"), ""),
+            "hook output": (hook, ""),
+            "non-ASCII hook output": (attachment("hook_success", part + " é"), ""),
+            # A pre-#77 session had it from a launcher flag that a resume no longer passes.
+            "pre-#77 prompt_snapshot": (attachment("prompt_snapshot", "x\n" + body_line), part),
+            "compacted after the hook": (hook + boundary, part),
+            "hook again after compaction": (hook + boundary + hook, ""),
             "only read the source": (read_source, part),
             "attached as a file": (attachment("file", part), part),
-            "bad lines around a snapshot": ("not json\n\"attachment\"\n" + attachment("prompt_snapshot", body_line), ""),
+            "bad lines around hook output": ("not json\n\"attachment\"\n" + hook, ""),
         }
         for n, (name, (content, expected)) in enumerate(cases.items()):
             transcript = os.path.join(self.state, f"t-{n}.jsonl")

@@ -8,10 +8,11 @@ re-hosts on its own (for example after the agents view) keeps --settings and dro
 flag, so the rules silently vanished after its next /compact. An environment marker cannot tell
 the two cases apart either, since a re-hosting process can inherit the launcher's environment.
 The hook runs on startup, clear and compact. On resume and fork it checks the transcript first
-and stays silent when the prompt is already there, so it is never given twice. Only two kinds of
-record count: this hook's own output (a hook_success attachment) and the prompt_snapshot of a
-session started before this change. A session that merely read LUMO.md or this repo's source,
-or attached it as a file, has the same text elsewhere and must still get the prompt.
+and stays silent when the context Claude Code replays already holds this hook's output (a
+hook_success attachment after the last compact_boundary), so it is never given twice. Anything
+else prints it: text before a compaction is no longer in the context, a session that merely read
+LUMO.md or attached it as a file has not been given it as instructions, and a session started
+before #77 (prompt_snapshot) had it from a launcher flag that a resume no longer passes.
 It prints <state dir>/prompt-parts/<part>.md, which Claude Code adds to the context. render.py
 splits the prompt into parts because Claude Code moves hook output over 10,000 characters into
 a file the model is not made to read. Missing part files print nothing.
@@ -19,46 +20,38 @@ a file the model is not made to read. Missing part files print nothing.
 import json, os, sys
 
 MARKER = "claude-lumo system prompt, part "
-# Attachment types that carry the prompt itself (checked against real transcripts, 2026-10-13).
-PROMPT_ATTACHMENTS = ("hook_success", "prompt_snapshot")
+NEEDLES = (MARKER, json.dumps(MARKER)[1:-1])
 
 
-def first_line(text):
-    """The first non-empty line of the prompt itself (after the part header)."""
-    body = text.split("\n\n", 1)[-1]
-    return next((l.strip() for l in body.splitlines() if l.strip()), "")
-
-
-def already_has_prompt(transcript, text):
-    """True when a prompt-carrying attachment (PROMPT_ATTACHMENTS) holds this hook's output or the
-    prompt's own first line (a session started before #77 carries it as a prompt_snapshot)."""
-    needles = [MARKER]
-    line = first_line(text)
-    if line:
-        needles.append(line)
-    needles += [json.dumps(n, ensure_ascii=False)[1:-1] for n in needles]
+def already_has_prompt(transcript):
+    """True when a hook_success attachment after the last compact_boundary holds this hook's
+    output. A compaction drops everything before it from the context, so it resets the match."""
+    found = False
     try:
         with open(transcript, "rb") as f:
             for raw in f:
-                if b'"attachment"' not in raw:
+                if b'"attachment"' not in raw and b'compact_boundary' not in raw:
                     continue
                 try:
                     record = json.loads(raw)
                 except ValueError:
                     continue
-                if not isinstance(record, dict) or record.get("type") != "attachment":
+                if not isinstance(record, dict):
+                    continue
+                if record.get("type") == "system" and record.get("subtype") == "compact_boundary":
+                    found = False
                     continue
                 attachment = record.get("attachment")
-                if not isinstance(attachment, dict):
+                if record.get("type") != "attachment" or not isinstance(attachment, dict):
                     continue
-                if attachment.get("type") not in PROMPT_ATTACHMENTS:
+                if attachment.get("type") != "hook_success":
                     continue
                 body = json.dumps(attachment, ensure_ascii=False)
-                if any(n in body for n in needles):
-                    return True
+                if any(n in body for n in NEEDLES):
+                    found = True
     except OSError:
         return False
-    return False
+    return found
 
 
 def main():
@@ -78,7 +71,7 @@ def main():
         return 0
     transcript = event.get("transcript_path")
     resumed = event.get("source") in ("resume", "fork")
-    if resumed and transcript and already_has_prompt(transcript, text):
+    if resumed and transcript and already_has_prompt(transcript):
         return 0
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stdout.write(text)
