@@ -351,11 +351,12 @@ class SessionRestartTest(unittest.TestCase):
         self.sessions_dir = os.path.join(self.state_dir, "sessions")
         os.makedirs(self.sessions_dir)
 
-    def write_session(self, sid, cwd, busy, days_old=0):
-        """Write a session registry file."""
+    def write_session(self, sid, cwd, busy, days_old=0, pid=None):
+        """Write a session registry file. pid defaults to this test process (always alive),
+        so the pid-liveness filter in sessions_from_registry does not drop the entry (#123)."""
         updated = datetime.now() - timedelta(days=days_old)
-        record = {"session_id": sid, "cwd": cwd, "pid": 1234, "busy": busy,
-                  "updated": updated.isoformat()}
+        record = {"session_id": sid, "cwd": cwd, "pid": pid if pid is not None else os.getpid(),
+                  "busy": busy, "updated": updated.isoformat()}
         path = os.path.join(self.sessions_dir, f"{sid}.json")
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(record, f, indent=2)
@@ -390,6 +391,21 @@ class SessionRestartTest(unittest.TestCase):
             self.assertIn("cwd", s)
             self.assertIn("busy", s)
             self.assertIn("path", s)
+
+    def test_sessions_from_registry_drops_dead_pids(self):
+        """Entries whose recorded pid no longer exists are skipped (orphaned registry, #123)."""
+        self.write_session("alive", "/tmp/a", True, pid=os.getpid())
+        self.write_session("dead", "/tmp/b", False, pid=999999998)  # no such pid
+        self.write_session("no_pid", "/tmp/c", False, pid=None)  # unverifiable: kept
+        sessions = session_restart.sessions_from_registry(self.state_dir)
+        sids = {s["session_id"] for s in sessions}
+        self.assertEqual(sids, {"alive", "no_pid"})
+
+    def test_is_pid_alive(self):
+        """Own pid alive; nonexistent pid dead; None unverifiable (kept as alive)."""
+        self.assertTrue(session_restart.is_pid_alive(os.getpid()))
+        self.assertFalse(session_restart.is_pid_alive(999999998))
+        self.assertTrue(session_restart.is_pid_alive(None))
 
     def test_wait_until_idle(self):
         """Polls until idle: True; timeout: False."""
