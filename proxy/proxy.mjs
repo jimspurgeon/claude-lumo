@@ -19,7 +19,7 @@ import { addEditHints } from "./edit-hints.mjs";
 import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 import { upstreamChat } from "./sniffer.mjs";
 import { createContextFit } from "./context-fit.mjs";
-import { isWebSearchRequest, webSearchUnavailable } from "./websearch-guard.mjs";
+import { chatResponse, isWebSearchRequest, runLumoSearch, webSearchUnavailable } from "./websearch-guard.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
@@ -118,15 +118,18 @@ const server = http.createServer(async (req, res) => {
   const chunks = []; for await (const c of req) chunks.push(c);
   let body = chunks.length ? Buffer.concat(chunks) : undefined;
   if (body && path.startsWith("/chat")) body = addEditHints(body);
-  // Claude Code's internal WebSearch delegation (web_search_options): Lumo has no search
-  // backend and would answer from training data as if it had searched. Answer it here with
-  // a clear unavailability message instead, so no fabricated sources reach the model (#59).
+  // Claude Code's internal WebSearch delegation (web_search_options): run it on Lumo's own
+  // web search and pass the answer on only when it shows a search ran and cites sources;
+  // otherwise answer with the unavailability message, so no fabricated sources reach the
+  // model (#59, #73; see websearch-guard.mjs).
   if (body && path.startsWith("/chat") && isWebSearchRequest(body)) {
     let model = "-", stream = true; try { const r = JSON.parse(body); model = r.model || model; stream = r.stream ?? true; } catch {}
-    const out = webSearchUnavailable(model, stream);
+    const t0 = Date.now();
+    const { outcome, text } = await runLumoSearch({ body, path, upstream, upstreamChat, log });
     res.writeHead(200, { "content-type": stream ? "text/event-stream" : "application/json" });
-    res.end(out);
-    log(`${path} 200 in=${body.length}B websearch_blocked=1`);
+    res.end(outcome === "ok" ? chatResponse(model, stream, text) : webSearchUnavailable(model, stream));
+    // Only the outcome and sizes are logged, never the query or the answer.
+    log(`${path} 200 in=${body.length}B total=${((Date.now() - t0) / 1000).toFixed(1)}s websearch=${outcome} answer=${text.length}c`);
     return;
   }
   const headers = {}; for (const h of ["content-type", "accept"]) if (req.headers[h]) headers[h] = req.headers[h];
