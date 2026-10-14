@@ -437,6 +437,13 @@ A session/project is a candidate when signals say its project is finished:
 - A `wipe-done` marker file exists in the project folder
 - (Allowlist mode) The project path is NOT in an allowlist file
 
+In a project that is still in use, single old sessions are candidates too: sessions older
+than 7 days, and scripted sessions (entrypoint `sdk-*`, such as automation probes) older
+than 1 day. A session active in the last 6 hours is never picked. Scripted-only plans are
+classed REMOVE, others ASK. Not used in allowlist mode. An unattended `wipe --yes` skips
+the ASK ones (your own conversations) and names the `--project <name> --old-sessions`
+command to delete them.
+
 **Usage:**
 ```bash
 # Dry run: list what would be deleted
@@ -454,6 +461,12 @@ claude-lumo wipe --session <session-id>
 # Wipe all sessions for a project (searched in every store)
 claude-lumo wipe --project <project-name-or-path>
 
+# Wipe only the old sessions of a project still in use (keeps memory and recent sessions)
+claude-lumo wipe --project <project-name-or-path> --old-sessions
+
+# Change the single-session age limits (days, at least 1)
+claude-lumo wipe --session-days 14 --automation-days 2
+
 # Restrict the scan to one or more stores (repeat the flag)
 claude-lumo wipe --store ~/.claude --store ~/.claude-lumo/data
 
@@ -464,26 +477,32 @@ claude-lumo wipe --yes
 claude-lumo wipe --allowlist ~/.claude/allowlist.txt
 ```
 
-The default way to clean up is asking the assistant in a session: assessment in
-conversation, per-project recommendations, then execution. The CLI modes are for
-running the script directly, with `--mode manual` for a self-serve report.
+On a terminal, `claude-lumo wipe` lists everything it found and then asks how to go
+ahead; nothing is deleted before you answer. The default (press Enter) opens a
+claude-lumo session that checks every location with you, Orca's copies included,
+recommends what to remove and deletes only what you approve. The other choices are
+deleting everything listed (after typing `yes`), printing the commands to do it by
+hand, or cancelling.
 
-# Three execution modes
+# Execution modes
 ```bash
-claude-lumo wipe --mode intelligent   # classify, execute REMOVE, prompt ASK (default on TTY)
-claude-lumo wipe --mode auto          # batch delete, --yes implied (default when piped)
+claude-lumo wipe                      # choice menu, agent session by default (on a TTY)
+claude-lumo wipe --mode intelligent   # classify; confirm REMOVE, prompt per ASK
+claude-lumo wipe --mode auto          # one batch after one confirmation (default when piped)
 claude-lumo wipe --mode manual        # list commands, delete nothing
 ```
 
-**Modes:** `--mode` controls how candidates are handled.
-- `intelligent` (default on an interactive TTY): each candidate is classified
+**Modes:** `--mode` controls how candidates are handled. No mode deletes anything
+without a prompt or `--yes`.
+- `agent` (default on an interactive TTY): the choice menu above.
+- `intelligent`: each candidate is classified
   as REMOVE (clearly safe: marked done, explicitly selected, project folder
   gone/empty, or purely inactive), ASK (borderline: branch merged or removed,
-  outside allowlist, or multiple mixed signals) or KEEP. REMOVE items are
-  deleted without a global confirm, ASK items get a per-item `y/N` prompt,
-  KEEP items are only reported.
-- `auto` (default with `--yes` or when stdin is not a TTY): current
-  behavior — one batch after a single confirmation. A non-interactive run
+  outside allowlist, or multiple mixed signals) or KEEP. REMOVE items, temp
+  scratch and logs are deleted after one confirmation, ASK items get a per-item
+  `y/N` prompt, KEEP items are only reported. Without a terminal and without
+  `--yes` it deletes nothing.
+- `auto` (default with `--yes` or when stdin is not a TTY): one batch after a single confirmation. A non-interactive run
   without `--yes` prints guidance and deletes nothing (it never prompts or
   hangs).
 - `manual`: plain-language report with the exact `claude-lumo wipe` command
@@ -550,9 +569,10 @@ claude-lumo privacy-audit --suggest
 claude-lumo privacy-audit --days 60
 ```
 
-# Three execution modes
+# Execution modes
 ```bash
-claude-lumo privacy-audit --mode intelligent  # show next step for medium/high findings (default on TTY)
+claude-lumo privacy-audit                     # findings, then a choice menu (agent session by default, on a TTY)
+claude-lumo privacy-audit --mode intelligent  # show next step for medium/high findings
 claude-lumo privacy-audit --mode auto         # current behavior, no new prompts (default when piped)
 claude-lumo privacy-audit --mode manual       # list commands for every finding
 ```
@@ -568,7 +588,11 @@ claude-lumo privacy-audit --mode manual       # list commands for every finding
 - Orca data presence (report-only with manual cleanup steps)
 
 **Modes:** `--mode` controls how findings are presented.
-- `intelligent` (default on an interactive TTY): show the recommended next
+- `agent` (default on an interactive TTY): after the findings, a menu. The
+  default (Enter) opens a claude-lumo session that explains each finding and
+  helps fix it, changing nothing without your OK; the others show the
+  recommended next steps or finish.
+- `intelligent`: show the recommended next
   step for medium/high severity findings.
 - `auto` (default when stdin is not a TTY): current behavior — the optional
   interactive offer to help fix findings, or a summary if piped.

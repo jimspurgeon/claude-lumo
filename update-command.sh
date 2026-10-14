@@ -67,7 +67,8 @@ rm -f "$S/update-notice.txt" "$S/statusline-version.cache"
 echo ""
 if [ -f "$D/install.sh" ]; then
   echo "Re-running the installer so new files and settings take effect..."
-  bash "$D/install.sh" || echo "Warning: installer failed, but checkout to $LATEST already happened."
+  CLAUDE_LUMO_KEEP_CHECKOUT=1 bash "$D/install.sh" \
+    || echo "Warning: installer failed, but checkout to $LATEST already happened."
 else
   echo "Skipping the installer rerun (install.sh not present in $D)."
 fi

@@ -363,6 +363,52 @@ def offer_help(findings, days):
         print("claude-lumo: ask your running assistant to walk through the manual steps.")
 
 
+# Exit code that tells the launcher to start a claude-lumo session with the agent prompt (#99).
+AGENT_EXIT = 10
+AGENT_PROMPT_FILE = "privacy-audit-agent-prompt.txt"
+AGENT_PROMPT = (
+    "Help me address the findings of the claude-lumo privacy audit. "
+    "1) Run `claude-lumo privacy-audit --mode manual` to see every finding and its suggested step. "
+    "2) Explain each finding in plain words, say how much it matters, and recommend what to do. "
+    "3) Ask me before changing anything: settings, disk encryption, backups, sync folders. "
+    "4) For stale conversations, run `claude-lumo wipe --dry-run`, check every location (Orca's "
+    "copies included), and delete only what I approve with `claude-lumo wipe --project <name> "
+    "--yes` or `--session <id> --yes`. Never delete settings, credentials, memory or config, and "
+    "never this session. 5) Finish with what changed and what is left."
+)
+
+AUDIT_MENU = """
+How do you want to go ahead?
+  1) Go through the findings with a claude-lumo agent (recommended): it explains each one
+     and helps fix it, changing nothing without your OK
+  2) Show the recommended next steps
+  3) Done"""
+
+
+def choose_audit_mode():
+    """Ask how to act on the findings: 'agent', 'manual', or None (also on no input)."""
+    print(AUDIT_MENU)
+    try:
+        answer = input("Choice [1]: ").strip()
+    except (AttributeError, EOFError, OSError, RuntimeError):
+        return None
+    return {"": "agent", "1": "agent", "2": "manual"}.get(answer)
+
+
+def start_audit_agent():
+    """Through the launcher (CLAUDE_LUMO_LAUNCHER=1): leave the prompt where it reads it and
+    exit with AGENT_EXIT. Run directly, no session can start, so say how to get one."""
+    if os.environ.get("CLAUDE_LUMO_LAUNCHER") != "1":
+        print("\nRun `claude-lumo privacy-audit` to go through the findings with an agent.")
+        return
+    state = os.environ.get("CLAUDE_LUMO_STATE_DIR") or os.path.expanduser("~/.claude-lumo")
+    os.makedirs(state, exist_ok=True)
+    with open(os.path.join(state, AGENT_PROMPT_FILE), "w", encoding="utf-8") as f:
+        f.write(AGENT_PROMPT)
+    print("\nStarting a claude-lumo session to go through the findings with you.")
+    sys.exit(AGENT_EXIT)
+
+
 def _stdin_is_tty():
     try:
         return sys.stdin.isatty()
@@ -401,15 +447,16 @@ def main(argv=None):
         help="Weekly rate-limited suggestion to run privacy audit (quiet mode)")
     parser.add_argument("--days", type=int, default=30,
         help="Staleness threshold in days (default: 30)")
-    parser.add_argument("--mode", choices=["intelligent", "auto", "manual"],
-        help="how to act on findings: intelligent (recommended next step), "
-             "auto (current behavior), manual (commands for every finding)")
+    parser.add_argument("--mode", choices=["agent", "intelligent", "auto", "manual"],
+        help="how to act on findings: agent (choice menu, default on a terminal), intelligent "
+             "(recommended next step), auto (offer help on a terminal), manual (commands for "
+             "every finding)")
     args = parser.parse_args(argv)
 
     if args.mode:
         mode = args.mode
     elif _stdin_is_tty():
-        mode = "intelligent"
+        mode = "agent"
     else:
         mode = "auto"
 
@@ -572,6 +619,14 @@ def main(argv=None):
         pass
 
     # Act on findings per mode. Non-interactive runs never prompt.
+    if mode == "agent":
+        mode = choose_audit_mode() if findings else None
+        if mode == "agent":
+            start_audit_agent()
+            return
+        if mode != "manual":
+            # Done, cancel, EOF or no findings: the menu was the offer; ask nothing more.
+            return
     if mode == "manual":
         # Commands and plain-language steps for every finding; nothing executed.
         print("\n=== Manual mode: recommended next steps ===")
