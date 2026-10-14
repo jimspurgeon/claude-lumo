@@ -110,5 +110,8 @@ fi
 # wins over it and makes Claude Code warn that both are set (#86), and an inherited one would send
 # the wrong credential to LiteLLM, so both variables are cleared.
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
-export CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
+# The release this session starts on: the status line asks for a restart once the install moves
+# past it (#35). A re-hosted session loses it and simply shows no hint.
+CLAUDE_LUMO_SESSION_VERSION=$(git -C "$D" describe --tags --exact-match HEAD 2>/dev/null || true)
+export CLAUDE_LUMO_SESSION_VERSION CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
 exec claude --settings "$S/settings.json" "${AGENTS[@]}" "$@"
