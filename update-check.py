@@ -1,12 +1,13 @@
 """Silent periodic update check for claude-lumo.
 
 Checks whether a newer release tag (v*) exists on the remote. Runs in the background from
-the launcher so it never delays startup, and never prints anything: on success or failure
+the launcher so it never delays startup, and about once an hour from the status line so a
+long-running session hears of a release too (#120). It never prints anything: on success or failure
 it just exits 0. If a newer release exists, it writes a one-line notice to
 <state-dir>/update-notice.txt, which the status line then shows until the next update.
 
 Env knobs (the last two exist so tests can point elsewhere):
-    CLAUDE_LUMO_UPDATE_CHECK: 0/false/no disables the check entirely.
+    CLAUDE_LUMO_UPDATE_CHECK: 0 disables the check entirely.
     CLAUDE_LUMO_UPDATE_CHECK_INTERVAL: hours between checks (default 24).
     CLAUDE_LUMO_UPDATE_REMOTE: git URL or path of the remote to ask (default: this repo).
     CLAUDE_LUMO_STATE_DIR: state directory (default ~/.claude-lumo).
@@ -46,7 +47,8 @@ def interval_hours():
 
 
 def disabled():
-    return os.environ.get("CLAUDE_LUMO_UPDATE_CHECK", "").lower() in ("0", "false", "no")
+    """Only "0" turns the check off, the same switch as claude-lumo.sh and statusline.py (#120)."""
+    return os.environ.get("CLAUDE_LUMO_UPDATE_CHECK") == "0"
 
 
 def load_state(state_file):

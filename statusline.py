@@ -46,7 +46,76 @@ def install_version():
         os.replace(tmp, cache)  # atomic: a concurrent reader never sees a truncated file
     except OSError:
         pass
+    if tag.startswith("v"):  # a dev checkout is never offered an update, so skip the check
+        start_update_check(now)
     return tag
+
+
+UPDATE_CHECK_EVERY = 3600  # seconds between spawns, shared by every statusline (#120)
+SPAWN_LOCK_STALE = 60  # a lock older than this was left by a statusline that died
+
+
+def spawn_detached(argv):
+    """Start argv with no stdio and detached, so the redraw neither waits for it nor shows it."""
+    kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+          "close_fds": True}
+    if os.name == "nt":
+        kw["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kw["start_new_session"] = True
+    subprocess.Popen(argv, **kw)
+
+
+def start_update_check(now=None):
+    """Fire and forget update-check.py, at most once an hour across all statuslines (#120).
+
+    The launcher runs the check only at startup, so a long-running session never learned of a new
+    release. This rides on install_version()'s hourly refresh; the check itself rate-limits the
+    network call (update-check-state.json) and writes update-notice.txt, which a later redraw
+    shows. A lock directory (mkdir is atomic) plus a timestamp file keep concurrent statuslines
+    from spawning it together. Respects CLAUDE_LUMO_UPDATE_CHECK=0. True when it spawned."""
+    if os.environ.get("CLAUDE_LUMO_UPDATE_CHECK") == "0":  # the launcher's and README's switch
+        return False
+    here = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(here, "update-check.py")
+    if not os.path.isfile(script):
+        return False
+    now = now if now is not None else datetime.now().timestamp()
+    stamp = os.path.join(STATE_DIR, "update-check-spawn.stamp")
+    lock = stamp + ".lock"
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        os.mkdir(lock)
+    except FileExistsError:
+        try:
+            if now - os.path.getmtime(lock) <= SPAWN_LOCK_STALE:
+                return False  # a concurrent statusline holds it
+            # Left by a statusline that died: clear it and claim it in this same refresh. Two
+            # clearing it at once can both spawn; update-check.py's own rate limit absorbs that.
+            os.rmdir(lock)
+            os.mkdir(lock)
+        except OSError:
+            return False
+    except OSError:
+        return False
+    try:
+        try:
+            if now - os.path.getmtime(stamp) < UPDATE_CHECK_EVERY:
+                return False
+        except OSError:
+            pass  # no stamp yet
+        with open(stamp, "w", encoding="utf-8"):
+            pass
+        os.utime(stamp, (now, now))
+        spawn_detached([sys.executable, script, here])
+        return True
+    except Exception:  # noqa: BLE001 - the status line must never fail because of the update check
+        return False
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
 
 
 TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024  # read only the tail; transcripts grow unboundedly
@@ -219,6 +288,7 @@ started = os.environ.get("CLAUDE_LUMO_SESSION_VERSION", "")
 restart_txt = ""
 if LUMO and started and ver and ver != "dev" and started != ver:
     restart_txt = f"  \x1b[33mrestart to load {ver}\x1b[0m"
+    ver_txt = f"  {started}"  # the version slot names what this session runs, not the install (#117)
 if LUMO:
     sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} via local proxy{pct}{ver_txt}{restart_txt}  (Claude: run `claude`)")
 else:

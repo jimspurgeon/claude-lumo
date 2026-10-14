@@ -5,14 +5,24 @@ is a tty). It reads the session registry written by hooks/busy-mark.py: one JSON
 session at <state>/sessions/<session_id>.json with fields session_id, cwd, pid, busy,
 updated. <state> is CLAUDE_LUMO_STATE_DIR or ~/.claude-lumo.
 
-Per session the user chooses on the terminal that ran `claude-lumo update`:
-- w: wait until the session is idle (its busy flag becomes false), then restart it.
-- i: interrupt it now, then restart it.
-- s (default, also plain Enter): skip.
+The user first makes one choice for all restartable sessions (#118), on the terminal that ran
+`claude-lumo update`:
+- w: wait until each session is idle (its busy flag becomes false), then restart it.
+- i: interrupt every session now, then restart it.
+- o: choose one by one, with the per-session prompt below.
+- s (default, also plain Enter): skip all.
+
+The per-session prompt offers w (wait until idle), i (interrupt now) and s (skip, the default).
 
 Restart means: stop the session (/exit), start `claude-lumo --resume <session id>` in the
 same terminal and folder, then, if it was interrupted mid-task, send a one-line note that
 it was restarted for an update followed by "continue".
+
+After "wait for all" or "interrupt all" the proxy and LiteLLM are restarted too, once every
+other session is back cleanly (none timed out, failed or was out of reach), through
+service_restart.py (#119); interrupted sessions get their "continue" only after that, so it
+does not die in the restart. The session that ran the update goes last.
+With no other sessions the user is asked whether to restart the two services.
 
 Sessions whose registry entry is older than 7 days are treated as stale and pruned.
 The session that ran the update (env CLAUDE_CODE_SESSION_ID) is never restarted
@@ -24,6 +34,7 @@ pane's current path). Without either, the exact per-session resume command is pr
 """
 import argparse
 import glob
+import importlib
 import json
 import os
 import shutil
@@ -33,6 +44,7 @@ import time
 from datetime import datetime, timedelta
 
 STALE_AFTER = timedelta(days=7)
+CONTINUE_NOTE = "(restarted for a claude-lumo update) continue"
 
 
 def state_dir():
@@ -189,12 +201,12 @@ def send_tmux_command(pane_id, text, enter=False, interrupt=False):
         return False
 
 
-def restart_in_terminal(send, session_id, choice, registry_path):
+def restart_in_terminal(send, session_id, choice, registry_path, note=True):
     """Restart one session through a controller's send(text, enter, interrupt).
 
     choice "w": wait until idle first. choice "i": interrupt now. Both then exit the old
     session, relaunch with `claude-lumo --resume` and, if interrupted mid-task, send a
-    note and "continue". Returns (ok, message).
+    note and "continue" (note=False leaves that to the caller, #119). Returns (ok, message).
     """
     interrupted = choice == "i"
     if choice == "w" and not wait_until_idle(registry_path):
@@ -208,8 +220,8 @@ def restart_in_terminal(send, session_id, choice, registry_path):
     if not send(f"claude-lumo --resume {session_id}", enter=True):
         return False, "could not relaunch the session"
     time.sleep(3)
-    if interrupted:
-        send("(restarted for a claude-lumo update) continue", enter=True)
+    if interrupted and note:
+        send(CONTINUE_NOTE, enter=True)
     return True, "restarted"
 
 
@@ -224,6 +236,93 @@ def ask_choice(question):
         return "s"
 
 
+BULK_CHOICES = ("w", "i", "o", "s")
+
+
+def choose_bulk(count, ask=None, out=None):
+    """One up-front choice for all `count` restartable sessions (#118): 'w' wait for all, 'i'
+    interrupt all, 'o' one by one, 's' skip all (the default, and the answer without a tty)."""
+    ask, out = ask or ask_choice, out or print
+    choice = ask(f"Restart {count} session{'s' if count != 1 else ''}? [w]ait for all to go idle, "
+                 f"[i]nterrupt all now, choose [o]ne by one, [s]kip all (default s): ")
+    if choice not in BULK_CHOICES:
+        out("Unknown choice; skipping all.")
+        return "s"
+    return choice
+
+
+def session_choice(bulk, session_id, ask=None):
+    """The w/i/s choice for one session under the bulk choice: 'o' asks per session (#118)."""
+    if bulk in ("w", "i", "s"):
+        return bulk
+    ask = ask or ask_choice
+    return ask(f"  Restart {short_sid(session_id)}? [w]ait until idle, "
+               f"[i]nterrupt now, [s]kip (default s): ")
+
+
+def restart_sessions(restartable, matches, bulk, make_send, ask=None, restart=None, out=None):
+    """Restart each session under the bulk choice; make_send(target) builds its controller's
+    send(). Returns [(session, choice, ok, send)] for the sessions that were not skipped.
+
+    Under "interrupt all" the continue note is held back: restart_services_after() sends it once
+    the proxy and LiteLLM are back, so the resumed turn does not die in their restart (#119)."""
+    restart, out = restart or restart_in_terminal, out or print
+    results = []
+    for s in restartable:
+        choice = session_choice(bulk, s["session_id"], ask)
+        if choice not in ("w", "i", "s"):
+            out("  Unknown choice; skipping.")
+            continue
+        if choice == "s":
+            continue
+        send = make_send(matches[s["session_id"]])
+        ok, msg = restart(send, s["session_id"], choice, s["path"], note=bulk != "i")
+        out(f"  {'Restarted' if ok else 'Could not restart'} {short_sid(s['session_id'])}: {msg}.")
+        results.append((s, choice, ok, send))
+    return results
+
+
+def load_service_restart():
+    """service_restart.py from this install, or None when it is missing (trimmed clones)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        return importlib.import_module("service_restart")
+    except ImportError:
+        return None
+
+
+def manual_service_hint():
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "service_restart.py")
+    return (f"The proxy and LiteLLM still run the old release; once no session is mid-task, restart "
+            f"them with: python \"{script}\"")
+
+
+def restart_services_after(results, restart_services, out=None, unmatched=0):
+    """After "wait for all" or "interrupt all" (#119): restart the proxy and LiteLLM now that the
+    other sessions run the new release, then send the continue notes held back for interrupted
+    sessions. The session that ran the update goes last, after this. True when both came back.
+
+    Only when every session restarted cleanly: a session that timed out waiting, failed to
+    restart or could not be reached (`unmatched`) may still be mid-turn on the old services, so
+    they are left running and the manual command is printed instead."""
+    out = out or print
+    out("")
+    if unmatched or not all(ok for _, _, ok, _ in results):
+        out("Not every session restarted cleanly, so the proxy and LiteLLM were left running "
+            "(restarting them could cut off a session that is still using them).")
+        out(manual_service_hint())
+        ok = False
+    else:
+        out("Restarting the proxy and LiteLLM so they run the new release:")
+        ok = restart_services(out=out)
+    for s, choice, restarted, send in results:
+        if choice == "i" and restarted:
+            send(CONTINUE_NOTE, enter=True)
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description="Offer to restart running claude-lumo sessions.")
     parser.add_argument("--new-version", required=True, help="new version tag, e.g. v1.3.0")
@@ -235,9 +334,19 @@ def main():
     self_sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
     sessions = sessions_from_registry(sdir, exclude_self=self_sid)
     controller = choose_controller(args.controller)
+    services = load_service_restart()
+    services_restarted = False
 
     if not sessions:
         print("No other running claude-lumo sessions found.")
+        if services and args.dry_run:
+            print("  [dry run] if you agree to restart the proxy and LiteLLM:")
+            services.restart_services(dry_run=True)
+        elif services and ask_choice(f"Restart the proxy and LiteLLM so they run {args.new_version}? "
+                                     f"[y]es, [s]kip (default s): ") == "y":
+            services_restarted = services.restart_services()
+        elif services:
+            print(manual_service_hint())
     else:
         orca_cmd = os.environ.get("CLAUDE_LUMO_ORCA_CMD", "orca")
         if controller == "orca":
@@ -256,33 +365,41 @@ def main():
             print(f"Session {short_sid(s['session_id'])} in {s['cwd']} ({state}, {where})")
         print()
 
+        restartable = []
         for s in sessions:
             target = matches.get(s["session_id"])
             if not target:
                 print(f"  Session {short_sid(s['session_id'])}: I cannot restart it myself (no {controller} "
                       f"match); run `claude-lumo --resume {s['session_id']}` in its terminal.")
-                continue
-            if args.dry_run:
+            elif args.dry_run:
                 print(f"  [dry run] would restart {short_sid(s['session_id'])} via {controller} {target}")
-                continue
-            choice = ask_choice(f"  Restart {short_sid(s['session_id'])}? [w]ait until idle, "
-                                f"[i]nterrupt now, [s]kip (default s): ")
-            if choice not in ("w", "i", "s"):
-                print("  Unknown choice; skipping.")
-                continue
-            if choice == "s":
-                continue
-
-            if controller == "orca":
-                send = lambda text, enter=False, interrupt=False: send_orca_command(
-                    orca_cmd, target, text, enter, interrupt)
             else:
-                send = lambda text, enter=False, interrupt=False: send_tmux_command(
-                    target, text, enter, interrupt)
-            ok, msg = restart_in_terminal(send, s["session_id"], choice, s["path"])
-            print(f"  {'Restarted' if ok else 'Could not restart'} {short_sid(s['session_id'])}: {msg}.")
+                restartable.append(s)
+        if services and args.dry_run:
+            print("  [dry run] after \"wait for all\" or \"interrupt all\", the proxy and LiteLLM restart:")
+            services.restart_services(dry_run=True)
+        bulk = choose_bulk(len(restartable)) if restartable else "s"
 
-    if self_sid:
+        def make_send(target):
+            if controller == "orca":
+                return lambda text, enter=False, interrupt=False: send_orca_command(
+                    orca_cmd, target, text, enter, interrupt)
+            return lambda text, enter=False, interrupt=False: send_tmux_command(
+                target, text, enter, interrupt)
+
+        results = restart_sessions(restartable, matches, bulk, make_send)
+        if services and bulk in ("w", "i"):
+            services_restarted = restart_services_after(results, services.restart_services,
+                                                        unmatched=len(sessions) - len(restartable))
+        elif services and not args.dry_run:
+            print(manual_service_hint())
+
+    if self_sid and services_restarted:
+        print()
+        print(f"The proxy and LiteLLM now run {args.new_version}, but this session (the one that ran "
+              f"the update) still runs the old files. Restart it last: exit it, then run "
+              f"`claude-lumo --resume {self_sid}`.")
+    elif self_sid:
         print(f"Finally, restart the session that ran the update (this one) last: "
               f"claude-lumo --resume {self_sid}")
     return 0

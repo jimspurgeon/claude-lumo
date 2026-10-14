@@ -31,6 +31,20 @@ class RestartNotice(unittest.TestCase):
     def test_shown_when_the_install_moved_on(self):
         self.assertIn("restart to load v1.4.1", render("v1.4.1", "v1.4.0"))
 
+    def test_version_slot_shows_the_session_release_not_the_install(self):
+        # The session started on v1.4.0 and still runs it; v1.4.1 is only installed (#117).
+        out = render("v1.4.1", "v1.4.0")
+        self.assertIn("v1.4.0", out)
+        self.assertIn("restart to load v1.4.1", out)
+        self.assertEqual(out.count("v1.4.1"), 1, out)
+
+    def test_version_slot_falls_back_to_the_install_when_the_session_is_unknown(self):
+        for started in ("", None):
+            self.assertIn("v1.4.1", render("v1.4.1", started))
+        out = render("dev", "v1.4.0")
+        self.assertIn("dev", out)
+        self.assertNotIn("v1.4.0", out)
+
     def test_hidden_when_versions_match_or_are_unknown(self):
         for installed, started in (("v1.4.1", "v1.4.1"), ("v1.4.1", ""), ("v1.4.1", None),
                                    ("dev", "v1.4.0"), ("", "v1.4.0")):

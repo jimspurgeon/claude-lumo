@@ -218,7 +218,8 @@ class RehostedSessions(unittest.TestCase):
         self.assertEqual(run_script("scripts/api-key.py", [self.state]).stdout, "sk-lumo-test\n")
 
     def test_statusline_flag_shows_lumo_without_the_env(self):
-        env = {"CLAUDE_LUMO_STATE_DIR": self.state, "CLAUDE_LUMO_LOCAL": self.personal}
+        env = {"CLAUDE_LUMO_STATE_DIR": self.state, "CLAUDE_LUMO_LOCAL": self.personal,
+               "CLAUDE_LUMO_UPDATE_CHECK": "0"}  # no real update check from a test (#120)
         self.assertIn("[LUMO]", run_script("statusline.py", ["--lumo"], env).stdout)
         self.assertIn("[CLAUDE]", run_script("statusline.py", [], env).stdout)
 

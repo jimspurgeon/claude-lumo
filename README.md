@@ -24,8 +24,9 @@ The status line always shows which one you are on: `[CLAUDE] Opus 5.5` or `[LUMO
   Lumo's 131072-token window by cutting `max_tokens` instead of failing.
 - **Update lifecycle.** `claude-lumo update` and `claude-lumo revert` switch between
   release tags, with guards against losing local changes. Each launch runs a silent
-  daily check for a newer release; the status line shows a one-line notice until you
-  update. Open sessions are offered restarts, one at a time, never without your
+  daily check for a newer release, and the status line repeats it about hourly for
+  long-running sessions; it shows a one-line notice until you update. Open sessions,
+  and then the proxy and LiteLLM, are offered restarts, never without your
   confirmation.
 - **Data hygiene.** `claude-lumo wipe` finds and deletes finished conversation data
   across every Claude data store on the machine. `claude-lumo privacy-audit` reports
@@ -135,10 +136,26 @@ claude-lumo revert last       # the release before the installed one
 ```
 
 All three check out a release tag, re-run the installer so changed wiring takes
-effect, and offer to restart open sessions (wait until idle, interrupt now, or skip,
-default skip) when Orca or tmux can drive their terminals; otherwise they print the
-exact `claude-lumo --resume` command. Nothing is ever restarted without your
-confirmation, and your data in `~/.claude` and `~/.claude-lumo` is never touched.
+effect, and offer to restart open sessions when Orca or tmux can drive their
+terminals. One question covers all of them: wait for each to go idle, interrupt all
+now, choose one by one (wait until idle, interrupt now, or skip, per session), or skip
+all (the default). For sessions they cannot reach they print the exact
+`claude-lumo --resume` command. Nothing is ever restarted without your confirmation,
+and your data in `~/.claude` and `~/.claude-lumo` is never touched.
+
+The proxy and LiteLLM also keep running the old release's code. After "wait for all"
+or "interrupt all", once every other session is back cleanly (none timed out, failed
+or was out of reach), they are restarted too: the processes listening on ports 8790
+and 4000 are found (`netstat`, or `ss` on Linux without it, `lsof` on macOS) and
+stopped only if they are Lumo's own (a `litellm` process on 4000; a `node` or
+`python` process only if the service's health check also answers, so a hung service
+is left for you to stop), started the way the launcher does, and checked for health.
+Interrupted sessions get their "continue" only after that. The session that ran the
+update goes last: restart it yourself with the `claude-lumo --resume` command it
+prints. With no other sessions running you are asked whether to restart the two
+services; otherwise the command for later is printed:
+`python ~/.claude/lumo/service_restart.py` (add `--dry-run` to see the plan). A step
+that fails prints the manual command and the rest carries on.
 
 Guards: they refuse when `~/.claude/lumo` has local changes (keep personal changes in
 `~/.claude/lumo-local`, see below), when it is not at a release tag (development
@@ -149,13 +166,18 @@ run.
 
 `update` also shows what changed since the installed version. After an update or
 revert, the status line's update notice and version cache are cleared, and a session
-that started on the older release shows `restart to load vX` in yellow: it still runs
-the old files until you restart it.
+that started on the older release shows its own version followed by `restart to load
+vX` in yellow (for example `v1.4.2  restart to load v1.4.4`): it still runs the old
+files until you restart it.
 
 **Background update check.** Each launch silently checks for a newer release (at most
 once a day, 5 second timeout, nothing leaves your machine except release-tag requests
-to this repo's remote). When a newer release exists, the status line shows a one-line
-notice, once per version, until you update or 7 days pass. Disable with
+to this repo's remote). A session that stays open for days still hears about a
+release: about once an hour the status line starts the same check in the background
+(one spawn shared by all open sessions, never on the redraw itself, and only for an
+install at a release tag), and the notice appears on a later redraw. When a newer
+release exists, the status line shows a one-line notice, once per version, until you
+update or 7 days pass. Disable with
 `CLAUDE_LUMO_UPDATE_CHECK=0`; set the interval with
 `CLAUDE_LUMO_UPDATE_CHECK_INTERVAL` (hours, default 24).
 
@@ -470,8 +492,9 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | `uninstall.sh` / `uninstall.ps1` | Remove everything claude-lumo added; plain `claude` untouched |
 | `claude-lumo.sh` | Launcher: starts proxy and LiteLLM if down, then runs Claude Code; subcommands run `update-command.sh` / `revert-command.sh` / `wipe.py` / `privacy_audit.py` |
 | `update-command.sh` / `revert-command.sh` | Release switching, installer re-run, session restart offers |
-| `update-check.py` | Silent background check for a newer release; writes the status-line notice |
-| `session-restart.py` | After an update: finds running sessions, offers restarts via Orca or tmux |
+| `update-check.py` | Silent background check for a newer release, at launch and about hourly from the status line; writes the status-line notice |
+| `session-restart.py` | After an update: finds running sessions, offers one choice for all of them (wait for all / interrupt all / one by one / skip all) and restarts them via Orca or tmux |
+| `service_restart.py` | Restarts the proxy and LiteLLM so they run the new release (after "wait for all" / "interrupt all", or by hand; `--dry-run` prints the plan) |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, hooks. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch |
 | `LUMO.md` | System prompt content, delivered by `hooks/lumo-prompt.py` at startup and after /clear and /compact |
 | `render.py` | Builds `~/.claude-lumo/settings.json`, `system-prompt.md` and `agents.json` at each launch, merging personal additions over ours. Tests: `python test_render.py` |
