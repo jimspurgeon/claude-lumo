@@ -217,6 +217,8 @@ def estimate_stale_size(config_dir, days=30):
         if mtimes and max(mtimes) < cutoff:
             stale_count += 1
             for name in os.listdir(folder):
+                if name == "memory":
+                    continue  # a wipe keeps per-project memory (#36), so it frees nothing here
                 path = os.path.join(folder, name)
                 if os.path.isfile(path):
                     total += os.path.getsize(path)
@@ -234,7 +236,8 @@ def estimate_stale_size(config_dir, days=30):
 def check_update_status():
     """Compare installed version to latest release."""
     try:
-        repo = os.path.join(os.path.dirname(os.path.dirname(__file__)))
+        # privacy_audit.py sits at the top of the claude-lumo checkout (its parent is ~/.claude).
+        repo = os.path.dirname(os.path.abspath(__file__))
         if not os.path.isdir(os.path.join(repo, ".git")):
             return None, None, None
 

@@ -234,6 +234,20 @@ class TestMigrateSessions(unittest.TestCase):
         self.assertEqual(uuid, "lumo-session")
         self.assertEqual(Path(proj_path), project_a)
 
+    def test_find_lumo_sessions_ignores_a_nested_mention(self):
+        """A Claude transcript that only quotes "model":"lumo- inside a value stays Claude (#29)."""
+        project = self.shared_projects / "project-q"
+        project.mkdir()
+        (project / "quoted.jsonl").write_text(
+            '{"type":"user","toolUseResult":{"model":"lumo-max"}}\n'
+            '{"type":"assistant","message":{"model":"claude-opus-5-5"}}\n'
+        )
+        (project / "real.jsonl").write_text(
+            '{"type":"assistant","message":{"model":"lumo-max","content":[]}}\n'
+        )
+        lumo = separate_data.find_lumo_sessions(str(self.shared_projects))
+        self.assertEqual({uuid for _, uuid in lumo}, {"real"})
+
     def test_dry_run_prints_plan_no_move(self):
         """--dry-run prints plan without moving files."""
         # Create lumo session
@@ -583,8 +597,9 @@ class TestSetupIdempotency(unittest.TestCase):
 
         # Break the dst link by pointing it at a vanished target: replace the
         # link with one to a now-deleted path.
-        os.rmdir(str(self.data / "rules")) if os.path.isdir(str(self.data / "rules")) \
-            else os.remove(str(self.data / "rules"))
+        # remove_link handles a Windows junction and a POSIX symlink alike (os.rmdir refuses a
+        # symlink on Linux).
+        self.assertTrue(separate_data.remove_link(str(self.data / "rules")))
         vanished = Path(self.tmpdir.name) / "vanished"
         vanished.mkdir()
         separate_data.make_link(str(vanished), str(self.data / "rules"))

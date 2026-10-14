@@ -118,6 +118,9 @@ def last_activity(project):
 
 
 def detect_stale(project, config_dir, days, allowlist):
+    # No sessions left (for example only memory/, which a wipe keeps): nothing to offer.
+    if not project["sessions"]:
+        return False
     if any(session_is_active(project, config_dir, s["id"], s["mtime"]) for s in project["sessions"]):
         return False
 
@@ -161,7 +164,8 @@ def main():
         return
 
     config_dir = resolve_config_dir()
-    marker = os.path.join(os.path.expanduser("~/.claude-lumo"), MARKER_NAME)
+    state_dir = os.environ.get("CLAUDE_LUMO_STATE_DIR") or os.path.expanduser("~/.claude-lumo")
+    marker = os.path.join(state_dir, MARKER_NAME)
 
     if rate_limited(marker):
         output = {"hookSpecificOutput": {"hookEventName": "SessionStart"}}

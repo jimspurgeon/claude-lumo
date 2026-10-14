@@ -143,6 +143,20 @@ class TestTreeSizeLinks:
         assert tree_size(str(outer)) == 10
 
 
+@pytest.fixture(autouse=True)
+def isolated_scan_roots(tmp_path, monkeypatch):
+    """Every test scans fixture folders only, never the real ~/.claude,
+    ~/.claude-lumo, temp folder or Orca data (#40)."""
+    import wipe
+    roots = tmp_path / "isolated"
+    monkeypatch.setenv("CLAUDE_LUMO_SCAN_ROOT", str(roots / "home"))
+    monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(roots / "state"))
+    monkeypatch.setenv("CLAUDE_CODE_TMPDIR", str(roots / "temp"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setattr(wipe, "resolve_orca_dir", lambda: str(roots / "orca"))
+    return roots
+
+
 def make_store(root, name="store"):
     """Fixture store: old transcript, history.jsonl and session-env marker."""
     store = root / name
@@ -218,8 +232,8 @@ class TestResolveKnownStores:
         (home / ".claude").mkdir()
         env_store = home / "custom"
         env_store.mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_SCAN_ROOT", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(home / ".claude-lumo"))
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
         result = resolve_known_stores()
         assert result[0][1] == "env"
@@ -233,8 +247,8 @@ class TestResolveKnownStores:
         home.mkdir()
         claude_dir = home / ".claude"
         claude_dir.mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_SCAN_ROOT", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(home / ".claude-lumo"))
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
         origins = [origin for _, origin in resolve_known_stores()]
         # The env path wins; the identical default path is deduped away.
@@ -244,8 +258,8 @@ class TestResolveKnownStores:
         home = tmp_path / "home"
         home.mkdir()
         (home / ".claude").mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_SCAN_ROOT", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(home / ".claude-lumo"))
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / "missing"))
         # ~/.claude-lumo/data does not exist either: only ~/.claude survives
         origins = [origin for _, origin in resolve_known_stores()]
@@ -257,8 +271,8 @@ class TestResolveKnownStores:
         home.mkdir()
         legacy = home / ".claude-lumo" / "config"
         legacy.mkdir(parents=True)
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_SCAN_ROOT", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(home / ".claude-lumo"))
         monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
         origins = [origin for _, origin in resolve_known_stores()]
         assert "legacy" in origins
@@ -307,8 +321,8 @@ class TestDiscoverStores:
         home = tmp_path / "home"
         home.mkdir()
         env_store = make_store(home, "env-store")
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_SCAN_ROOT", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(home / ".claude-lumo"))
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
         import wipe
         monkeypatch.setattr(wipe, "walk_home_for_stores", lambda home=None, max_depth=4: [])
@@ -320,8 +334,8 @@ class TestDiscoverStores:
         home = tmp_path / "home"
         home.mkdir()
         env_store = make_store(home, "env-store")
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_SCAN_ROOT", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(home / ".claude-lumo"))
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_store))
         import wipe
         monkeypatch.setattr(wipe, "walk_home_for_stores",
@@ -334,8 +348,8 @@ class TestDiscoverStores:
         home = tmp_path / "home"
         home.mkdir()
         stray = make_store(home, "stray")
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_SCAN_ROOT", str(home))
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(home / ".claude-lumo"))
         monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
         import wipe
         monkeypatch.setattr(wipe, "walk_home_for_stores", lambda home=None, max_depth=4: [str(stray)])
@@ -743,7 +757,7 @@ class TestStaleTempScratch:
 class TestStaleLumoLogs:
     """Tests for stale_lumo_logs function."""
 
-    def test_stale_log_files(self, tmp_path):
+    def test_stale_log_files(self, tmp_path, monkeypatch):
         lumo_state = tmp_path
         old_time = time.time() - 40 * 86400
         for name in ("app.log", "debug.log", "recent.log"):
@@ -752,20 +766,9 @@ class TestStaleLumoLogs:
             mtime = old_time if name != "recent.log" else time.time()
             os.utime(str(log), (mtime, mtime))
 
-        # Monkeypatch the expanduser to use tmp_path
-        import wipe
-        original_expanduser = os.path.expanduser
-        def mock_expanduser(path):
-            if path == "~/.claude-lumo":
-                return str(lumo_state)
-            return original_expanduser(path)
-        os.path.expanduser = mock_expanduser
-
-        try:
-            result = stale_lumo_logs(30)
-            assert len([r for r in result if r[0] == "lumo-log"]) == 2
-        finally:
-            os.path.expanduser = original_expanduser
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(lumo_state))
+        result = stale_lumo_logs(30)
+        assert len([r for r in result if r[0] == "lumo-log"]) == 2
 
 
 class TestStaleConfigStores:
@@ -1599,6 +1602,16 @@ class TestEstimateStaleSize:
         assert stale_count == 1
         assert stale_size == 10000
 
+    def test_memory_not_counted(self, tmp_path):
+        # A wipe keeps projects/<project>/memory/ (#36), so it frees none of that space.
+        old_project = tmp_path / "projects" / "old"
+        (old_project / "memory").mkdir(parents=True)
+        old_mtime = time.time() - 40 * 86400
+        (old_project / "s.jsonl").write_text("x" * 100)
+        os.utime(str(old_project / "s.jsonl"), (old_mtime, old_mtime))
+        (old_project / "memory" / "note.md").write_text("m" * 5000)
+        assert estimate_stale_size(str(tmp_path), 30) == (1, 100)
+
     def test_no_projects(self, tmp_path):
         stale_count, stale_size = estimate_stale_size(str(tmp_path), 30)
         assert stale_count == 0
@@ -1689,6 +1702,14 @@ class TestHookProbeCwd:
 
 class TestHookDetectStale:
     """Tests for hook detect_stale function."""
+
+    def test_no_sessions_not_stale(self, tmp_path):
+        # A project with only memory/ left has nothing a wipe would delete.
+        project = tmp_path / "projects" / "memory-only"
+        (project / "memory").mkdir(parents=True)
+        proj_info = {"name": "memory-only", "folder": str(project), "sessions": []}
+        assert detect_stale(proj_info, str(tmp_path), 30, None) is False
+        assert detect_stale(proj_info, str(tmp_path), 30, ["/allowed"]) is False
 
     def test_detect_inactive(self, tmp_path):
         config_dir = tmp_path
@@ -2246,6 +2267,117 @@ class TestEmptyDiscovery:
         assert exc_info.value.code == 1
         assert "no Claude data stores found" in capsys.readouterr().err
 
+
+class TestProjectMemoryPreserved:
+    """projects/<project>/memory/ survives a project wipe (#36)."""
+
+    def _project_with_memory(self, store):
+        project = store / "projects" / "proj-1"
+        (project / "session-1").mkdir()
+        memory = project / "memory"
+        memory.mkdir()
+        (memory / "MEMORY.md").write_text("- a note\n", encoding="utf-8")
+        return project, memory
+
+    def test_plan_excludes_memory(self, tmp_path):
+        store = make_store(tmp_path)
+        project, memory = self._project_with_memory(store)
+        info = collect_project(str(store), "proj-1")
+        paths, session_ids = project_wipe_plan(str(store), info)
+        targets = {os.path.normcase(p) for _, p in paths}
+        assert os.path.normcase(str(memory)) not in targets
+        assert os.path.normcase(str(project)) not in targets
+        assert os.path.normcase(str(project / "session-1.jsonl")) in targets
+        assert os.path.normcase(str(project / "session-1")) in targets
+        assert session_ids == {"session-1"}
+
+    def test_auto_wipe_keeps_memory(self, tmp_path, capsys):
+        import wipe
+        store = make_store(tmp_path)
+        project, memory = self._project_with_memory(store)
+        wipe.main(["--store", str(store), "--yes"])
+        assert (memory / "MEMORY.md").read_text(encoding="utf-8") == "- a note\n"
+        assert not (project / "session-1.jsonl").exists()
+        assert not (project / "session-1").exists()
+        assert not (store / "session-env" / "session-1").exists()
+
+    def test_named_project_keeps_memory(self, tmp_path):
+        import wipe
+        store = make_store(tmp_path)
+        _, memory = self._project_with_memory(store)
+        wipe.main(["--store", str(store), "--project", "proj-1", "--yes"])
+        assert (memory / "MEMORY.md").exists()
+
+    def test_memory_only_project_not_a_candidate(self, tmp_path):
+        store = tmp_path / "store"
+        (store / "projects" / "proj-1" / "memory").mkdir(parents=True)
+        assert collect_candidates(str(store), 30, None) == []
+
+
+class TestPromptWithoutStdin:
+    """No stdin at all (pythonw): prompts decline instead of crashing (#38)."""
+
+    def test_confirm_declines(self, monkeypatch):
+        import wipe
+        monkeypatch.setattr(sys, "stdin", None)
+        assert wipe.confirm() is False
+
+    def test_main_runs(self, tmp_path, monkeypatch, capsys):
+        import wipe
+        store = make_store(tmp_path)
+        monkeypatch.setattr(sys, "stdin", None)
+        wipe.main(["--store", str(store), "--dry-run"])
+        assert "Dry run" in capsys.readouterr().out
+
+
+class TestScanRootOverride:
+    """CLAUDE_LUMO_SCAN_ROOT and CLAUDE_LUMO_STATE_DIR steer discovery (#40)."""
+
+    def test_dry_run_scans_only_the_scan_root(self, isolated_scan_roots, capsys):
+        import wipe
+        home = isolated_scan_roots / "home"
+        home.mkdir(parents=True)
+        fixture = make_store(home, ".claude")
+        wipe.main(["--dry-run"])
+        out = capsys.readouterr().out
+        assert str(fixture) in out
+        real = os.path.join(os.path.expanduser("~"), ".claude")
+        assert os.path.normcase(real) not in os.path.normcase(out)
+
+    def test_defaults_follow_overrides(self, isolated_scan_roots):
+        home = isolated_scan_roots / "home"
+        state = isolated_scan_roots / "state"
+        (state / "data").mkdir(parents=True)
+        stray = make_store(home, "stray")
+        assert resolve_config_dir() == str(home / ".claude")
+        assert walk_home_for_stores() == [str(stray)]
+        known = resolve_known_stores()
+        assert [o for _, o in known] == ["separate"]
+        assert os.path.normcase(known[0][0]) \
+            == os.path.normcase(os.path.realpath(str(state / "data")))
+
+
+
+class TestAuditUpdateRepo:
+    """check_update_status must look at the claude-lumo checkout, not its parent (~/.claude)."""
+
+    def test_runs_git_in_its_own_checkout(self, monkeypatch):
+        import privacy_audit
+        seen = []
+
+        class Done:
+            returncode = 1
+            stdout = ""
+
+        def fake_run(cmd, **kwargs):
+            seen.append(cmd[2])
+            return Done()
+
+        monkeypatch.setattr(privacy_audit.subprocess, "run", fake_run)
+        monkeypatch.setattr(privacy_audit.os.path, "isdir", lambda p: True)
+        privacy_audit.check_update_status()
+        own = os.path.dirname(os.path.abspath(privacy_audit.__file__))
+        assert seen and all(os.path.normcase(p) == os.path.normcase(own) for p in seen)
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

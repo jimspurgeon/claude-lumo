@@ -3,7 +3,7 @@
 # `claude`; only the model backend changes. Chain: Claude Code -> LiteLLM :4000 (Anthropic
 # format) -> lumo proxy :8790 -> Lumo. Plain `claude` is untouched.
 # Works on Windows (Git Bash), macOS and Linux.
-D="$HOME/.claude/lumo"; PROXY="$HOME/.claude/lumo/proxy"; S="$HOME/.claude-lumo"; VENV="$S/litellm-venv"
+D="$HOME/.claude/lumo"; PROXY="$HOME/.claude/lumo/proxy"; S="${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}"; VENV="$S/litellm-venv"
 # Optional personal additions, kept outside this repo (see README, "Personal additions").
 LOCAL="${CLAUDE_LUMO_LOCAL:-$HOME/.claude/lumo-local}"
 
@@ -106,6 +106,12 @@ fi
 # and none of the other flags (#77), so the settings carry the same values (env, apiKeyHelper), and
 # the system prompt comes only from hooks/lumo-prompt.py (SessionStart on startup, clear and
 # compact), never from a flag: that way a re-hosted session gets it exactly like a launched one,
-# and it can never arrive twice.
-export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
+# and it is never missing. The key comes only from apiKeyHelper: a token in the environment
+# wins over it and makes Claude Code warn that both are set (#86), and an inherited one would send
+# the wrong credential to LiteLLM, so both variables are cleared.
+unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+# The release this session starts on: the status line asks for a restart once the install moves
+# past it (#35). A re-hosted session loses it and simply shows no hint.
+CLAUDE_LUMO_SESSION_VERSION=$(git -C "$D" describe --tags --exact-match HEAD 2>/dev/null || true)
+export CLAUDE_LUMO_SESSION_VERSION CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
 exec claude --settings "$S/settings.json" "${AGENTS[@]}" "$@"

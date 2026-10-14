@@ -213,8 +213,14 @@ else:
 pct = context_text(d.get("context_window") or {}, lumo=LUMO)
 ver = install_version()
 ver_txt = f"  {ver}" if ver else ""  # tag already starts with 'v'; 'dev' has no prefix
+# The launcher records the release the session started on; once the install has moved to another
+# release, this session still runs the old files until it is restarted (#35).
+started = os.environ.get("CLAUDE_LUMO_SESSION_VERSION", "")
+restart_txt = ""
+if LUMO and started and ver and ver != "dev" and started != ver:
+    restart_txt = f"  \x1b[33mrestart to load {ver}\x1b[0m"
 if LUMO:
-    sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} via local proxy{pct}{ver_txt}  (Claude: run `claude`)")
+    sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} via local proxy{pct}{ver_txt}{restart_txt}  (Claude: run `claude`)")
 else:
     sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {shown}{pct}{ver_txt}  (Lumo: run `claude-lumo`)")
 sys.stdout.flush()

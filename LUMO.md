@@ -63,7 +63,8 @@ Keep only what you need; delete the rest when a project finishes.
   project folder gone, or marked done) and permanently deletes their data. Use
   `--dry-run` first to see exactly what would be removed.
 - `claude-lumo privacy-audit`: reads your data posture (encryption, cloud sync, stale
-  data volume) and gives recommendations. Runs occasionally, never changes anything.
+  data volume) and gives recommendations. Runs occasionally; reads your data, never
+  modifies or deletes it, and writes only small rate-limit marker files under ~/.claude-lumo.
 When the wipe offer fires or the user asks for cleanup, the default is to do it
 together in this conversation: run `claude-lumo privacy-audit` (or `claude-lumo wipe
 --dry-run`), then assess beyond the script's classification — unpushed commits, open

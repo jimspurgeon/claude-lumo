@@ -61,6 +61,8 @@ test("toLumoSearchRequest swaps web_search_options for Lumo's web_search tool", 
   assert.equal(d.messages.length, 2);
   assert.match(d.messages[0].content, /^Today's date is 2026-10-13\. Use the web_search tool/);
   assert.match(d.messages[0].content, /Sources:/);
+  // A bare summary read as thin; the report lists each result (user report, 2026-10-13).
+  assert.match(d.messages[0].content, /list each relevant result with its headline/);
   assert.match(d.messages[0].content, /You are an assistant for performing a web search tool use$/);
   assert.equal(d.messages[1].content, cap6.messages[1].content);
   assert.equal(isWebSearchRequest(JSON.stringify(d)), false, "the rewritten request is not caught again");

@@ -2,11 +2,12 @@
 # One project path per line (absolute or relative, as you would type it in a shell)
 # Blank lines and lines starting with # are ignored.
 #
-# When this file exists at ~/.claude/allowlist.txt (or ~/.claude-lumo/allowlist.txt
-# when CLAUDE_CONFIG_DIR is set), only projects OUTSIDE this list are candidates.
-# Projects ON the list are never wiped automatically.
-# The session-start offer hook reads this file by itself; for `claude-lumo wipe`
-# pass it explicitly with --allowlist (or set WIPE_ALLOWLIST for the hook).
+# The file does nothing by being present, except for the session-start offer hook:
+# the hook reads <config dir>/allowlist.txt by itself (~/.claude/allowlist.txt, or
+# $CLAUDE_CONFIG_DIR/allowlist.txt when that is set; WIPE_ALLOWLIST overrides the path)
+# and only offers a wipe for projects OUTSIDE the list.
+# `claude-lumo wipe` uses an allowlist only when you pass it: --allowlist <file>.
+# In that mode only projects OUTSIDE the list are candidates; projects ON it are kept.
 #
 # Examples:
 # C:/Users/Jim/orca/claude-lumo

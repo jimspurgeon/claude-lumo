@@ -11,7 +11,8 @@ a done marker exists, or (allowlist mode) the project is outside the allowlist f
 
 Stores enumerated: projects/<project>/<session>.jsonl and folders, session-env/, file-history/,
 tasks/, history.jsonl (matching lines only), Lumo state logs, temp scratch (claude-* under
-CLAUDE_CODE_TMPDIR or TEMP). Settings, credentials, memory and config are never touched.
+CLAUDE_CODE_TMPDIR or TEMP). Settings, credentials, memory and config are never touched:
+a project wipe keeps projects/<project>/memory/ and deletes the rest of that project folder.
 Orca data is report-only: the wipe output lists what Orca keeps and how to clear it by hand.
 
 Link safety: directory links (junctions or symlinks) are never deleted through and never
@@ -19,6 +20,10 @@ followed during collection. Any target that resolves outside its owning store is
 
 Deletion is permanent but logical, not forensic: SSD wear levelling, backups, cloud sync and
 other tools may still hold copies.
+
+Scan roots: CLAUDE_LUMO_SCAN_ROOT (default: the home folder) is where the store scan looks
+for ~/.claude and walks for other stores; CLAUDE_LUMO_STATE_DIR (default ~/.claude-lumo) holds
+the Lumo logs and the separate data store. Tests point both at fixture folders.
 
 Usage:
     wipe.py [--dry-run] [--days N] [--store PATH] [--allowlist FILE]
@@ -43,11 +48,26 @@ from datetime import datetime, timezone
 ACTIVE_SECONDS = 6 * 3600
 GIT_TIMEOUT = 5
 
+# Per-project memory notes (projects/<project>/memory/) survive every wipe mode.
+PROJECT_MEMORY_DIR = "memory"
+
+
+def resolve_scan_root():
+    """Home folder the store scan starts from: CLAUDE_LUMO_SCAN_ROOT if set, else ~."""
+    env_dir = os.environ.get("CLAUDE_LUMO_SCAN_ROOT")
+    return os.path.abspath(os.path.expanduser(env_dir or "~"))
+
+
+def resolve_state_dir():
+    """Lumo state folder: CLAUDE_LUMO_STATE_DIR if set, else ~/.claude-lumo."""
+    env_dir = os.environ.get("CLAUDE_LUMO_STATE_DIR")
+    return os.path.abspath(os.path.expanduser(env_dir or "~/.claude-lumo"))
+
 
 def resolve_config_dir():
-    """Data store root: CLAUDE_CONFIG_DIR if set, else ~/.claude."""
+    """Data store root: CLAUDE_CONFIG_DIR if set, else <scan root>/.claude."""
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-    root = os.path.expanduser(env_dir) if env_dir else os.path.expanduser("~/.claude")
+    root = os.path.expanduser(env_dir) if env_dir else os.path.join(resolve_scan_root(), ".claude")
     return os.path.abspath(root)
 
 
@@ -120,9 +140,10 @@ def resolve_known_stores():
     env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
     if env_dir:
         candidates.append((os.path.expanduser(env_dir), "env"))
-    candidates.append((os.path.expanduser("~/.claude"), "default"))
-    candidates.append((os.path.expanduser("~/.claude-lumo/data"), "separate"))
-    legacy = os.path.expanduser("~/.claude-lumo/config")
+    candidates.append((os.path.join(resolve_scan_root(), ".claude"), "default"))
+    state_dir = resolve_state_dir()
+    candidates.append((os.path.join(state_dir, "data"), "separate"))
+    legacy = os.path.join(state_dir, "config")
     if os.path.isdir(legacy):
         candidates.append((legacy, "legacy"))
     out = []
@@ -190,7 +211,7 @@ def walk_home_for_stores(home=None, max_depth=4):
     Never descends into a link (junction loops would hang) or an accepted
     store; depth is capped at max_depth levels below home."""
     if home is None:
-        home = os.path.expanduser("~")
+        home = resolve_scan_root()
     found = []
 
     def visit(dir_path, depth):
@@ -450,9 +471,19 @@ def session_paths(config_dir, session_id, base_dir=None):
 
 
 def project_wipe_plan(config_dir, project_info):
-    """Paths and history changes to delete for a whole project."""
+    """Paths and history changes to delete for a whole project. The project's
+    memory/ folder is never deleted: everything beside it goes instead."""
     folder = project_info["folder"]
-    paths = [] if not os.path.exists(folder) else [("project", folder)]
+    paths = []
+    if os.path.lexists(os.path.join(folder, PROJECT_MEMORY_DIR)):
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            names = []
+        paths = [("project", os.path.join(folder, name)) for name in names
+                 if os.path.normcase(name) != os.path.normcase(PROJECT_MEMORY_DIR)]
+    elif os.path.exists(folder):
+        paths = [("project", folder)]
     session_ids = set()
     for s in project_info["sessions"]:
         session_ids.add(s["id"])
@@ -505,7 +536,7 @@ def stale_temp_scratch(temp_dir, days):
 
 def stale_lumo_logs(days):
     """Top-level log files in the Lumo state folder, older than the cutoff."""
-    lumo_state = os.path.expanduser("~/.claude-lumo")
+    lumo_state = resolve_state_dir()
     if not os.path.isdir(lumo_state):
         return []
     cutoff = time.time() - days * 86400
@@ -580,6 +611,8 @@ def collect_candidates(config_dir, days, allowlist_path):
         reasons = detect_reasons(info, config_dir, days, allowlist)
         if reasons:
             paths, session_ids = project_wipe_plan(config_dir, info)
+            if not paths and not session_ids:
+                continue  # only memory/ is left: nothing to wipe
             size = sum(tree_size(p) for _, p in paths)
             candidates.append({
                 "project": project,
@@ -780,7 +813,8 @@ def print_report(store_groups, temp_paths, log_paths):
 def confirm(prompt="Type 'yes' to permanently delete: "):
     try:
         answer = input(prompt)
-    except EOFError:
+    except (AttributeError, EOFError, OSError, RuntimeError):
+        # RuntimeError: input() with sys.stdin None ("lost sys.stdin", pythonw).
         return False
     return answer.strip().lower() == "yes"
 
@@ -857,7 +891,7 @@ def main(argv=None):
     # Determine mode: --yes implies auto, pipe implies auto, otherwise interactive/intelligent
     if args.mode:
         mode = args.mode
-    elif args.yes or not sys.stdin.isatty():
+    elif args.yes or not _stdin_is_tty():
         mode = "auto"
     else:
         mode = "intelligent"

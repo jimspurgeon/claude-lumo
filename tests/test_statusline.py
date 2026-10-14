@@ -23,10 +23,29 @@ def temp_state_dir():
 
 @pytest.fixture
 def statusline_module_path():
-    """Return the path to statusline.py in the worktree."""
-    # Get the directory containing this test file, then go up one level
-    test_dir = Path(__file__).parent.resolve()
-    return str(test_dir.parent / "statusline.py")
+    """Path to a copy of statusline.py inside a throwaway, untagged git worktree.
+
+    install_version() asks git about the directory statusline.py lives in, so running the real
+    file would make these tests depend on whether the real clone's HEAD is tagged: every release
+    checkout would fail them (#87). The copy lives in a linked worktree, so .git is a pointer file
+    as in an Orca worktree.
+    """
+    src = Path(__file__).parent.parent.resolve() / "statusline.py"
+    base = tempfile.mkdtemp(prefix="untagged-repo-")
+    repo, wt = os.path.join(base, "repo"), os.path.join(base, "wt")
+    git = ["git", "-c", "user.email=test@test.com", "-c", "user.name=Test",
+           "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
+    try:
+        os.makedirs(repo)
+        shutil.copy(src, os.path.join(repo, "statusline.py"))
+        subprocess.run(git + ["init", "-q", repo], check=True, capture_output=True)
+        subprocess.run(git + ["-C", repo, "add", "."], check=True, capture_output=True)
+        subprocess.run(git + ["-C", repo, "commit", "-q", "-m", "initial"], check=True, capture_output=True)
+        subprocess.run(git + ["-C", repo, "worktree", "add", "-q", "--detach", wt],
+                       check=True, capture_output=True)
+        yield os.path.join(wt, "statusline.py")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def run_install_version(state_dir: str, module_path: str) -> str:

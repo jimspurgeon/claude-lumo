@@ -149,12 +149,26 @@ def find_lumo_sessions(projects_dir):
             try:
                 with open(jsonl, encoding="utf-8", errors="ignore") as f:
                     for line in f:
-                        if '"model":"lumo-' in line:
+                        if '"model":"lumo-' in line and line_has_lumo_model(line):
                             lumo.add((str(proj_dir), jsonl.stem))
                             break
             except OSError:
                 pass
     return lumo
+
+
+def line_has_lumo_model(line):
+    """True when the record itself names a lumo model (its own "model" or its message's), not
+    when the text merely appears inside a nested value such as a tool result (#29)."""
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return False
+    if not isinstance(record, dict):
+        return False
+    message = record.get("message")
+    models = [record.get("model"), message.get("model") if isinstance(message, dict) else None]
+    return any(isinstance(m, str) and m.startswith("lumo-") for m in models)
 
 
 def find_session_dirs(project_dir, session_id):

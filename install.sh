@@ -22,7 +22,7 @@ for _arg in "$@"; do
 done
 
 REPO_URL="https://github.com/jimspurgeon/claude-lumo"
-D="$HOME/.claude/lumo"; S="$HOME/.claude-lumo"; VENV="$S/litellm-venv"
+D="$HOME/.claude/lumo"; S="${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}"; VENV="$S/litellm-venv"
 
 PY="python"
 command -v "$PY" >/dev/null 2>&1 || PY="python3"
@@ -177,8 +177,8 @@ if [ "${1:-}" = "--separate-data" ]; then
     echo "  - Shared items linked from ~/.claude (CLAUDE.md, settings.json, skills, agents, ...)"
     echo ""
     echo "Migrate existing Lumo sessions with:"
-    echo "  python $S/scripts/separate_data.py migrate --dry-run  # preview"
-    echo "  python $S/scripts/separate_data.py migrate          # execute"
+    echo "  $PY \"$D/scripts/separate_data.py\" migrate --config-dir \"$S/data\" --dry-run  # preview"
+    echo "  $PY \"$D/scripts/separate_data.py\" migrate --config-dir \"$S/data\"            # execute"
   else
     echo "Warning: setup failed; CLAUDE_CONFIG_DIR will not be set on next launch" >&2
   fi
@@ -193,7 +193,7 @@ fi
 # Idempotent: only added if missing; a backup of settings.json is taken first. Skip on plain
 # installs where claude-lumo is the only client (the hook is already in settings-lumo.json).
 if [ "${CLAUDE_LUMO_PLAIN_OFFER:-0}" = "1" ] && [ -f "$HOME/.claude/settings.json" ]; then
-  OFFER_CMD="python \"$D/hooks/session-start-offer.py\""
+  OFFER_CMD="$PY \"$D/hooks/session-start-offer.py\""
   if ! grep -q "session-start-offer.py" "$HOME/.claude/settings.json" 2>/dev/null; then
     cp "$HOME/.claude/settings.json" "$HOME/.claude/settings.json.bak-wipe-offer"
     "$PY" - "$HOME/.claude/settings.json" "$OFFER_CMD" <<'EOF'

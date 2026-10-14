@@ -41,7 +41,10 @@ export const LUMO_SEARCH_TOOLS = [{ name: "web_search" }];
 
 const searchInstruction = (today) =>
   `Today's date is ${today}. Use the web_search tool to search the web for the query below `
-  + "and answer from what the results say. List every source URL you used, one per line, "
+  + "and report what the results say. The reader cannot see the results, only your report, so "
+  + "do not just summarise: list each relevant result with its headline or title, its date when "
+  + "shown, and its key facts, covering every distinct relevant result the search returned. "
+  + "Then list every source URL you used, one per line, "
   + "under a 'Sources:' heading. If the search finds nothing useful, say so plainly; never "
   + "invent a result or a source.";
 

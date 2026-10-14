@@ -2,16 +2,20 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta
 from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# On Windows a bare "bash" resolves to System32's WSL launcher before PATH is searched (#91).
+BASH = shutil.which("bash") or "bash"
 sys.path.insert(0, HERE)
 
 # Load session-restart.py dynamically (dash in filename prevents normal import)
@@ -83,7 +87,7 @@ class RepoFixture(unittest.TestCase):
         env["CLAUDE_LUMO_STATE_DIR"] = self.state_dir
         if extra_env:
             env.update(extra_env)
-        return subprocess.run(["bash", os.path.join(HERE, "update-command.sh")],
+        return subprocess.run([BASH, os.path.join(HERE, "update-command.sh")],
                              capture_output=True, env=env, timeout=30, stdin=stdin)
 
     def add_release(self, tag, subject):
@@ -260,6 +264,22 @@ class UpdateCommandTest(RepoFixture):
                                capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout.strip(), "v1.3.0")
 
+    def test_version_cache_cleared_even_if_installer_is_interrupted(self):
+        """The status line version cache goes right after the checkout (#84): an update stopped
+        during the slow installer rerun must not leave the old version showing for an hour."""
+        with open(os.path.join(self.work_dir, "install.sh"), "w", newline="\n") as f:
+            f.write("kill -TERM $PPID\nsleep 5\n")  # stands in for Ctrl-C during the installer
+        subprocess.run(["git", "-C", self.work_dir, "add", "install.sh"], capture_output=True, check=True)
+        self.add_release("v1.3.0", "add installer")
+        cache = os.path.join(self.state_dir, "statusline-version.cache")
+        with open(cache, "w") as f:
+            f.write("v1.2.9")
+        self.run_update(stdin=subprocess.DEVNULL)
+        result = subprocess.run(["git", "-C", self.clone_dir, "describe", "--tags", "--exact-match", "HEAD"],
+                               capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.strip(), "v1.3.0")
+        self.assertFalse(os.path.exists(cache))
+
     def test_already_latest(self):
         """Already at latest tag: success with 'already on the latest release' message."""
         proc = self.run_update(stdin=subprocess.DEVNULL)
@@ -342,6 +362,17 @@ class SessionRestartTest(unittest.TestCase):
             f.write("\n")
         return path
 
+    def test_ask_choice_without_a_terminal_skips(self):
+        """No usable stdin (None under pythonw, closed, or not a tty) means skip, not a crash (#39)."""
+        from unittest import mock
+        with mock.patch.object(sys, "stdin", None):
+            self.assertEqual(session_restart.ask_choice("? "), "s")
+        tty = mock.Mock(isatty=mock.Mock(return_value=True))
+        with mock.patch.object(sys, "stdin", tty), mock.patch("builtins.input", side_effect=EOFError):
+            self.assertEqual(session_restart.ask_choice("? "), "s")
+        with mock.patch.object(sys, "stdin", tty), mock.patch("builtins.input", return_value=" W "):
+            self.assertEqual(session_restart.ask_choice("? "), "w")
+
     def test_sessions_from_registry(self):
         """Fresh busy + idle returned; stale deleted; self excluded."""
         self.write_session("fresh_busy", "/tmp/a", True, days_old=0)
@@ -398,7 +429,11 @@ class SessionRestartTest(unittest.TestCase):
             os.environ.clear()
             os.environ.update(saved_environ)
         os.environ["ORCA_WORKTREE_ID"] = "x"
-        self.assertEqual(session_restart.choose_controller(), "orca")
+        # The orca CLI need not be installed where the tests run (CI), so stand one in.
+        with mock.patch.object(session_restart.shutil, "which", return_value="/usr/bin/orca"):
+            self.assertEqual(session_restart.choose_controller(), "orca")
+        with mock.patch.object(session_restart.shutil, "which", return_value=None):
+            self.assertEqual(session_restart.choose_controller(), "none")
         del os.environ["ORCA_WORKTREE_ID"]
 
     def test_restart_in_terminal_wait_path(self):

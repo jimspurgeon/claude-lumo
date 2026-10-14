@@ -106,3 +106,11 @@ export async function upstreamChat({ upstream, method, path, body, headers, log,
     return { response: res, buffered: text, errMeta, retried, sent: body };
   }
 }
+
+// The tool guard's lost-tool-call retry (proxy.mjs) needs the whole retried stream as text. It goes
+// through upstreamChat like any other chat request, so a no_db_connection answer gets the same
+// logging and retries (issue #49). Anything but a 2xx gives "", which the guard treats as no retry.
+export async function retryText(opts) {
+  const { response } = await upstreamChat(opts);
+  return response.ok ? await response.text() : "";
+}
