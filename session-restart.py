@@ -19,8 +19,9 @@ same terminal and folder, then, if it was interrupted mid-task, send a one-line 
 it was restarted for an update followed by "continue".
 
 After "wait for all" or "interrupt all" the proxy and LiteLLM are restarted too, once every
-other session is back cleanly (none timed out, failed or was out of reach), through service_restart.py (#119); interrupted sessions get their "continue"
-only after that, so it does not die in the restart. The session that ran the update goes last.
+other session is back cleanly (none timed out, failed or was out of reach), through
+service_restart.py (#119); interrupted sessions get their "continue" only after that, so it
+does not die in the restart. The session that ran the update goes last.
 With no other sessions the user is asked whether to restart the two services.
 
 Sessions whose registry entry is older than 7 days are treated as stale and pruned.

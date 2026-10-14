@@ -160,7 +160,7 @@ class World:
 
     def healthy(self, url):
         port = 8790 if ":8790/" in url else 4000
-        return port not in self.never_healthy and self.listeners.get(port, 0) >= 900
+        return port not in self.never_healthy and port in self.listeners
 
     def sleep(self, seconds):
         self.now += seconds
@@ -215,6 +215,24 @@ class RestartServices(unittest.TestCase):
         w = self.world(images={111: "nginx"})
         w.restart(self.state, dry_run=True)
         self.assertTrue(any("would be left alone" in o for o in w.out))
+
+    def test_a_generic_interpreter_needs_the_health_check(self):
+        """python on 4000 that fails LiteLLM's health check is not stopped, even if it is a hung
+        LiteLLM; node on 8790 that answers the proxy's health check is (#119)."""
+        w = self.world(images={111: "node", 222: "python"}, never_healthy={4000})
+        self.assertFalse(w.restart(self.state))
+        self.assertEqual(self.kinds(w), [("stop", 111), ("start", 8790)])
+        msg = [o for o in w.out if "PID 222" in o][0]
+        self.assertIn("does not answer http://127.0.0.1:4000/health/liveliness", msg)
+        self.assertIn("a hung LiteLLM looks the same", msg)
+        w = self.world(images={111: "node", 222: "node"})
+        self.assertFalse(w.restart(self.state))  # node is not LiteLLM's interpreter
+        self.assertNotIn(("stop", 222), self.kinds(w))
+
+    def test_a_litellm_image_is_stopped_on_the_image_alone(self):
+        w = self.world(images={111: "node", 222: "litellm"}, never_healthy={4000})
+        w.restart(self.state)
+        self.assertIn(("stop", 222), self.kinds(w))
 
     def test_unknown_image_needs_the_health_check(self):
         # No image visible and nothing answers the health URL: not ours, not stopped.
@@ -298,7 +316,7 @@ class RestartServices(unittest.TestCase):
         self.assertTrue(any("Could not start the Lumo proxy" in o and "nohup node" in o for o in w.out))
 
     def test_failed_health_check_times_out_on_the_fake_clock(self):
-        w = self.world(never_healthy={4000})
+        w = self.world(never_healthy={4000}, images={111: "node", 222: "litellm"})
         self.assertFalse(w.restart(self.state))
         msg = [o for o in w.out if "did not answer" in o][0]
         self.assertIn("within 45s", msg)

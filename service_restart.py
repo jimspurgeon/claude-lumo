@@ -6,9 +6,9 @@ and every other session was restarted cleanly. It can also run by hand:
     python service_restart.py [--dry-run] [--install-dir DIR]
 
 Per service, in the launcher's order (proxy, then LiteLLM): find the PIDs listening on its port
-(netstat on Windows; netstat, else ss, on Linux; lsof on macOS), check that each is Lumo's (its
-process image is the service's: node for the proxy, litellm or python for LiteLLM; when the image
-cannot be read, the health URL must answer), stop them (taskkill on Windows, kill on POSIX), start
+(netstat on Windows; netstat, else ss, on Linux; lsof on macOS), check that each is Lumo's (a
+litellm image on 4000 is; a generic interpreter, node for the proxy or python for LiteLLM, or an
+unreadable image also needs the service's own health URL to answer), stop them (taskkill on Windows, kill on POSIX), start
 the service detached the way claude-lumo.sh does, then wait for its health check. A foreign
 listener is never stopped. A step that fails prints the manual command and the rest carries on; a
 service whose port is still taken is not started, so a stale health check cannot pass for it.
@@ -62,12 +62,12 @@ def services(install, state, plat):
     yaml = os.path.join(proxy_dir, "litellm.yaml")
     return [
         {"name": "the Lumo proxy", "port": PROXY_PORT, "health": PROXY_HEALTH, "timeout": PROXY_TIMEOUT,
-         "images": ("node",),
+         "trusted_images": (), "generic_images": ("node",),
          "argv": ["node", "--no-warnings", "proxy.mjs"], "cwd": proxy_dir, "key_file": None, "log": None,
          "manual": f'cd "{proxy_dir}" && nohup node --no-warnings proxy.mjs >/dev/null 2>&1 &'},
         # cwd=state: inheriting the caller's folder would keep a worktree locked on Windows.
         {"name": "LiteLLM", "port": LITELLM_PORT, "health": LITELLM_HEALTH, "timeout": LITELLM_TIMEOUT,
-         "images": ("litellm", "python"),
+         "trusted_images": ("litellm",), "generic_images": ("python",),
          "argv": [litellm, "--config", yaml, "--host", "127.0.0.1", "--port", str(LITELLM_PORT)],
          "cwd": state, "key_file": key_file, "log": log,
          "manual": (f'LITELLM_MASTER_KEY="$(cat "{key_file}")" PYTHONIOENCODING=utf-8 nohup "{litellm}" '
@@ -216,13 +216,16 @@ def find_listeners(port, plat, run):
 
 
 def is_lumo_process(pid, svc, plat, run, healthy):
-    """True when PID is the service itself: its image is one of the service's, or, when the image
-    cannot be read, the service's health URL answers on that port. A foreign listener is False."""
+    """True when PID is the service itself. Only a litellm image counts on its own: a generic
+    interpreter (node, python) could be anything, so it, like an unreadable image, also needs the
+    service's own health URL to answer. Any other image is foreign and False."""
     rc, out = run(image_command(pid, plat))
     image = parse_image(out, plat) if rc == 0 else None
-    if image:
-        return image in svc["images"]
-    return healthy(svc["health"])
+    if image in svc["trusted_images"]:
+        return True
+    if image is None or image in svc["generic_images"]:
+        return healthy(svc["health"])
+    return False
 
 
 def restart_services(install=None, state=None, plat=None, run=run_command, spawn=spawn_detached,
@@ -262,8 +265,9 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
             all_ok = False
             continue
         if foreign:
-            out(f"  PID {', '.join(map(str, foreign))} on port {port} does not look like {name}, so "
-                f"nothing was stopped. If it is {name}, stop it yourself "
+            out(f"  PID {', '.join(map(str, foreign))} on port {port} does not look like {name} (its "
+                f"process is not {name}'s, or it does not answer {svc['health']}; a hung {name} looks "
+                f"the same), so nothing was stopped. If it is {name}, stop it yourself "
                 f"({'; '.join(' '.join(stop_command(p, plat)) for p in foreign)}), then {manual}")
             all_ok = False
             continue
