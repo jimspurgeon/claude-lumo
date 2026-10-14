@@ -64,7 +64,8 @@ Keep only what you need; delete the rest when a project finishes.
   `--dry-run` first to see exactly what would be removed. In projects still in use it also
   lists single old sessions (older than 7 days, or 1 day for scripted `sdk` sessions;
   `--session-days` and `--automation-days` change this); `--project <name> --old-sessions`
-  deletes just those.
+  deletes just those. A project with a live session is never wiped wholesale, but its old
+  sessions still are.
 - `claude-lumo privacy-audit`: reads your data posture (encryption, cloud sync, stale
   data volume) and gives recommendations. Runs occasionally; reads your data, never
   modifies or deletes it, and writes only small rate-limit marker files under ~/.claude-lumo.
