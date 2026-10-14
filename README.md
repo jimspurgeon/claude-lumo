@@ -60,11 +60,12 @@ release tag (never `master`), and re-runs the installer so new files and setting
 take effect. It refuses when `~/.claude/lumo` has local changes (put personal
 changes in `~/.claude/lumo-local`, see "Personal additions") or when the clone is
 not at a release tag, and the only network traffic is a `git fetch` to this
-repo's own remote. Open sessions keep the old files until restarted; the command
-then offers to restart them one at a time (wait until idle, interrupt now, or
-skip, default skip) when Orca or tmux can drive their terminals, and prints the
-exact `claude-lumo --resume` command otherwise. It never restarts anything
-without your confirmation.
+repo's own remote. Open sessions keep the old files until restarted; when Orca
+or tmux can drive their terminals, the command asks once what to do with all of
+them: wait for each to go idle, interrupt all now, choose one by one (wait until
+idle, interrupt now, or skip, per session), or skip all (the default). For
+sessions it cannot reach it prints the exact `claude-lumo --resume` command. It
+never restarts anything without your confirmation.
 
 Each launch also runs a silent background check for a newer release (at most
 once a day, 5 second timeout, nothing leaves your machine except release-tag
@@ -303,7 +304,7 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `update-command.sh` | `claude-lumo update`: checks out the newest `v*` release tag, re-runs the installer, offers session restarts |
 | `revert-command.sh` | `claude-lumo revert <version>\|last`: checks out a previous `v*` release tag, re-runs the installer, offers session restarts |
 | `update-check.py` | Silent background check for a newer release at each launch; writes the one-line status-line notice |
-| `session-restart.py` | After an update: finds running sessions, offers restarts (wait until idle / interrupt now / skip) via Orca or tmux |
+| `session-restart.py` | After an update: finds running sessions, offers one choice for all of them (wait for all / interrupt all / one by one / skip all) and restarts them via Orca or tmux |
 | `migrate-to-lumo.sh` | Moves Lumo sessions from `~/.claude` into the separate store (see "Separate data") |
 | `migrate-from-lumo.sh` | Moves them back; undoes `migrate-to-lumo.sh` |
 | `scripts/resume-shim.ps1`, `scripts/resume-shim.sh` | The optional resume shim (PowerShell / bash+zsh), sourced from shell profiles. Tests: `bash test-resume-shim.sh` |

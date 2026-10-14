@@ -5,10 +5,14 @@ is a tty). It reads the session registry written by hooks/busy-mark.py: one JSON
 session at <state>/sessions/<session_id>.json with fields session_id, cwd, pid, busy,
 updated. <state> is CLAUDE_LUMO_STATE_DIR or ~/.claude-lumo.
 
-Per session the user chooses on the terminal that ran `claude-lumo update`:
-- w: wait until the session is idle (its busy flag becomes false), then restart it.
-- i: interrupt it now, then restart it.
-- s (default, also plain Enter): skip.
+The user first makes one choice for all restartable sessions (#118), on the terminal that ran
+`claude-lumo update`:
+- w: wait until each session is idle (its busy flag becomes false), then restart it.
+- i: interrupt every session now, then restart it.
+- o: choose one by one, with the per-session prompt below.
+- s (default, also plain Enter): skip all.
+
+The per-session prompt offers w (wait until idle), i (interrupt now) and s (skip, the default).
 
 Restart means: stop the session (/exit), start `claude-lumo --resume <session id>` in the
 same terminal and folder, then, if it was interrupted mid-task, send a one-line note that
@@ -224,6 +228,48 @@ def ask_choice(question):
         return "s"
 
 
+BULK_CHOICES = ("w", "i", "o", "s")
+
+
+def choose_bulk(count, ask=None, out=print):
+    """One up-front choice for all `count` restartable sessions (#118): 'w' wait for all, 'i'
+    interrupt all, 'o' one by one, 's' skip all (the default, and the answer without a tty)."""
+    ask = ask or ask_choice
+    choice = ask(f"Restart {count} session{'s' if count != 1 else ''}? [w]ait for all to go idle, "
+                 f"[i]nterrupt all now, choose [o]ne by one, [s]kip all (default s): ")
+    if choice not in BULK_CHOICES:
+        out("Unknown choice; skipping all.")
+        return "s"
+    return choice
+
+
+def session_choice(bulk, session_id, ask=None):
+    """The w/i/s choice for one session under the bulk choice: 'o' asks per session (#118)."""
+    if bulk in ("w", "i", "s"):
+        return bulk
+    ask = ask or ask_choice
+    return ask(f"  Restart {short_sid(session_id)}? [w]ait until idle, "
+               f"[i]nterrupt now, [s]kip (default s): ")
+
+
+def restart_sessions(restartable, matches, bulk, make_send, ask=None, restart=None, out=print):
+    """Restart each session under the bulk choice; make_send(target) builds its controller's
+    send(). Returns [(session, choice, ok)] for the sessions that were not skipped."""
+    restart = restart or restart_in_terminal
+    results = []
+    for s in restartable:
+        choice = session_choice(bulk, s["session_id"], ask)
+        if choice not in ("w", "i", "s"):
+            out("  Unknown choice; skipping.")
+            continue
+        if choice == "s":
+            continue
+        ok, msg = restart(make_send(matches[s["session_id"]]), s["session_id"], choice, s["path"])
+        out(f"  {'Restarted' if ok else 'Could not restart'} {short_sid(s['session_id'])}: {msg}.")
+        results.append((s, choice, ok))
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description="Offer to restart running claude-lumo sessions.")
     parser.add_argument("--new-version", required=True, help="new version tag, e.g. v1.3.0")
@@ -256,31 +302,26 @@ def main():
             print(f"Session {short_sid(s['session_id'])} in {s['cwd']} ({state}, {where})")
         print()
 
+        restartable = []
         for s in sessions:
             target = matches.get(s["session_id"])
             if not target:
                 print(f"  Session {short_sid(s['session_id'])}: I cannot restart it myself (no {controller} "
                       f"match); run `claude-lumo --resume {s['session_id']}` in its terminal.")
-                continue
-            if args.dry_run:
+            elif args.dry_run:
                 print(f"  [dry run] would restart {short_sid(s['session_id'])} via {controller} {target}")
-                continue
-            choice = ask_choice(f"  Restart {short_sid(s['session_id'])}? [w]ait until idle, "
-                                f"[i]nterrupt now, [s]kip (default s): ")
-            if choice not in ("w", "i", "s"):
-                print("  Unknown choice; skipping.")
-                continue
-            if choice == "s":
-                continue
-
-            if controller == "orca":
-                send = lambda text, enter=False, interrupt=False: send_orca_command(
-                    orca_cmd, target, text, enter, interrupt)
             else:
-                send = lambda text, enter=False, interrupt=False: send_tmux_command(
-                    target, text, enter, interrupt)
-            ok, msg = restart_in_terminal(send, s["session_id"], choice, s["path"])
-            print(f"  {'Restarted' if ok else 'Could not restart'} {short_sid(s['session_id'])}: {msg}.")
+                restartable.append(s)
+        bulk = choose_bulk(len(restartable)) if restartable else "s"
+
+        def make_send(target):
+            if controller == "orca":
+                return lambda text, enter=False, interrupt=False: send_orca_command(
+                    orca_cmd, target, text, enter, interrupt)
+            return lambda text, enter=False, interrupt=False: send_tmux_command(
+                target, text, enter, interrupt)
+
+        restart_sessions(restartable, matches, bulk, make_send)
 
     if self_sid:
         print(f"Finally, restart the session that ran the update (this one) last: "
