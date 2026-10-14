@@ -3,7 +3,7 @@
 # `claude`; only the model backend changes. Chain: Claude Code -> LiteLLM :4000 (Anthropic
 # format) -> lumo proxy :8790 -> Lumo. Plain `claude` is untouched.
 # Works on Windows (Git Bash), macOS and Linux.
-D="$HOME/.claude/lumo"; PROXY="$HOME/.claude/lumo/proxy"; S="$HOME/.claude-lumo"; VENV="$S/litellm-venv"
+D="$HOME/.claude/lumo"; PROXY="$HOME/.claude/lumo/proxy"; S="${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}"; VENV="$S/litellm-venv"
 # Optional personal additions, kept outside this repo (see README, "Personal additions").
 LOCAL="${CLAUDE_LUMO_LOCAL:-$HOME/.claude/lumo-local}"
 
