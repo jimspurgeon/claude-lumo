@@ -171,3 +171,12 @@ test("runLumoSearch: a stalled stream ends as timeout and the upstream read is c
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(cancelled, true);
 });
+
+test("runLumoSearch: headers that arrive after the timeout do not start an endless read", async () => {
+  let cancelled = false;
+  const late = new ReadableStream({ start() {}, cancel() { cancelled = true; } });
+  const r = await run(async () => { await new Promise((resolve) => setTimeout(resolve, 80)); return { response: new Response(late, { status: 200, headers: { "content-type": "text/event-stream" } }), buffered: null, errMeta: null }; }, { timeoutMs: 20 });
+  assert.deepEqual(r, { outcome: "timeout", text: "" });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(cancelled, true);
+});

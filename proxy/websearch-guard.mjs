@@ -122,7 +122,7 @@ export const SEARCH_TIMEOUT_MS = 120000;
 // outcome "ok" only with evidence of a search and a cited URL; text is "" otherwise.
 // Never throws. A stream that stalls past timeoutMs ends as "timeout".
 export async function runLumoSearch({ body, path, upstream, upstreamChat, log, now = new Date(), timeoutMs = SEARCH_TIMEOUT_MS }) {
-  let timer, reader;
+  let timer, reader, timedOut = false;
   try {
     const searchBody = toLumoSearchRequest(body, now);
     const work = (async () => {
@@ -135,7 +135,7 @@ export async function runLumoSearch({ body, path, upstream, upstreamChat, log, n
       return { outcome: "ok", text: parsed.text };
     })();
     // On a stall, cancel the upstream read too, so the connection does not stay open.
-    const stall = new Promise((resolve) => { timer = setTimeout(() => { reader?.cancel().catch(() => {}); resolve({ outcome: "timeout", text: "" }); }, timeoutMs); });
+    const stall = new Promise((resolve) => { timer = setTimeout(() => { timedOut = true; reader?.cancel().catch(() => {}); resolve({ outcome: "timeout", text: "" }); }, timeoutMs); });
     return await Promise.race([work, stall]);
   } catch (e) {
     return { outcome: `error_${e?.name || "Error"}`, text: "" };
@@ -146,6 +146,8 @@ export async function runLumoSearch({ body, path, upstream, upstreamChat, log, n
   async function readAll(res) {
     if (!res.body) return "";
     reader = res.body.getReader();
+    // Headers that arrive after the deadline: nobody waits for this read any more.
+    if (timedOut) { reader.cancel().catch(() => {}); return ""; }
     const dec = new TextDecoder();
     let out = "";
     for (;;) {
