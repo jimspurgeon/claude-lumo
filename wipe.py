@@ -712,7 +712,7 @@ def collect_candidates(config_dir, days, allowlist_path, session_days=SESSION_DA
     return candidates
 
 
-def plan_for_named_session(config_dir, session_id):
+def plan_for_named_session(config_dir, session_id, skip_active=False):
     """--session mode: one session's files across all keyed stores."""
     # Session ids are opaque identifiers; anything path-like is refused rather
     # than joined into store paths (defense in depth, same rule as --project).
@@ -728,6 +728,10 @@ def plan_for_named_session(config_dir, session_id):
     if match is None:
         return None
     if match["active"]:
+        if skip_active:
+            print(f"Note: session {session_id} looks active; skipped (--skip-active).",
+                  file=sys.stderr)
+            return None
         print("Error: this session looks active (recent transcript or env lock), refusing.",
               file=sys.stderr)
         sys.exit(1)
@@ -744,10 +748,15 @@ def plan_for_named_session(config_dir, session_id):
 
 
 def plan_for_named_project(config_dir, name, old_sessions=False, session_days=SESSION_DAYS,
-                           automation_days=AUTOMATION_DAYS):
+                           automation_days=AUTOMATION_DAYS, restrict_to_thresholds=False):
     """--project mode: accept the encoded folder name or a real path. With old_sessions, only
     that project's old single sessions (see old_sessions_plan); active ones are skipped, not
-    refused, so a project in use can be cleaned."""
+    refused, so a project in use can be cleaned.
+
+    A project with an active session is never wiped wholesale; its old single sessions can
+    still be wiped (automatic fallback). A plain project wipe with explicit
+    --session-days/--automation-days restricts to sessions past those ages.
+    """
     projects_root = os.path.join(config_dir, "projects")
     # Treat ".", ".." and anything with a separator (either kind, so "/" counts on
     # Windows too) as a path, never a folder name: encoded project names contain
@@ -775,14 +784,22 @@ def plan_for_named_project(config_dir, name, old_sessions=False, session_days=SE
     if project is None:
         return None
     info = collect_project(config_dir, project)
-    if old_sessions:
+    if old_sessions or restrict_to_thresholds:
+        # Only the project's old single sessions, not the project itself.
         plan = old_sessions_plan(config_dir, info, session_days, automation_days)
         if plan:
             plan["reasons"] = ["selected by project"] + plan["reasons"]
         return plan
     if any(s["active"] for s in info["sessions"]):
-        print("Error: this project has a session that looks active, refusing.", file=sys.stderr)
-        sys.exit(1)
+        # Never wipe a project with an active session wholesale; fall back to
+        # its old single sessions (refuse only when none are old enough).
+        plan = old_sessions_plan(config_dir, info, session_days, automation_days)
+        if plan is None:
+            print("Error: this project has a session that looks active, refusing.", file=sys.stderr)
+            sys.exit(1)
+        plan["reasons"] = ["selected by project",
+                           "active session present; only its old sessions can be wiped"] + plan["reasons"]
+        return plan
     paths, session_ids = project_wipe_plan(config_dir, info)
     return {
         "project": project,
@@ -990,12 +1007,13 @@ AGENT_PROMPT = (
     "and whether a running process, open terminal or session still uses it. "
     "4) Show me a grouped list with sizes and your recommendation (delete, keep, or ask me), "
     "and ask which to delete, with a 'delete all recommended' option. "
-    "5) Delete only what I approve: `claude-lumo wipe --project <name> --yes` for a finished "
-    "project, `claude-lumo wipe --project <name> --old-sessions --yes` for the old sessions of a "
-    "project still in use, or `--session <id> --yes`. Other tools' copies: prefer that tool's "
-    "own way to close or remove them, tell me what to close first, and delete only what I name. "
-    "Never delete settings, credentials, memory or config, and never this session. Temp scratch "
-    "and Lumo logs: list them and delete only the paths I approve. "
+    "5) Delete only what I approve: `claude-lumo wipe --project <name> --session-days <D> --yes` for a finished "
+    "project, `claude-lumo wipe --project <name> --old-sessions --session-days <D> --yes` for the old sessions of a "
+    "project still in use, or "
+    "`--session <id> --skip-active --yes`. Other tools' copies: prefer that tool's own way to "
+    "close or remove them, tell me what to close first, and delete only what I name. "
+    "Never delete settings, credentials, memory or config, and never this "
+    "session. Temp scratch and Lumo logs: list them and delete only the paths I approve. "
     "6) Report what was deleted and how much space was freed."
 )
 
@@ -1057,6 +1075,8 @@ def main(argv=None):
     parser.add_argument("--automation-days", type=int, default=AUTOMATION_DAYS,
                         help="scripted sessions older than this are candidates "
                              f"(default {AUTOMATION_DAYS})")
+    parser.add_argument("--skip-active", action="store_true",
+                        help="with --session: skip it instead of refusing when it looks active")
     parser.add_argument("--store", action="append", metavar="PATH",
                         help="restrict the wipe to this store (repeatable)")
     parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
@@ -1083,6 +1103,12 @@ def main(argv=None):
     if args.old_sessions and not args.project:
         print("Error: --old-sessions needs --project.", file=sys.stderr)
         sys.exit(1)
+    if args.skip_active and not args.session:
+        print("Error: --skip-active needs --session.", file=sys.stderr)
+        sys.exit(1)
+
+    # Explicit thresholds turn a plain --project wipe into an old-sessions-only wipe.
+    restrict = (args.session_days != SESSION_DAYS or args.automation_days != AUTOMATION_DAYS)
 
     if args.store:
         stores = []
@@ -1106,7 +1132,7 @@ def main(argv=None):
     if args.session:
         matches = []
         for store in stores:
-            plan = plan_for_named_session(store["path"], args.session)
+            plan = plan_for_named_session(store["path"], args.session, args.skip_active)
             if plan is not None:
                 plan["store"] = store
                 matches.append(plan)
@@ -1123,11 +1149,12 @@ def main(argv=None):
     elif args.project:
         for store in stores:
             plan = plan_for_named_project(store["path"], args.project, args.old_sessions,
-                                          args.session_days, args.automation_days)
+                                          args.session_days, args.automation_days,
+                                          restrict_to_thresholds=restrict)
             if plan is not None:
                 plan["store"] = store
                 plans.append(plan)
-        if not plans and args.old_sessions:
+        if not plans and (args.old_sessions or restrict):
             print(f"No old sessions to wipe in {args.project}.")
             return
         if not plans:

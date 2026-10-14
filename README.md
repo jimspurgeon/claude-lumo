@@ -460,6 +460,9 @@ claude-lumo wipe --days 60
 # Wipe one specific session by ID (searched in every store)
 claude-lumo wipe --session <session-id>
 
+# Skip instead of refuse when the session looks active
+claude-lumo wipe --session <session-id> --skip-active
+
 # Wipe all sessions for a project (searched in every store)
 claude-lumo wipe --project <project-name-or-path>
 
@@ -468,6 +471,10 @@ claude-lumo wipe --project <project-name-or-path> --old-sessions
 
 # Change the single-session age limits (days, at least 1)
 claude-lumo wipe --session-days 14 --automation-days 2
+
+# With explicit --session-days/--automation-days, a plain --project wipe also deletes
+# only sessions past those ages
+claude-lumo wipe --project <project-name-or-path> --session-days 14
 
 # Restrict the scan to one or more stores (repeat the flag)
 claude-lumo wipe --store ~/.claude --store ~/.claude-lumo/data
@@ -534,7 +541,8 @@ reported and left for you to remove manually, and nothing outside a store is
 ever deleted.
 
 **Protected:**
-- Sessions with recent activity (< 6 hours) or active env lock
+- Sessions with recent activity (< 6 hours) or active env lock. A project wipe then falls back
+  to that project's old sessions, and `--session` offers `--skip-active`.
 - Settings, memory, credentials, config files (including each project's
   `projects/<project>/memory/` folder: a project wipe deletes everything beside it)
 
