@@ -18,8 +18,8 @@ Restart means: stop the session (/exit), start `claude-lumo --resume <session id
 same terminal and folder, then, if it was interrupted mid-task, send a one-line note that
 it was restarted for an update followed by "continue".
 
-After "wait for all" or "interrupt all" the proxy and LiteLLM are restarted too, once the other
-sessions are back, through service_restart.py (#119); interrupted sessions get their "continue"
+After "wait for all" or "interrupt all" the proxy and LiteLLM are restarted too, once every
+other session is back cleanly (none timed out, failed or was out of reach), through service_restart.py (#119); interrupted sessions get their "continue"
 only after that, so it does not die in the restart. The session that ran the update goes last.
 With no other sessions the user is asked whether to restart the two services.
 
@@ -298,14 +298,24 @@ def manual_service_hint():
             f"them with: python \"{script}\"")
 
 
-def restart_services_after(results, restart_services, out=None):
+def restart_services_after(results, restart_services, out=None, unmatched=0):
     """After "wait for all" or "interrupt all" (#119): restart the proxy and LiteLLM now that the
     other sessions run the new release, then send the continue notes held back for interrupted
-    sessions. The session that ran the update goes last, after this. True when both came back."""
+    sessions. The session that ran the update goes last, after this. True when both came back.
+
+    Only when every session restarted cleanly: a session that timed out waiting, failed to
+    restart or could not be reached (`unmatched`) may still be mid-turn on the old services, so
+    they are left running and the manual command is printed instead."""
     out = out or print
     out("")
-    out("Restarting the proxy and LiteLLM so they run the new release:")
-    ok = restart_services(out=out)
+    if unmatched or not all(ok for _, _, ok, _ in results):
+        out("Not every session restarted cleanly, so the proxy and LiteLLM were left running "
+            "(restarting them could cut off a session that is still using them).")
+        out(manual_service_hint())
+        ok = False
+    else:
+        out("Restarting the proxy and LiteLLM so they run the new release:")
+        ok = restart_services(out=out)
     for s, choice, restarted, send in results:
         if choice == "i" and restarted:
             send(CONTINUE_NOTE, enter=True)
@@ -378,7 +388,8 @@ def main():
 
         results = restart_sessions(restartable, matches, bulk, make_send)
         if services and bulk in ("w", "i"):
-            services_restarted = restart_services_after(results, services.restart_services)
+            services_restarted = restart_services_after(results, services.restart_services,
+                                                        unmatched=len(sessions) - len(restartable))
         elif services and not args.dry_run:
             print(manual_service_hint())
 

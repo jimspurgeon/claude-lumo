@@ -68,10 +68,12 @@ sessions it cannot reach it prints the exact `claude-lumo --resume` command. It
 never restarts anything without your confirmation.
 
 The proxy and LiteLLM also keep running the old release's code. After "wait for
-all" or "interrupt all", once the other sessions are back, the command restarts
-them too: it stops whatever listens on ports 8790 and 4000 (found with `netstat`,
-`lsof` on macOS), starts them the way the launcher does and waits for both health
-checks; interrupted sessions get their "continue" only after that. The session
+all" or "interrupt all", once every other session is back cleanly (none timed
+out, failed or was out of reach), the command restarts them too: it finds the
+processes listening on ports 8790 and 4000 (`netstat`, or `ss` on Linux without
+it, `lsof` on macOS), stops them only if they are Lumo's own (node for the proxy,
+litellm or python for LiteLLM), starts them the way the launcher does and waits
+for both health checks; interrupted sessions get their "continue" only after that. The session
 that ran the update goes last: restart it yourself with the `claude-lumo --resume`
 command it prints. With no other sessions running it asks whether to restart the
 two services; otherwise it prints how to do it later, by hand:

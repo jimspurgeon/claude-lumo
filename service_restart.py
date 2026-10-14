@@ -1,22 +1,28 @@
 """Restart the Lumo proxy (:8790) and LiteLLM (:4000) so they run the files of a new release (#119).
 
 session-restart.py calls restart_services() after the user chose "wait for all" or "interrupt all"
-and the other sessions were restarted. It can also run by hand:
+and every other session was restarted cleanly. It can also run by hand:
 
-    python service_restart.py [--dry-run]
+    python service_restart.py [--dry-run] [--install-dir DIR]
 
 Per service, in the launcher's order (proxy, then LiteLLM): find the PIDs listening on its port
-(netstat on Windows and Linux, lsof on macOS), stop them (taskkill on Windows, kill on POSIX),
-start it detached the way claude-lumo.sh does, then wait for its health check. A step that fails
-prints the manual command and the rest carries on; a service whose port is still taken is not
-started, so a stale health check cannot pass for it. --dry-run prints the plan and changes nothing
-(it only lists the listeners).
+(netstat on Windows; netstat, else ss, on Linux; lsof on macOS), check that each is Lumo's (its
+process image is the service's: node for the proxy, litellm or python for LiteLLM; when the image
+cannot be read, the health URL must answer), stop them (taskkill on Windows, kill on POSIX), start
+the service detached the way claude-lumo.sh does, then wait for its health check. A foreign
+listener is never stopped. A step that fails prints the manual command and the rest carries on; a
+service whose port is still taken is not started, so a stale health check cannot pass for it.
+--dry-run prints the plan and changes nothing (it only lists the listeners).
 
+The install is the launcher's, ~/.claude/lumo (CLAUDE_LUMO_DIR or --install-dir to override).
 Every side effect goes through injectable runners (run, spawn, healthy, sleep, clock), so tests
 never touch real processes or ports.
 """
 import argparse
+import csv
+import io
 import os
+import re
 import subprocess
 import sys
 import time
@@ -29,7 +35,9 @@ STOP_TIMEOUT, PROXY_TIMEOUT, LITELLM_TIMEOUT = 10, 30, 45  # seconds; LiteLLM's 
 
 
 def install_dir():
-    return os.path.dirname(os.path.abspath(__file__))
+    """The launcher's install: claude-lumo.sh always runs ~/.claude/lumo, so a copy of this script
+    elsewhere (a worktree, a test clone) still restarts the services the launcher would start."""
+    return os.environ.get("CLAUDE_LUMO_DIR") or os.path.join(os.path.expanduser("~"), ".claude", "lumo")
 
 
 def state_dir():
@@ -54,56 +62,97 @@ def services(install, state, plat):
     yaml = os.path.join(proxy_dir, "litellm.yaml")
     return [
         {"name": "the Lumo proxy", "port": PROXY_PORT, "health": PROXY_HEALTH, "timeout": PROXY_TIMEOUT,
+         "images": ("node",),
          "argv": ["node", "--no-warnings", "proxy.mjs"], "cwd": proxy_dir, "key_file": None, "log": None,
          "manual": f'cd "{proxy_dir}" && nohup node --no-warnings proxy.mjs >/dev/null 2>&1 &'},
+        # cwd=state: inheriting the caller's folder would keep a worktree locked on Windows.
         {"name": "LiteLLM", "port": LITELLM_PORT, "health": LITELLM_HEALTH, "timeout": LITELLM_TIMEOUT,
+         "images": ("litellm", "python"),
          "argv": [litellm, "--config", yaml, "--host", "127.0.0.1", "--port", str(LITELLM_PORT)],
-         "cwd": None, "key_file": key_file, "log": log,
+         "cwd": state, "key_file": key_file, "log": log,
          "manual": (f'LITELLM_MASTER_KEY="$(cat "{key_file}")" PYTHONIOENCODING=utf-8 nohup "{litellm}" '
                     f'--config "{yaml}" --host 127.0.0.1 --port {LITELLM_PORT} > "{log}" 2>&1 &')},
     ]
 
 
-def listeners_command(port, plat):
+def listeners_commands(port, plat):
+    """Commands that list listeners, tried in order: [(argv, format)]. Linux falls back to ss
+    where net-tools (netstat) is not installed."""
     if plat == "windows":
-        return ["netstat", "-ano"]
+        return [(["netstat", "-ano"], "windows")]
     if plat == "darwin":
-        return ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"]
-    return ["netstat", "-tlnp"]
+        return [(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], "darwin")]
+    return [(["netstat", "-tlnp"], "linux"), (["ss", "-tlnp"], "ss")]
 
 
 def _port_of(address):
     return address.rsplit(":", 1)[-1] if ":" in address else ""
 
 
-def parse_listeners(output, port, plat):
-    """PIDs listening on `port` in the listeners command's output, sorted, without duplicates.
+LINUX_PID = re.compile(r"^(\d+)/")
+SS_PID = re.compile(r"pid=(\d+)")
 
-    Windows `netstat -ano`: `TCP 127.0.0.1:8790 0.0.0.0:0 LISTENING 1234`. The state word is
+
+def parse_listeners(output, port, fmt):
+    """PIDs listening on `port` in a listing of format `fmt`, sorted, without duplicates.
+
+    windows (`netstat -ano`): `TCP 127.0.0.1:8790 0.0.0.0:0 LISTENING 1234`. The state word is
     localized, so a listener is recognized by its foreign address ending in :0 instead.
-    Linux `netstat -tlnp`: `tcp 0 0 127.0.0.1:8790 0.0.0.0:* LISTEN 1234/node`; the PID shows
-    as '-' for another user's process, which yields nothing. macOS `lsof -t`: one PID per line.
+    linux (`netstat -tlnp`): `tcp 0 0 127.0.0.1:8790 0.0.0.0:* LISTEN 1234/node`; the PID is the
+    token shaped `<digits>/` (program names may hold spaces), and '-' for another user's process.
+    ss (`ss -tlnp`): `LISTEN 0 511 127.0.0.1:8790 0.0.0.0:* users:(("node",pid=1234,fd=20))`.
+    darwin (`lsof -t`): one PID per line.
     """
     pids = set()
     for line in (output or "").splitlines():
         t = line.split()
-        if plat == "darwin":
+        if fmt == "darwin":
             if len(t) == 1 and t[0].isdigit():
                 pids.add(int(t[0]))
             continue
+        if fmt == "ss":
+            if len(t) >= 5 and t[0] == "LISTEN" and _port_of(t[3]) == str(port):
+                pids.update(int(p) for p in SS_PID.findall(line))
+            continue
         if not t or not t[0].lower().startswith("tcp"):
             continue
-        if plat == "windows":
+        if fmt == "windows":
             if len(t) != 5 or not t[2].endswith(":0"):
                 continue
             local, pid = t[1], t[4]
         else:
-            if len(t) < 7:
+            if len(t) < 6:
                 continue
-            local, pid = t[3], t[-1].split("/", 1)[0]
+            local = t[3]
+            pid = next((m.group(1) for m in map(LINUX_PID.match, t[6:]) if m), "")
         if _port_of(local) == str(port) and pid.isdigit() and int(pid) > 0:
             pids.add(int(pid))
     return sorted(pids)
+
+
+def image_command(pid, plat):
+    if plat == "windows":
+        return ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]
+    return ["ps", "-p", str(pid), "-o", "comm="]
+
+
+def parse_image(output, plat):
+    """Normalized process image ('node', 'python', 'litellm', ...) from image_command's output,
+    or None when the process is not listed. 'python3.12.exe' becomes 'python'."""
+    text = (output or "").strip()
+    if not text:
+        return None
+    if plat == "windows":
+        rows = [r for r in csv.reader(io.StringIO(text)) if len(r) >= 2]
+        if not rows:
+            return None  # "INFO: No tasks are running which match the specified criteria."
+        name = rows[0][0]
+    else:
+        name = text.splitlines()[0].strip()
+    name = os.path.basename(name.replace("\\", "/")).lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    return re.sub(r"[\d.]+$", "", name) or None
 
 
 def stop_command(pid, plat):
@@ -113,7 +162,7 @@ def stop_command(pid, plat):
 def run_command(argv):
     """(returncode, stdout) of a short command; (None, '') when it cannot run."""
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+        r = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=20)
         return r.returncode, r.stdout
     except (OSError, subprocess.TimeoutExpired):
         return None, ""
@@ -157,11 +206,23 @@ def wait_for(pred, timeout, sleep, clock, step=1):
 
 
 def find_listeners(port, plat, run):
-    """PIDs listening on port, or None when the listeners command could not run."""
-    rc, out = run(listeners_command(port, plat))
-    if rc is None or (rc != 0 and plat != "darwin"):  # lsof exits 1 when nothing listens
-        return None
-    return parse_listeners(out, port, plat)
+    """PIDs listening on port, or None when no listing command could run."""
+    for argv, fmt in listeners_commands(port, plat):
+        rc, out = run(argv)
+        if rc is None or (rc != 0 and fmt != "darwin"):  # lsof exits 1 when nothing listens
+            continue
+        return parse_listeners(out, port, fmt)
+    return None
+
+
+def is_lumo_process(pid, svc, plat, run, healthy):
+    """True when PID is the service itself: its image is one of the service's, or, when the image
+    cannot be read, the service's health URL answers on that port. A foreign listener is False."""
+    rc, out = run(image_command(pid, plat))
+    image = parse_image(out, plat) if rc == 0 else None
+    if image:
+        return image in svc["images"]
+    return healthy(svc["health"])
 
 
 def restart_services(install=None, state=None, plat=None, run=run_command, spawn=spawn_detached,
@@ -169,12 +230,21 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
                      dry_run=False):
     """Restart the proxy, then LiteLLM. True when both answer their health checks again."""
     install, state, plat = install or install_dir(), state or state_dir(), plat or platform_name()
+    if not os.path.isfile(os.path.join(install, "proxy", "proxy.mjs")):
+        out(f"  No claude-lumo install at {install} (no proxy/proxy.mjs), so the proxy and LiteLLM "
+            f"were left as they are; run service_restart.py --install-dir <install>.")
+        return False
     all_ok = True
     for svc in services(install, state, plat):
         name, port = svc["name"], svc["port"]
         manual = f"start it by hand with: {svc['manual']} (or launch claude-lumo, which starts it)"
         pids = find_listeners(port, plat, run)
+        foreign = [p for p in pids or [] if not is_lumo_process(p, svc, plat, run, healthy)]
         if dry_run:
+            if foreign:
+                out(f"  [dry run] PID {', '.join(map(str, foreign))} on port {port} is not {name}; "
+                    f"it would be left alone and {name} not restarted")
+                continue
             if pids:
                 stops = "; ".join(" ".join(stop_command(p, plat)) for p in pids)
                 out(f"  [dry run] would stop {name} on port {port}: {stops}")
@@ -185,9 +255,16 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
                 + f", then wait up to {svc['timeout']}s for {svc['health']}")
             continue
 
+        cmds = " or ".join(" ".join(argv) for argv, _ in listeners_commands(port, plat))
         if pids is None:
-            out(f"  Could not list the processes on port {port} ({' '.join(listeners_command(port, plat))} "
-                f"failed); {name} is left as it is. Stop the process on port {port}, then {manual}")
+            out(f"  Could not list the processes on port {port} ({cmds} failed); {name} is left as it "
+                f"is. Stop the process on port {port}, then {manual}")
+            all_ok = False
+            continue
+        if foreign:
+            out(f"  PID {', '.join(map(str, foreign))} on port {port} does not look like {name}, so "
+                f"nothing was stopped. If it is {name}, stop it yourself "
+                f"({'; '.join(' '.join(stop_command(p, plat)) for p in foreign)}), then {manual}")
             all_ok = False
             continue
         if not pids and healthy(svc["health"]):
@@ -199,7 +276,8 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
             rc, _ = run(stop_command(pid, plat))
             if rc != 0:
                 out(f"  Could not stop PID {pid} ({name}); run: {' '.join(stop_command(pid, plat))}")
-        if pids and not wait_for(lambda: not find_listeners(port, plat, run), STOP_TIMEOUT, sleep, clock):
+        # Only an empty listing means free: a listing that fails (None) proves nothing.
+        if pids and not wait_for(lambda: find_listeners(port, plat, run) == [], STOP_TIMEOUT, sleep, clock):
             out(f"  Port {port} is still in use, so {name} was not restarted. Stop PID "
                 f"{', '.join(map(str, pids))}, then {manual}")
             all_ok = False
@@ -234,9 +312,14 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Restart the Lumo proxy and LiteLLM.")
     parser.add_argument("--dry-run", action="store_true", help="print the plan and change nothing")
+    parser.add_argument("--install-dir", help="the claude-lumo install (default: ~/.claude/lumo)")
     args = parser.parse_args(argv)
+    install = args.install_dir or install_dir()
+    if not os.path.isfile(os.path.join(install, "proxy", "proxy.mjs")):
+        print(f"No claude-lumo install at {install} (no proxy/proxy.mjs); pass --install-dir.")
+        return 1
     print("Restarting the proxy and LiteLLM:" if not args.dry_run else "Plan for the proxy and LiteLLM:")
-    return 0 if restart_services(dry_run=args.dry_run) or args.dry_run else 1
+    return 0 if restart_services(install=install, dry_run=args.dry_run) or args.dry_run else 1
 
 
 if __name__ == "__main__":
