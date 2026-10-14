@@ -234,6 +234,20 @@ class TestMigrateSessions(unittest.TestCase):
         self.assertEqual(uuid, "lumo-session")
         self.assertEqual(Path(proj_path), project_a)
 
+    def test_find_lumo_sessions_ignores_a_nested_mention(self):
+        """A Claude transcript that only quotes "model":"lumo- inside a value stays Claude (#29)."""
+        project = self.shared_projects / "project-q"
+        project.mkdir()
+        (project / "quoted.jsonl").write_text(
+            '{"type":"user","toolUseResult":{"model":"lumo-max"}}\n'
+            '{"type":"assistant","message":{"model":"claude-opus-5-5"}}\n'
+        )
+        (project / "real.jsonl").write_text(
+            '{"type":"assistant","message":{"model":"lumo-max","content":[]}}\n'
+        )
+        lumo = separate_data.find_lumo_sessions(str(self.shared_projects))
+        self.assertEqual({uuid for _, uuid in lumo}, {"real"})
+
     def test_dry_run_prints_plan_no_move(self):
         """--dry-run prints plan without moving files."""
         # Create lumo session
