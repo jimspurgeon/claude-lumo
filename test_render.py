@@ -197,6 +197,9 @@ class RehostedSessions(unittest.TestCase):
             launcher = f.read()
         self.assertNotIn("--append-system-prompt", launcher)
         self.assertNotIn("CLAUDE_LUMO_WRAPPER", launcher)
+        # The key comes only from apiKeyHelper; a token in the environment would win over it (#86).
+        self.assertNotIn("export ANTHROPIC_AUTH_TOKEN", launcher)
+        self.assertIn("unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY", launcher)
 
     def test_settings_template_has_no_duplicate_keys(self):
         # json.load keeps only the last of two equal keys, which once dropped a SessionStart hook.

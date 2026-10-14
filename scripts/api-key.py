@@ -2,9 +2,10 @@
 
     python api-key.py <state dir>
 
-claude-lumo.sh also exports the key as ANTHROPIC_AUTH_TOKEN, which wins when set. A session
-Claude Code re-hosts on its own keeps --settings but not that export; without this helper its
-requests reach LiteLLM with the wrong credential and fail with "No connected db" (#60).
+This is the only way the key reaches Claude Code: claude-lumo.sh clears ANTHROPIC_AUTH_TOKEN and
+ANTHROPIC_API_KEY, which would win over it (#86). A session Claude Code re-hosts on its own keeps
+--settings but no exports, so it authenticates through this helper too; without it, requests
+reach LiteLLM with the wrong credential and fail with "No connected db" (#60).
 """
 import os, sys
 

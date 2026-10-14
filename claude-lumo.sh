@@ -106,6 +106,9 @@ fi
 # and none of the other flags (#77), so the settings carry the same values (env, apiKeyHelper), and
 # the system prompt comes only from hooks/lumo-prompt.py (SessionStart on startup, clear and
 # compact), never from a flag: that way a re-hosted session gets it exactly like a launched one,
-# and it can never arrive twice.
-export ANTHROPIC_AUTH_TOKEN="$KEY" CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
+# and it is never missing. The key comes only from apiKeyHelper: a token in the environment
+# wins over it and makes Claude Code warn that both are set (#86), and an inherited one would send
+# the wrong credential to LiteLLM, so both variables are cleared.
+unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+export CLAUDE_LUMO=1 CLAUDE_LUMO_LOCAL="$LOCAL" CLAUDE_CODE_AUTO_MODE_SERVER=0
 exec claude --settings "$S/settings.json" "${AGENTS[@]}" "$@"
