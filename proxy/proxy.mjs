@@ -18,6 +18,7 @@ import { readLumoCredentials } from "./creds.mjs";
 import { addEditHints } from "./edit-hints.mjs";
 import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 import { upstreamChat } from "./sniffer.mjs";
+import { createContextFit } from "./context-fit.mjs";
 import { isWebSearchRequest, webSearchUnavailable } from "./websearch-guard.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
@@ -81,7 +82,7 @@ async function upstream(path, method, body, headers) {
 // Also tallies each stream (reasoning/content size, tool calls, finish reason) for the log line.
 function splitToolCallChunks() {
   let buf = "";
-  const stats = { reasoning: "", content: 0, tools: 0, finish: "" };
+  const stats = { reasoning: "", content: 0, tools: 0, finish: "", promptTokens: null };
   const guard = createToolGuard();
   const fix = (line) => {
     if (!line.startsWith("data:") || line.startsWith("data:[DONE]")) return guard.line(line);
@@ -91,6 +92,7 @@ function splitToolCallChunks() {
     if (c?.delta?.content) stats.content += c.delta.content.length;
     if (Array.isArray(calls)) stats.tools += calls.filter((x) => x.id).length;
     if (c?.finish_reason) stats.finish = c.finish_reason;
+    if (typeof d.usage?.prompt_tokens === "number") stats.promptTokens = d.usage.prompt_tokens;
     return guard.line(line);
   };
   return {
@@ -102,6 +104,7 @@ function splitToolCallChunks() {
   };
 }
 
+const fitter = createContextFit(); // keeps prompt + max_tokens inside Lumo's window (#65)
 const live = new Map(); // in-flight chat streams, shown at /v1/debug/live
 let nextId = 0;
 
@@ -131,7 +134,12 @@ const server = http.createServer(async (req, res) => {
   try {
     // Chat responses are inspected for error payloads (buffering non-SSE bodies);
     // a no_db_connection error is retried once with a short backoff (see sniffer.mjs, issue #43).
-    const { response: up, buffered, errMeta } = await upstreamChat({ upstream, path, method: req.method, body, headers, log });
+    let fit = null;
+    if (body && path.startsWith("/chat")) ({ body, clamp: fit } = fitter.fit(body));
+    const { response: up, buffered, errMeta, sent } = await upstreamChat({ upstream, path, method: req.method, body, headers, log, refit: fitter.refit });
+    // A refit or a stripped prompt_cache_key changes the request; the tool-guard retry,
+    // learn() and the log below must use the one that was actually sent.
+    if (sent !== undefined && sent !== body) { if (path.startsWith("/chat")) { try { const d = JSON.parse(sent), o = JSON.parse(body); if (d.max_tokens !== o.max_tokens) fit = { from: fit?.from ?? o.max_tokens, to: d.max_tokens }; } catch {} } body = sent; }
     // Buffered chat responses already had their status/error logged by the sniffer; only
     // non-buffered paths (non-chat routes, SSE error responses) still need the status log.
     if (up.status >= 400 && buffered === null) log(`${req.method} ${path} -> ${up.status}`);
@@ -161,7 +169,8 @@ const server = http.createServer(async (req, res) => {
     res.end();
     if (sse) {
       const s = sse.stats; let req = {}; try { req = JSON.parse(body); } catch {}
-      extra = ` model=${req.model} max_tokens=${req.max_tokens ?? req.max_completion_tokens ?? "-"} reasoning=${s.reasoning.length}c content=${s.content}c tools=${s.tools} finish=${s.finish || "none"} dropped_tool=${sse.guard.dropped} repaired_tool=${sse.guard.repaired} tool_retry=${sse.guard.retry}`;
+      fitter.learn(body, s.promptTokens);
+      extra = ` model=${req.model} max_tokens=${req.max_tokens ?? req.max_completion_tokens ?? "-"}${fit ? ` fit=${fit.from}->${fit.to}` : ""} prompt_tokens=${s.promptTokens ?? "-"} reasoning=${s.reasoning.length}c content=${s.content}c tools=${s.tools} finish=${s.finish || "none"} dropped_tool=${sse.guard.dropped} repaired_tool=${sse.guard.repaired} tool_retry=${sse.guard.retry}`;
       if (s.reasoning.length > 30000) {
         const f = join(DEBUG, `${new Date().toISOString().replace(/[:.]/g, "-")}.txt`);
         try { mkdirSync(DEBUG, { recursive: true }); writeFileSync(f, s.reasoning); extra += ` dump=${f}`; } catch {}

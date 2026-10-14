@@ -464,6 +464,7 @@ class TestStatuslineOutput:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Issue #63: a fallback is visible in the transcript (the turns lumo-lite answers
 # are recorded as lumo-lite); failed turns are "<synthetic>" and name no model.
 # Entry shapes match real Claude Code 2.1.296 transcripts.
@@ -514,3 +515,97 @@ class TestFallbackReplay:
             os.unlink(path)
         assert "fallback" not in out and "synthetic" not in out
         assert "lumo-max" in out
+
+
+# ---------------------------------------------------------------------------
+# Issue #65: on Lumo the ctx percentage is measured against the auto-compact
+# trigger (window - 20000 - 13000), so 100% means compaction is due.
+# ---------------------------------------------------------------------------
+
+def run_lumo_statusline(state_dir: str, module_path: str, payload: dict, extra_env=None) -> str:
+    env = os.environ.copy()
+    env["CLAUDE_LUMO_STATE_DIR"] = state_dir
+    env["CLAUDE_LUMO"] = "1"
+    env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
+    env.pop("CLAUDE_CODE_MAX_OUTPUT_TOKENS", None)
+    env.update(extra_env or {})
+    result = subprocess.run(
+        ["python", module_path], env=env,
+        input=json.dumps(payload), capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"subprocess failed: {result.stderr}")
+    return result.stdout
+
+
+def write_settings(state_dir: str, window) -> None:
+    with open(os.path.join(state_dir, "settings.json"), "w", encoding="utf-8") as f:
+        json.dump({"autoCompactWindow": window} if window else {}, f)
+
+
+def usage_payload(tokens: int, used_pct=None) -> dict:
+    cw = {"context_window_size": 131072,
+          "current_usage": {"input_tokens": 1000, "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": tokens - 1000, "output_tokens": 500}}
+    if used_pct is not None:
+        cw["used_percentage"] = used_pct
+    return {"model": {"id": "lumo-max"}, "context_window": cw}
+
+
+class TestCompactThresholdPercentage:
+    def test_percentage_of_trigger_not_of_window(self, temp_state_dir, statusline_module_path):
+        write_settings(temp_state_dir, 110000)  # trigger at 110000 - 20000 - 13000 = 77000
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, usage_payload(38500, 29))
+        assert "ctx 50%" in out
+
+    def test_near_trigger_reads_near_full(self, temp_state_dir, statusline_module_path):
+        # The #65 symptom: the window-based figure says ~35% when compaction is about due.
+        write_settings(temp_state_dir, 100000)  # trigger 67000
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, usage_payload(66330, 35))
+        assert "ctx 99%" in out
+
+    def test_capped_at_100(self, temp_state_dir, statusline_module_path):
+        write_settings(temp_state_dir, 100000)
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, usage_payload(90000, 69))
+        assert "ctx 100%" in out
+
+    def test_env_overrides_setting(self, temp_state_dir, statusline_module_path):
+        write_settings(temp_state_dir, 110000)
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, usage_payload(33500),
+                                  {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000"})
+        assert "ctx 50%" in out
+
+    def test_falls_back_to_used_percentage_without_window(self, temp_state_dir, statusline_module_path):
+        write_settings(temp_state_dir, None)
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, usage_payload(40000, 31))
+        assert "ctx 31%" in out
+
+    def test_without_current_usage_uses_percentage_times_size(self, temp_state_dir, statusline_module_path):
+        write_settings(temp_state_dir, 110000)
+        payload = {"model": {"id": "lumo-max"},
+                   "context_window": {"context_window_size": 154000, "used_percentage": 25}}
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, payload)
+        assert "ctx 50%" in out  # 38500 of 77000
+
+    def test_window_capped_by_model_size(self, temp_state_dir, statusline_module_path):
+        write_settings(temp_state_dir, 1000000)
+        payload = usage_payload(49000)
+        payload["context_window"]["context_window_size"] = 131000  # trigger 98000
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, payload)
+        assert "ctx 50%" in out
+
+    def test_unreadable_settings_does_not_break(self, temp_state_dir, statusline_module_path):
+        with open(os.path.join(temp_state_dir, "settings.json"), "w", encoding="utf-8") as f:
+            f.write("{not json")
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, usage_payload(40000, 31))
+        assert "ctx 31%" in out
+
+    def test_no_context_window_shows_nothing(self, temp_state_dir, statusline_module_path):
+        write_settings(temp_state_dir, 110000)
+        out = run_lumo_statusline(temp_state_dir, statusline_module_path, {"model": {"id": "lumo-max"}})
+        assert "ctx" not in out
+
+    def test_plain_claude_keeps_used_percentage(self, temp_state_dir, statusline_module_path):
+        write_settings(temp_state_dir, 110000)
+        out = run_statusline(temp_state_dir, statusline_module_path, usage_payload(38500, 29))
+        assert "ctx 29%" in out

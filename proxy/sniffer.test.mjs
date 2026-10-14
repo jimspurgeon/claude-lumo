@@ -198,3 +198,59 @@ test("an HTTP-4xx non-error-body response keeps its existing status log line", a
   assert.deepEqual(lines, ["/chat/completions -> 404"]);
   assert.equal(r.response.status, 404);
 });
+
+// Lumo's 131072-token window covers prompt + reply; a context-length 400 is retried once
+// through the refit hook (#65). Message text is the real one, measured 2026-10-13.
+import { createContextFit } from "./context-fit.mjs";
+
+const ctxErr = (requested, input) => JSON.stringify({ error: {
+  message: `This model's maximum context length is 131072 tokens. However, you requested ${requested} output tokens and your prompt contains at least ${input} input tokens, for a total of at least ${requested + input} tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=${input})`,
+  type: "BadRequestError", param: "input_tokens", code: 400 } });
+const sseOk = () => new Response("data:{}", { headers: { "content-type": "text/event-stream" } });
+// A body whose size makes the default estimate land near `tokens`.
+const sized = (tokens, extra = {}) => JSON.stringify({ model: "lumo-max", max_tokens: 32000, ...extra, pad: "x".repeat(Math.round(tokens * 3.65)) });
+
+test("a context-length 400 is retried once with a smaller max_tokens, then streams", async () => {
+  const sent = [], logs = [];
+  const r = await upstreamChat({
+    upstream: async (_p, _m, body) => { sent.push(JSON.parse(body)); return sent.length === 1 ? res(ctxErr(32000, 99073), 400) : sseOk(); },
+    method: "POST", path: "/chat/completions", body: sized(100000), headers: {}, log: (l) => logs.push(l), refit: createContextFit().refit,
+  });
+  assert.equal(sent.length, 2);
+  assert.ok(sent[1].max_tokens < 32000 && sent[1].max_tokens >= 1024, String(sent[1].max_tokens));
+  assert.equal(r.buffered, null);
+  assert.equal(r.retried, true);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /context_refit est=\d+ max_tokens 32000->\d+; retrying once/);
+  assert.doesNotMatch(logs[0], /maximum context length/);
+  assert.equal(JSON.parse(r.sent).max_tokens, sent[1].max_tokens, "the caller gets the body that was actually sent");
+});
+
+test("without a refit hook a context-length 400 is returned as before", async () => {
+  let n = 0;
+  const r = await upstreamChat({ upstream: async () => { n++; return res(ctxErr(32000, 99073), 400); }, method: "POST", path: "/chat/completions", body: sized(100000), headers: {}, log: () => {} });
+  assert.equal(n, 1);
+  assert.equal(r.response.status, 400);
+});
+
+test("the context refit is tried only once", async () => {
+  let n = 0;
+  const r = await upstreamChat({
+    upstream: async () => { n++; return res(ctxErr(32000, 99073), 400); },
+    method: "POST", path: "/chat/completions", body: sized(100000), headers: {}, log: () => {}, refit: createContextFit().refit,
+  });
+  assert.equal(n, 2);
+  assert.equal(r.response.status, 400);
+});
+
+test("no_db_connection after a context refit still gets both of its retries", async () => {
+  const sent = [];
+  await upstreamChat({
+    upstream: async (_p, _m, body) => { sent.push(JSON.parse(body)); return sent.length === 1 ? res(ctxErr(32000, 99073), 400) : res(errBody("no_db_connection", "400")); },
+    method: "POST", path: "/chat/completions", body: sized(100000, { prompt_cache_key: "k" }), headers: {}, log: () => {},
+    sleep: async () => {}, refit: createContextFit().refit,
+  });
+  assert.equal(sent.length, 4, "refit, plain retry, stripped retry");
+  assert.equal("prompt_cache_key" in sent[3], false);
+  assert.equal(sent[3].max_tokens, sent[1].max_tokens);
+});
