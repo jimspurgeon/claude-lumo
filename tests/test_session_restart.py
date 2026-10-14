@@ -58,8 +58,8 @@ class RestartSessions(unittest.TestCase):
     def run_bulk(self, bulk, ask=None):
         calls = []
 
-        def restart(send, sid, choice, path):
-            calls.append((send, sid, choice, path))
+        def restart(send, sid, choice, path, note=True):
+            calls.append((send, sid, choice, path, note))
             return True, "restarted"
         ss = sessions("aaaaaaaa1", "bbbbbbbb2")
         matches = {"aaaaaaaa1": "t1", "bbbbbbbb2": "t2"}

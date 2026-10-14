@@ -67,6 +67,17 @@ idle, interrupt now, or skip, per session), or skip all (the default). For
 sessions it cannot reach it prints the exact `claude-lumo --resume` command. It
 never restarts anything without your confirmation.
 
+The proxy and LiteLLM also keep running the old release's code. After "wait for
+all" or "interrupt all", once the other sessions are back, the command restarts
+them too: it stops whatever listens on ports 8790 and 4000 (found with `netstat`,
+`lsof` on macOS), starts them the way the launcher does and waits for both health
+checks; interrupted sessions get their "continue" only after that. The session
+that ran the update goes last: restart it yourself with the `claude-lumo --resume`
+command it prints. With no other sessions running it asks whether to restart the
+two services; otherwise it prints how to do it later, by hand:
+`python ~/.claude/lumo/service_restart.py` (add `--dry-run` to see the plan).
+If a step fails it prints the manual command and carries on.
+
 Each launch also runs a silent background check for a newer release (at most
 once a day, 5 second timeout, nothing leaves your machine except release-tag
 requests to this repo's remote). When a newer release is out, the status line
@@ -305,6 +316,7 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `revert-command.sh` | `claude-lumo revert <version>\|last`: checks out a previous `v*` release tag, re-runs the installer, offers session restarts |
 | `update-check.py` | Silent background check for a newer release at each launch; writes the one-line status-line notice |
 | `session-restart.py` | After an update: finds running sessions, offers one choice for all of them (wait for all / interrupt all / one by one / skip all) and restarts them via Orca or tmux |
+| `service_restart.py` | Restarts the proxy and LiteLLM so they run the new release (after "wait for all" / "interrupt all", or by hand; `--dry-run` prints the plan) |
 | `migrate-to-lumo.sh` | Moves Lumo sessions from `~/.claude` into the separate store (see "Separate data") |
 | `migrate-from-lumo.sh` | Moves them back; undoes `migrate-to-lumo.sh` |
 | `scripts/resume-shim.ps1`, `scripts/resume-shim.sh` | The optional resume shim (PowerShell / bash+zsh), sourced from shell profiles. Tests: `bash test-resume-shim.sh` |
