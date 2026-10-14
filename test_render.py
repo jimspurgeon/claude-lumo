@@ -161,13 +161,20 @@ class RehostedSessions(unittest.TestCase):
         self.settings()
         part = self.parts()[0]
         body_line = next(l for l in part.split("\n\n", 1)[1].splitlines() if l.strip()).strip()
+        attachment = lambda kind, content: json.dumps(
+            {"type": "attachment", "attachment": {"type": kind, "content": content}}) + "\n"
+        read_source = json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "header = (\"claude-lumo system prompt, part {} of {}\"\n" + body_line}]}}) + "\n"
         cases = {
             "empty": ("", part),
-            "hook output": (json.dumps({"content": part}) + "\n", ""),
-            "pre-#77 appended prompt": (json.dumps({"systemPrompt": "x\n" + body_line + "\ny"}) + "\n", ""),
+            "hook output": (attachment("hook_success", part), ""),
+            "pre-#77 prompt_snapshot": (attachment("prompt_snapshot", "x\n" + body_line + "\ny"), ""),
+            "non-ASCII first line": (attachment("prompt_snapshot", body_line + " é"), ""),
+            "only read the source": (read_source, part),
+            "bad lines around a snapshot": ("not json\n\"attachment\"\n" + attachment("prompt_snapshot", body_line), ""),
         }
-        for name, (content, expected) in cases.items():
-            transcript = os.path.join(self.state, f"t-{len(content)}.jsonl")
+        for n, (name, (content, expected)) in enumerate(cases.items()):
+            transcript = os.path.join(self.state, f"t-{n}.jsonl")
             with open(transcript, "w", encoding="utf-8") as f:
                 f.write(content)
             for source in ("resume", "fork"):
