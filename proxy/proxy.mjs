@@ -139,7 +139,7 @@ const server = http.createServer(async (req, res) => {
     const { response: up, buffered, errMeta, sent } = await upstreamChat({ upstream, path, method: req.method, body, headers, log, refit: fitter.refit });
     // A refit or a stripped prompt_cache_key changes the request; the tool-guard retry,
     // learn() and the log below must use the one that was actually sent.
-    if (sent !== undefined && sent !== body) { if (fit === null && path.startsWith("/chat")) { try { const d = JSON.parse(sent), o = JSON.parse(body); if (d.max_tokens !== o.max_tokens) fit = { from: o.max_tokens, to: d.max_tokens }; } catch {} } body = sent; }
+    if (sent !== undefined && sent !== body) { if (path.startsWith("/chat")) { try { const d = JSON.parse(sent), o = JSON.parse(body); if (d.max_tokens !== o.max_tokens) fit = { from: fit?.from ?? o.max_tokens, to: d.max_tokens }; } catch {} } body = sent; }
     // Buffered chat responses already had their status/error logged by the sniffer; only
     // non-buffered paths (non-chat routes, SSE error responses) still need the status log.
     if (up.status >= 400 && buffered === null) log(`${req.method} ${path} -> ${up.status}`);
