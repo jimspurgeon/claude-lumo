@@ -12,13 +12,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 WINDOWS = platform.system() == "Windows"
+# On Windows a bare "bash" resolves to System32's WSL launcher before PATH is searched (#91).
+BASH = shutil.which("bash") or "bash"
 
 
 def to_posix(path):
     """Path as bash sees it (Git Bash wants /c/... on Windows)."""
     if not WINDOWS:
         return str(path)
-    return subprocess.run(["bash", "-c", 'cygpath -u "$1"', "_", str(path)],
+    return subprocess.run([BASH, "-c", 'cygpath -u "$1"', "_", str(path)],
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
@@ -49,11 +51,11 @@ def run_install(sb):
     path = ":".join([to_posix(d) for d in tool_dirs] + ["/usr/bin", "/bin"])
     env = dict(os.environ, HOME=str(sb["home"]), APPDATA=str(sb["appdata"]),
                CLAUDE_LUMO_STATE_DIR=str(sb["state"]), CLAUDE_LUMO_PLAIN_OFFER="1", LUMO_PATH=path)
-    probe = subprocess.run(["bash", "-c", 'PATH="$LUMO_PATH"; command -v python'],
+    probe = subprocess.run([BASH, "-c", 'PATH="$LUMO_PATH"; command -v python'],
                            env=env, capture_output=True, text=True)
     if probe.returncode == 0:
         pytest.skip(f"`python` is in a system directory ({probe.stdout.strip()}); cannot hide it")
-    return subprocess.run(["bash", "-c", 'PATH="$LUMO_PATH"; exec bash "$1"', "_",
+    return subprocess.run([BASH, "-c", 'PATH="$LUMO_PATH"; exec bash "$1"', "_",
                            to_posix(ROOT / "install.sh")],
                           env=env, capture_output=True, text=True, timeout=300)
 

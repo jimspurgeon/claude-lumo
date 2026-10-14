@@ -34,7 +34,8 @@ jobs:
         run: |
           git config --global user.name "claude-lumo CI"
           git config --global user.email "ci@claude-lumo.invalid"
-      # On Windows runners "bash" from Python resolves to WSL's launcher; the scripts need Git Bash.
+      # Puts Git Bash ahead of other bash.exe copies on PATH. Windows still finds System32's WSL
+      # launcher first for a bare "bash", so the tests resolve it with shutil.which (#91).
       - name: Git Bash first on PATH
         if: runner.os == 'Windows'
         run: echo 'C:\Program Files\Git\bin' >> "$GITHUB_PATH"

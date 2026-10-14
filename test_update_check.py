@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# On Windows a bare "bash" resolves to System32's WSL launcher before PATH is searched (#91).
+BASH = shutil.which("bash") or "bash"
 sys.path.insert(0, HERE)
 
 # Load session-restart.py dynamically (dash in filename prevents normal import)
@@ -84,7 +87,7 @@ class RepoFixture(unittest.TestCase):
         env["CLAUDE_LUMO_STATE_DIR"] = self.state_dir
         if extra_env:
             env.update(extra_env)
-        return subprocess.run(["bash", os.path.join(HERE, "update-command.sh")],
+        return subprocess.run([BASH, os.path.join(HERE, "update-command.sh")],
                              capture_output=True, env=env, timeout=30, stdin=stdin)
 
     def add_release(self, tag, subject):

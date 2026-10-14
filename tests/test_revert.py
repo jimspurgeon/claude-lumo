@@ -8,6 +8,7 @@ CLAUDE_LUMO_DIR. CLAUDE_LUMO_STATE_DIR points at a fresh temp dir so no test
 ever touches the real install or state.
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,8 @@ import tempfile
 import pytest
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# On Windows a bare "bash" resolves to System32's WSL launcher before PATH is searched (#91).
+BASH = shutil.which("bash") or "bash"
 
 
 class Fixture:
@@ -62,7 +65,7 @@ class Fixture:
         env["CLAUDE_LUMO_STATE_DIR"] = self.state_dir
         if extra_env:
             env.update(extra_env)
-        proc = subprocess.run(["bash", os.path.join(HERE, "revert-command.sh"), arg],
+        proc = subprocess.run([BASH, os.path.join(HERE, "revert-command.sh"), arg],
                               capture_output=True, env=env, timeout=30,
                               stdin=subprocess.DEVNULL)
         out = proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
@@ -122,7 +125,7 @@ class TestVersionParsing:
         proc_env = os.environ.copy()
         proc_env["CLAUDE_LUMO_DIR"] = fx.clone_dir
         proc_env["CLAUDE_LUMO_STATE_DIR"] = fx.state_dir
-        proc = subprocess.run(["bash", os.path.join(HERE, "revert-command.sh")],
+        proc = subprocess.run([BASH, os.path.join(HERE, "revert-command.sh")],
                               capture_output=True, env=proc_env, timeout=30,
                               stdin=subprocess.DEVNULL)
         out = proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
@@ -161,7 +164,7 @@ class TestGuards:
         proc_env = os.environ.copy()
         proc_env["CLAUDE_LUMO_DIR"] = fx.state_dir
         proc_env["CLAUDE_LUMO_STATE_DIR"] = fx.state_dir
-        proc = subprocess.run(["bash", os.path.join(HERE, "revert-command.sh"), "v1.3.0"],
+        proc = subprocess.run([BASH, os.path.join(HERE, "revert-command.sh"), "v1.3.0"],
                               capture_output=True, env=proc_env, timeout=30,
                               stdin=subprocess.DEVNULL)
         out = proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
