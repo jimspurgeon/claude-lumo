@@ -3,10 +3,14 @@
 If the personal additions folder (CLAUDE_LUMO_LOCAL, default ~/.claude/lumo-local) has a
 statusline-next.sh, it is also run with the same status JSON, for tools that read the status line
 themselves (for example Orca); its output is ignored.
+
+`--lumo` (passed by settings-lumo.json) marks a claude-lumo session even when CLAUDE_LUMO is not in
+the environment, as in a session Claude Code re-hosted after the agents view (#77, #66).
 """
 import json, os, re, subprocess, sys
 from datetime import datetime
 
+LUMO = "--lumo" in sys.argv[1:] or os.environ.get("CLAUDE_LUMO") == "1"
 STATE_DIR = os.environ.get("CLAUDE_LUMO_STATE_DIR") or os.path.join(os.path.expanduser("~"), ".claude-lumo")
 
 def install_version():
@@ -204,12 +208,12 @@ if looks_like_fallback(actual, configured):
 else:
     # What to show when nothing fell back: the [LUMO] branch prefers the model
     # id, the [CLAUDE] branch the display name (pre-#42 behaviour preserved).
-    shown = configured if os.environ.get("CLAUDE_LUMO") == "1" else name
+    shown = configured if LUMO else name
 # Lumo installs know their compaction settings; plain Claude keeps its own percentage.
-pct = context_text(d.get("context_window") or {}, lumo=os.environ.get("CLAUDE_LUMO") == "1")
+pct = context_text(d.get("context_window") or {}, lumo=LUMO)
 ver = install_version()
 ver_txt = f"  {ver}" if ver else ""  # tag already starts with 'v'; 'dev' has no prefix
-if os.environ.get("CLAUDE_LUMO") == "1":
+if LUMO:
     sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} via local proxy{pct}{ver_txt}  (Claude: run `claude`)")
 else:
     sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {shown}{pct}{ver_txt}  (Lumo: run `claude-lumo`)")

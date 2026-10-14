@@ -224,7 +224,7 @@ removes the lines too.
 | "Slow thinking" or stuck at 5 min | Normal on lumo-max (~16 tok/s, minutes-long reasoning). Not a hang if requests keep finishing: `proxy/proxy.log` logs each one, and `curl 127.0.0.1:8790/v1/debug/live` shows what is in flight. `LUMO_CAPTURE=1` on the proxy saves raw requests and streams to `proxy/debug/`. |
 | "Invalid tool parameters" on parallel tool calls | Fixed in the proxy (it splits tool calls LiteLLM would merge). If it returns after a LiteLLM upgrade, check `splitToolCallChunks` in `proxy/proxy.mjs`. |
 | Agent stops mid-task right after saying what it will do next | Most often the reply mentioned `[DONE]` (an SSE fixture, say): LiteLLM ends the stream on any line containing it, so the proxy escapes it inside JSON (#13). Otherwise Lumo announced a tool call that never arrived intact. The proxy now repairs it or retries once (`dropped_tool`, `repaired_tool` and `tool_retry` in `proxy/proxy.log`); if both fail, the turn ends with a `[claude-lumo] Your tool call was lost in transit` message instead of going silent. See `proxy/tool-guard.mjs`. |
-| **Pressing LEFT ARROW in an agent view then re-entering that same agent causes permanent `no_db_connection` failures** (issue #60) | The proxy now recovers by retrying with `prompt_cache_key` stripped after two consecutive `no_db_connection` errors. If you still see persistent failures in a session after leaving the agent list, start a fresh `claude-lumo` session (or use `claude-lumo --resume <session_id>` for the session-resume hook); fresh sessions work because they get a new cache key. Never press into the agents view in other sessions. |
+| **Pressing LEFT ARROW in an agent view then re-entering that same agent causes permanent `no_db_connection` failures** (issue #60) | One cause is fixed in #77: Claude Code re-hosts a session that leaves the agents view without the launcher's environment, so its requests reached LiteLLM without the local key (LiteLLM answers `No connected db`); the settings now supply the key through `apiKeyHelper`, plus the rest of the launcher's environment and, through `hooks/lumo-prompt.py`, the system prompt. The proxy now recovers by retrying with `prompt_cache_key` stripped after two consecutive `no_db_connection` errors. If you still see persistent failures in a session after leaving the agent list, start a fresh `claude-lumo` session (or use `claude-lumo --resume <session_id>` for the session-resume hook); fresh sessions work because they get a new cache key. Never press into the agents view in other sessions. |
 | "response exceeded the 32000 output token maximum" | The model spent its whole budget thinking (often drafting a big batch in its head) before it answered; `proxy/proxy.log` shows `finish=length content=0c tools=0`. Split the work into smaller steps, for example one batch per tool call. The cap is `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in `settings-lumo.json` (32000, #19); you can raise it in your own `settings.json`, but each stuck turn then runs longer, at about 1.2K tokens a minute on lumo-max. |
 | Failed Edit with a "[claude-lumo]" note | The proxy added the closest real text to an Edit whose old text was not in the file; the model should retry with the text between the markers. |
 | WebSearch says it did not return a usable result | Since #73 WebSearch runs on Lumo's own built-in web search (the web UI's "Web search" toggle, no API key needed). The proxy passes the answer on only when the usage shows Lumo actually searched (the search results add thousands of prompt tokens) and the answer cites at least one source URL; otherwise the model gets a `[claude-lumo] WebSearch did not return a usable result` message instead of training-data guesses (#59). `proxy/proxy.log` shows the outcome: `websearch=ok`, `no_search` (Lumo answered from memory), `no_sources`, `timeout` (no answer within 120 s), `err_<type>` or `http_<status>` (upstream error) or `error_<name>` (proxy-side failure). Retry, or use WebFetch for specific URLs. |
@@ -306,9 +306,9 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `scripts/resume-shim-setup.sh` | Adds/removes the resume shim profile lines (used by `install.sh --resume-shim` and the uninstaller) |
 | `test-resume-shim.sh` | Resume shim tests: fake transcripts and stub binaries, no real sessions |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, no Claude attribution. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch into `~/.claude-lumo/settings.json` |
-| `LUMO.md` | Appended to the system prompt: Lumo costs and speed, routing, editing rules |
-| `render.py` | Builds `~/.claude-lumo/settings.json` and `system-prompt.md` at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
-| `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; chains to `statusline-next.sh` from your personal additions if present |
+| `LUMO.md` | The system prompt, delivered by `hooks/lumo-prompt.py` at startup and after /clear and /compact: Lumo costs and speed, routing, editing rules |
+| `render.py` | Builds `~/.claude-lumo/settings.json`, `system-prompt.md` and its hook parts (`prompt-parts/`) at each launch, merging your personal additions over ours, and `agents.json` from your personal agents |
+| `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line (`--lumo` forces `[LUMO]`; keep that flag if your personal `settings.json` overrides `statusLine`); chains to `statusline-next.sh` from your personal additions if present |
 | `wipe.py` | Finds and deletes finished conversation data (inactive 30+ days, branch merged/removed, project folder gone): run as `claude-lumo wipe` |
 | `privacy_audit.py` | Reads data safety posture (encryption, cloud sync, stale data volume): run as `claude-lumo privacy-audit` |
 | `proxy/proxy.mjs` | Lumo proxy: auth via browser cookie, retries, stream repair (splits multi-tool-call chunks that LiteLLM would merge), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
@@ -326,6 +326,8 @@ On 2026-10-13, a QA run killed all node.exe PIDs from a `tasklist | grep` result
 | `requirements.txt` | Just `litellm[proxy]` pinned |
 | `hooks/edit-assist.py` | Tombstone (removed in v1.2.4): no-op so running sessions don't break |
 | `hooks/busy-mark.py` | Session registry for the restart offer: writes a per-session busy flag (set on prompt submit, cleared when the turn ends) |
+| `hooks/lumo-prompt.py` | SessionStart hook (startup, clear, compact; on resume and fork only when the transcript lacks the prompt): the only way the system prompt (LUMO.md plus the personal one) reaches a session, printed in parts under the hook output cap, so a session Claude Code re-hosts after the agents view gets it exactly like a launched one (#77) |
+| `scripts/api-key.py` | `apiKeyHelper`: prints the local LiteLLM key, so a re-hosted session still authenticates (#77) |
 | `hooks/session-start-offer.py` | SessionStart hook: offers to wipe old conversations, at most once per day, silent when nothing qualifies |
 | `scripts/check-hook-tombstones.py` | Release check: every hook ever referenced on this branch exists under `hooks/` |
 | `scripts/separate_data.py` | Optional data separation: build/repair the link layout, migrate sessions between stores, status. Tests: `python scripts/test_separate_data.py` |
@@ -345,7 +347,9 @@ claude-lumo its own store for that data while rules stay shared:
 | `projects/` (conversations, auto memory), `history.jsonl`, `file-history/`, `session-env/`, `shell-snapshots/`, `todos/`, `plans/`, `paste-cache/`, `debug/`, `.credentials.json` | `CLAUDE.md`, `settings.json`, `keybindings.json`, `themes/`, `rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `output-styles/`, `plugins/`, `hooks/` |
 
 The launcher exports `CLAUDE_CONFIG_DIR=~/.claude-lumo/data` for its own process only, so
-plain `claude` is untouched. Directories are linked as junctions on Windows (no admin
+plain `claude` is untouched. It also writes the value into `~/.claude-lumo/settings.json`
+(read only by claude-lumo), so a session Claude Code re-hosts after the agents view keeps
+using the separate store (#77). Directories are linked as junctions on Windows (no admin
 rights needed) and symlinks elsewhere; files are hardlinks (or symlinks when the privilege
 allows, with a refreshed copy as the last resort, warned about).
 
@@ -395,7 +399,7 @@ write to it or delete it. Everything is optional, and your files win over ours:
 | File | Effect |
 |---|---|
 | `settings.json` | Merged over `settings-lumo.json` at each launch: objects merge key by key, lists are appended (your hooks and permissions add to ours), anything else is replaced. Invalid JSON is skipped with a warning |
-| `LUMO.md` | Appended to the system prompt after this repo's `LUMO.md` (your agent names, project rules) |
+| `LUMO.md` | Added to the system prompt after this repo's `LUMO.md` (your agent names, project rules) |
 | `agents/*.md` | Your own versions of agents, in the usual Claude Code agent format (frontmatter with `name`, `description`, `tools`, `model`, then the prompt). Passed to claude with `--agents`, so in claude-lumo they replace the agents of the same name in `~/.claude/agents`, which stay untouched for plain `claude`. See below |
 | `statusline-next.sh` | Run with the same status-line JSON after `[LUMO]` is printed, for tools that read the status line (for example Orca); its output is ignored |
 

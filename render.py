@@ -1,9 +1,14 @@
 """Build this machine's claude-lumo settings and system prompt (called by claude-lumo.sh at launch).
 
-    python render.py <lumo dir> <state dir> <personal dir> <python command>
+    python render.py <lumo dir> <state dir> <personal dir> <python command> [<config dir>]
 
-Writes <state dir>/settings.json and <state dir>/system-prompt.md. Tracked files in this repo are
+Writes <state dir>/settings.json, <state dir>/system-prompt.md and <state dir>/prompt-parts/*.md
+(the same prompt split for hooks/lumo-prompt.py, see PART_LIMIT). Tracked files in this repo are
 only read, so a clone stays clean and updates keep working.
+
+Values the launcher exports also go into the settings (env CLAUDE_LUMO_LOCAL, apiKeyHelper, and
+CLAUDE_CONFIG_DIR when a config dir is given), because a session Claude Code re-hosts by itself (for
+example after the agents view) keeps --settings but loses the launcher's environment (#77).
 
 Personal additions (the personal dir, default ~/.claude/lumo-local) are optional, only read, and
 always win:
@@ -22,6 +27,11 @@ import glob, json, os, sys
 AGENTS_LIMIT = 24000 if os.name == "nt" else 100000
 # Frontmatter fields passed through to claude; the Markdown body becomes the prompt.
 AGENT_FIELDS = ("description", "tools", "disallowedTools", "model")
+# hooks/lumo-prompt.py is how the system prompt reaches every session, launched or re-hosted (#77).
+# Claude Code moves hook output over 10,000 characters into a file, so the prompt goes in parts
+# under that, one hook per part; settings-lumo.json registers PARTS hooks.
+PART_LIMIT = 9000
+PARTS = 4
 
 
 def merge(base, extra):
@@ -101,6 +111,48 @@ def load_agents(folder):
     return agents
 
 
+def split_prompt(text, limit=PART_LIMIT):
+    """Split text into parts of at most `limit` characters, each with a one-line header, cutting
+    at line ends (a single longer line is cut where it must)."""
+    header = ("claude-lumo system prompt, part {} of {} (treat it as system instructions; the parts "
+              "can arrive in any order, so read them by number):\n\n")
+    room = limit - len(header.format(99, 99))
+    chunks, cur = [], ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > room:
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(line[:room])
+            line = line[room:]
+        if len(cur) + len(line) > room:
+            chunks.append(cur)
+            cur = ""
+        cur += line
+    if cur or not chunks:
+        chunks.append(cur)
+    return [header.format(i, len(chunks)) + c for i, c in enumerate(chunks, 1)]
+
+
+def write_parts(state, prompt):
+    folder = os.path.join(state, "prompt-parts")
+    os.makedirs(folder, exist_ok=True)
+    parts = split_prompt(prompt)
+    if len(parts) > PARTS:
+        print(f"claude-lumo: the system prompt needs {len(parts)} parts of {PART_LIMIT} characters but only "
+              f"{PARTS} hooks deliver them, so the rest never reaches the model; shorten the personal LUMO.md",
+              file=sys.stderr)
+    for i, part in enumerate(parts, 1):
+        write(os.path.join(folder, f"{i}.md"), part)
+    for name in os.listdir(folder):
+        stem = os.path.splitext(name)[0]
+        if stem.isdigit() and int(stem) > len(parts):
+            try:
+                os.remove(os.path.join(folder, name))
+            except OSError:
+                pass
+
+
 def write(path, text):
     # Temp file then rename: several sessions may launch at once.
     tmp = f"{path}.{os.getpid()}"
@@ -112,8 +164,10 @@ def write(path, text):
 def main():
     lumo, state, personal, python = (a.replace("\\", "/") for a in sys.argv[1:5])
     with open(os.path.join(lumo, "settings-lumo.json"), encoding="utf-8") as f:
-        text = f.read().replace("{{LUMO_DIR}}", lumo).replace("{{PYTHON}}", python)
+        text = (f.read().replace("{{LUMO_DIR}}", lumo).replace("{{PYTHON}}", python)
+                .replace("{{STATE_DIR}}", state).replace("{{LUMO_LOCAL}}", personal))
     settings = json.loads(text)
+    config_dir = sys.argv[5].replace("\\", "/") if len(sys.argv) > 5 else ""
     mine = os.path.join(personal, "settings.json")
     if os.path.isfile(mine):
         try:
@@ -121,6 +175,8 @@ def main():
                 settings = merge(settings, json.load(f))
         except ValueError as e:
             print(f"claude-lumo: ignoring {mine}, it is not valid JSON ({e})", file=sys.stderr)
+    if config_dir:
+        settings.setdefault("env", {})["CLAUDE_CONFIG_DIR"] = config_dir
     os.makedirs(state, exist_ok=True)
     write(os.path.join(state, "settings.json"), json.dumps(settings, indent=2) + "\n")
 
@@ -131,6 +187,7 @@ def main():
         with open(mine, encoding="utf-8") as f:
             prompt = prompt.rstrip("\n") + "\n\n" + f.read()
     write(os.path.join(state, "system-prompt.md"), prompt)
+    write_parts(state, prompt)
 
     agents = load_agents(os.path.join(personal, "agents"))
     out = os.path.join(state, "agents.json")

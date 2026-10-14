@@ -3,6 +3,7 @@
   "autoCompactWindow": 133000,
   "env": {
     "CLAUDE_LUMO": "1",
+    "CLAUDE_LUMO_LOCAL": "{{LUMO_LOCAL}}",
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
     "ANTHROPIC_MODEL": "lumo-max",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "lumo-max",
@@ -15,23 +16,12 @@
     "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
     "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
   },
+  "apiKeyHelper": "{{PYTHON}} {{LUMO_DIR}}/scripts/api-key.py {{STATE_DIR}}",
   "statusLine": {
     "type": "command",
-    "command": "{{PYTHON}} {{LUMO_DIR}}/statusline.py"
+    "command": "{{PYTHON}} {{LUMO_DIR}}/statusline.py --lumo"
   },
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/session-start-offer.py",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -46,10 +36,45 @@
     ],
     "SessionStart": [
       {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/session-start-offer.py",
+            "timeout": 30
+          }
+        ]
+      },
+      {
         "hooks": [
           {
             "type": "command",
             "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/busy-mark.py",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "startup|clear|compact|resume|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/lumo-prompt.py {{STATE_DIR}} 1",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/lumo-prompt.py {{STATE_DIR}} 2",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/lumo-prompt.py {{STATE_DIR}} 3",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "{{PYTHON}} {{LUMO_DIR}}/hooks/lumo-prompt.py {{STATE_DIR}} 4",
             "timeout": 10
           }
         ]
