@@ -531,8 +531,10 @@ local key, logs, and the settings and system prompt rendered at each launch.
 Hook scripts referenced in `settings-lumo.json` are part of the interface for running
 sessions: a session keeps the hook commands it started with, so after an update removes
 a hook file, that session's Edit calls fail until it is restarted. When retiring a
-hook, leave a tombstone that reads stdin and exits 0 silently (see
-`hooks/edit-assist.py`) instead of deleting the script.
+hook, first leave a tombstone that reads stdin and exits 0 silently instead of
+deleting the script; only once every session that could still hold the hook command
+has exited may the tombstone be listed in `RETIRED_HOOKS` in
+`scripts/check-hook-tombstones.py` and the file deleted.
 
 Before every release, run the check:
 

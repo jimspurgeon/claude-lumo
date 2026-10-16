@@ -12,6 +12,9 @@ from pathlib import Path
 
 SETTINGS_FILE = "settings-lumo.json"
 HOOK_RE = re.compile(r"hooks/([A-Za-z0-9_.-]+\.py)")
+# Hooks permanently retired: absent on purpose, no tombstone needed. Old references still
+# appear in the settings-file history, so the check would otherwise fail forever (#125).
+RETIRED_HOOKS = {"edit-assist.py"}  # retired 2026-10, after every pre-v1.2.4 session had exited
 
 
 def main():
@@ -29,7 +32,7 @@ def main():
         print(result.stderr.strip() or result.stdout.strip())
         return 1
 
-    hook_files = set(HOOK_RE.findall(result.stdout))
+    hook_files = set(HOOK_RE.findall(result.stdout)) - RETIRED_HOOKS
     if not hook_files:
         print(f"No hook files found in {SETTINGS_FILE} history; expected at least one. "
               "Run this from a claude-lumo checkout.")
