@@ -9,6 +9,8 @@ in `~/.claude`. But the models behind it are Proton Lumo's `lumo-max` (GLM 5.3) 
 
 The status line always shows which one you are on: `[CLAUDE] Opus 5.5` or `[LUMO] lumo-max`.
 
+![claude-lumo working in a terminal](docs/screenshot.png)
+
 ## What you get
 
 - **No API keys.** The proxy signs every request with your Lumo login, read straight
