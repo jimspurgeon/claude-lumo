@@ -1,0 +1,12 @@
+# ci-watcher live config (scripts/watch_ci.py), read by watch_ci.py each run.
+# Edit this file directly to change what the watcher monitors.
+# Format: TOML (stdlib tomllib parses it; zero dependencies).
+
+[[repos]]
+repo = "jimspurgeon/claude-lumo"
+branch = "master"                          # optional: only watch this branch
+path = "C:/Users/Jim/orca/claude-lumo"     # local clone, used to create fix worktrees
+
+# [[repos]]
+# repo = "owner/other-repo"
+# path = "C:/src/other-repo"
