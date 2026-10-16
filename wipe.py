@@ -11,7 +11,8 @@ a done marker exists, or (allowlist mode) the project is outside the allowlist f
 
 Stores enumerated: projects/<project>/<session>.jsonl and folders, session-env/, file-history/,
 tasks/, history.jsonl (matching lines only), Lumo state logs, temp scratch (claude-* under
-CLAUDE_CODE_TMPDIR or TEMP). Settings, credentials, memory and config are never touched:
+CLAUDE_CODE_TMPDIR or TEMP), stale proxy debug dumps (the repo's proxy/debug/ spill). Settings,
+credentials, memory and config are never touched:
 a project wipe keeps projects/<project>/memory/ and deletes the rest of that project folder.
 Orca data is report-only: the wipe output lists what Orca keeps and how to clear it by hand.
 
@@ -584,6 +585,31 @@ def stale_lumo_logs(days):
     return out
 
 
+def stale_debug_dumps(days, repo_root=None):
+    """Entries in the repo's proxy/debug conversation dumps older than the cutoff.
+    proxy/debug/ sits next to proxy/proxy.mjs in this script's repo, not the
+    Lumo state dir; gitignored spill, aged out like the Lumo logs."""
+    root = repo_root or os.path.dirname(os.path.abspath(__file__))
+    debug_dir = os.path.join(root, "proxy", "debug")
+    if not os.path.isdir(debug_dir) or is_any_link(debug_dir):
+        return []
+    cutoff = time.time() - days * 86400
+    out = []
+    try:
+        entries = list(os.scandir(debug_dir))
+    except OSError:
+        return out
+    for entry in entries:
+        try:
+            if not (entry.is_dir(follow_symlinks=False) or entry.is_file(follow_symlinks=False)):
+                continue
+            if entry.stat().st_mtime < cutoff:
+                out.append(("debug-dump", entry.path))
+        except OSError:
+            pass
+    return out
+
+
 # Config-dir stores that hold no session key: entries are aged out globally,
 # never attached to a per-session wipe plan.
 STALE_STORE_NAMES = ("paste-cache", "image-cache", "shell-snapshots", "plans", "debug", "uploads")
@@ -869,7 +895,7 @@ def delete_all(target_groups, store_root=None):
     return results
 
 
-def print_report(store_groups, temp_paths, log_paths):
+def print_report(store_groups, temp_paths, log_paths, dump_paths=()):
     """One combined report across every scanned store.
 
     Each store group is {"store": record, "plans": [...], "store_paths": [...]}
@@ -910,13 +936,15 @@ def print_report(store_groups, temp_paths, log_paths):
                 print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
     for group, label in (
             (temp_paths, "stale temp scratch"),
-            (log_paths, "stale Lumo logs")):
+            (log_paths, "stale Lumo logs"),
+            (dump_paths, "stale proxy debug dumps")):
         if group:
             print(f"\n{label.title()}:")
             for kind, path in group:
                 print(f"  [{kind}] {path}  ({format_size(tree_size(path))})")
     grand = (total + sum(tree_size(p) for _, p in temp_paths)
              + sum(tree_size(p) for _, p in log_paths)
+             + sum(tree_size(p) for _, p in dump_paths)
              + sum(tree_size(p) for g in store_groups for _, p in g["store_paths"]))
     print(f"\nTotal to delete: {format_size(grand)}")
     print("Deletion is permanent but logical, not forensic: SSD wear levelling, backups,")
@@ -1145,7 +1173,7 @@ def main(argv=None):
                 print(f"  {plan['store']['path']}", file=sys.stderr)
             sys.exit(1)
         plans = matches
-        temp_paths, log_paths = [], []
+        temp_paths, log_paths, dump_paths = [], [], []
     elif args.project:
         for store in stores:
             plan = plan_for_named_project(store["path"], args.project, args.old_sessions,
@@ -1160,7 +1188,7 @@ def main(argv=None):
         if not plans:
             print(f"No project matching {args.project} found in any store's projects.")
             sys.exit(1)
-        temp_paths, log_paths = [], []
+        temp_paths, log_paths, dump_paths = [], [], []
     else:
         for store in stores:
             plans_for_store = collect_candidates(store["path"], args.days, args.allowlist,
@@ -1183,9 +1211,10 @@ def main(argv=None):
                                   "store_paths": store_paths})
         temp_paths = stale_temp_scratch(resolve_temp_dir(), args.days)
         log_paths = stale_lumo_logs(args.days)
+        dump_paths = stale_debug_dumps(args.days)
 
     if not plans and not any(g["plans"] or g["store_paths"] for g in store_groups) \
-            and not temp_paths and not log_paths:
+            and not temp_paths and not log_paths and not dump_paths:
         print("Nothing to wipe.")
         return
 
@@ -1193,7 +1222,7 @@ def main(argv=None):
         store_groups = [{"store": p["store"], "plans": [p], "store_paths": []}
                          for p in plans]
 
-    print_report(store_groups, temp_paths, log_paths)
+    print_report(store_groups, temp_paths, log_paths, dump_paths)
     print_orca_section(describe_orca(resolve_orca_dir()))
 
     if args.dry_run:
@@ -1227,6 +1256,10 @@ def main(argv=None):
             print("# Stale logs:")
             for _, p in log_paths:
                 print(f"# rm -f {p}")
+        if dump_paths:
+            print("# Stale proxy debug dumps:")
+            for _, p in dump_paths:
+                print(f"# rm -rf {p}")
         print("\nTo enable automatic deletion, re-run with --mode auto or --yes.")
         return
 
@@ -1272,9 +1305,9 @@ def main(argv=None):
                     print(f"  FAILED: {path} ({err})", file=sys.stderr)
             deleted_plans.add(id(plan))
 
-        # REMOVE plans, temp scratch and logs go only after one confirmation (or --yes).
-        # A run that cannot prompt deletes nothing.
-        has_bulk = bool(remove_plans or temp_paths or log_paths)
+        # REMOVE plans, temp scratch, logs and debug dumps go only after one confirmation
+        # (or --yes). A run that cannot prompt deletes nothing.
+        has_bulk = bool(remove_plans or temp_paths or log_paths or dump_paths)
         approved = has_bulk and (args.yes or (_stdin_is_tty() and confirm(
             "Type 'yes' to permanently delete the REMOVE items, temp scratch and logs: ")))
         if has_bulk and not approved:
@@ -1308,8 +1341,8 @@ def main(argv=None):
                 _, reason = plan["_classification"]
                 print(f"  {plan.get('project', 'unknown')}: {reason}")
 
-        # Temp scratch and logs ride on the same confirmation as the REMOVE items.
-        for group in temp_paths, log_paths:
+        # Temp scratch, logs and debug dumps ride on the same confirmation as the REMOVE items.
+        for group in temp_paths, log_paths, dump_paths:
             if not group or not approved:
                 continue
             freed += sum(tree_size(p) for _, p in group)
@@ -1370,7 +1403,7 @@ def main(argv=None):
                 failed += 1
                 print(f"  FAILED: {path} ({err})", file=sys.stderr)
 
-    for group in temp_paths, log_paths:
+    for group in temp_paths, log_paths, dump_paths:
         if not group:
             continue
         freed += sum(tree_size(p) for _, p in group)

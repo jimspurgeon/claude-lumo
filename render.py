@@ -19,12 +19,18 @@ always win:
   <state dir>/agents.json, which the launcher passes to claude with --agents, so in claude-lumo they
   replace the agents of the same name in ~/.claude/agents. No such files: no agents.json.
 """
-import glob, json, os, sys
+import glob, json, os, re, sys
+
+# The compaction window must stay below the token window the proxy fits replies into (it clamps
+# max_tokens once prompt + reply would not fit), so it is derived from CONTEXT_TOKENS minus this
+# margin rather than hardcoded in settings-lumo.json.
+COMPACT_MARGIN = 12000
 
 # Claude reads --agents from a file only with --print, so for normal sessions the agents travel
 # inline on the command line. Windows caps a whole command line at 32,767 characters; keep room for
-# the rest of it. Linux caps one argument at 128 KiB.
-AGENTS_LIMIT = 24000 if os.name == "nt" else 100000
+# the rest of it (hence the low default there). Linux caps one argument at 128 KiB.
+# LUMO_AGENTS_LIMIT overrides the default.
+AGENTS_LIMIT = int(os.environ.get("LUMO_AGENTS_LIMIT", 24000 if os.name == "nt" else 100000))
 # Frontmatter fields passed through to claude; the Markdown body becomes the prompt.
 AGENT_FIELDS = ("description", "tools", "disallowedTools", "model")
 # hooks/lumo-prompt.py is how the system prompt reaches every session, launched or re-hosted (#77).
@@ -32,6 +38,8 @@ AGENT_FIELDS = ("description", "tools", "disallowedTools", "model")
 # under that, one hook per part; settings-lumo.json registers PARTS hooks.
 PART_LIMIT = 9000
 PARTS = 4
+# Appended to the last delivered part when the prompt had to be trimmed to PARTS parts.
+TRIM_NOTICE = "[claude-lumo: system prompt trimmed, {} chars lost; shorten LUMO.md]"
 
 
 def merge(base, extra):
@@ -134,14 +142,36 @@ def split_prompt(text, limit=PART_LIMIT):
     return [header.format(i, len(chunks)) + c for i, c in enumerate(chunks, 1)]
 
 
-def write_parts(state, prompt):
-    folder = os.path.join(state, "prompt-parts")
-    os.makedirs(folder, exist_ok=True)
+def overflow_message(personal, parts):
+    """The overflow complaint shared by both modes: names the personal LUMO.md and the excess."""
+    excess = sum(len(p) for p in parts) - PARTS * PART_LIMIT
+    return (f"claude-lumo: error: the system prompt needs {len(parts)} parts of {PART_LIMIT} characters but "
+            f"only {PARTS} hooks deliver them; the personal LUMO.md at "
+            f"{os.path.join(personal, 'LUMO.md') if personal else '<personal>'} puts it {excess} characters "
+            f"over the {PARTS}-part cap")
+
+
+def trim_parts(parts):
+    """Keep the first PARTS-1 parts whole and cut the last to fit, marking the cut visibly."""
+    excess = sum(len(p) for p in parts) - PARTS * PART_LIMIT
+    notice = TRIM_NOTICE.format(excess)
+    last = parts[PARTS - 1]
+    return parts[:PARTS - 1] + [last[:PART_LIMIT - len(notice) - 1] + "\n" + notice]
+
+
+def write_parts(state, prompt, personal=""):
     parts = split_prompt(prompt)
     if len(parts) > PARTS:
-        print(f"claude-lumo: the system prompt needs {len(parts)} parts of {PART_LIMIT} characters but only "
-              f"{PARTS} hooks deliver them, so the rest never reaches the model; shorten the personal LUMO.md",
-              file=sys.stderr)
+        if os.environ.get("LUMO_FAIL_ON_OVERFLOW", "") == "1":
+            print(overflow_message(personal, parts) + "; launch aborted (LUMO_FAIL_ON_OVERFLOW=1)",
+                  file=sys.stderr)
+            sys.exit(1)
+        print(overflow_message(personal, parts)
+              + f"; delivering only the first {PARTS} parts, trimmed at the end (set "
+                f"LUMO_FAIL_ON_OVERFLOW=1 to fail instead of trimming)", file=sys.stderr)
+        parts = trim_parts(parts)
+    folder = os.path.join(state, "prompt-parts")
+    os.makedirs(folder, exist_ok=True)
     for i, part in enumerate(parts, 1):
         write(os.path.join(folder, f"{i}.md"), part)
     for name in os.listdir(folder):
@@ -161,11 +191,30 @@ def write(path, text):
     os.replace(tmp, path)
 
 
+def context_tokens(lumo):
+    """The proxy's token window (CONTEXT_TOKENS in proxy/context-fit.mjs), the one value Claude
+    Code's compaction window must stay below. Falls back to 131072 with a warning when the file
+    or the constant cannot be found (renamed or restructured without this renderer catching up)."""
+    path = os.path.join(lumo, "proxy", "context-fit.mjs")
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = re.search(r"\bCONTEXT_TOKENS\s*=\s*(\d+)", f.read())
+    except OSError:
+        m = None
+    if not m:
+        print(f"claude-lumo: {path} has no CONTEXT_TOKENS constant; falling back to 131072 for the "
+              f"compaction window", file=sys.stderr)
+        return 131072
+    return int(m.group(1))
+
+
 def main():
     lumo, state, personal, python = (a.replace("\\", "/") for a in sys.argv[1:5])
+    window = context_tokens(lumo) - COMPACT_MARGIN
     with open(os.path.join(lumo, "settings-lumo.json"), encoding="utf-8") as f:
         text = (f.read().replace("{{LUMO_DIR}}", lumo).replace("{{PYTHON}}", python)
-                .replace("{{STATE_DIR}}", state).replace("{{LUMO_LOCAL}}", personal))
+                .replace("{{STATE_DIR}}", state).replace("{{LUMO_LOCAL}}", personal)
+                .replace("{{AUTO_COMPACT_WINDOW}}", str(window)))
     settings = json.loads(text)
     config_dir = sys.argv[5].replace("\\", "/") if len(sys.argv) > 5 else ""
     mine = os.path.join(personal, "settings.json")
@@ -187,7 +236,7 @@ def main():
         with open(mine, encoding="utf-8") as f:
             prompt = prompt.rstrip("\n") + "\n\n" + f.read()
     write(os.path.join(state, "system-prompt.md"), prompt)
-    write_parts(state, prompt)
+    write_parts(state, prompt, personal)
 
     agents = load_agents(os.path.join(personal, "agents"))
     out = os.path.join(state, "agents.json")

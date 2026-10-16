@@ -1,6 +1,6 @@
 {
   "model": "lumo-max",
-  "autoCompactWindow": 133000,
+  "autoCompactWindow": {{AUTO_COMPACT_WINDOW}},
   "env": {
     "CLAUDE_LUMO": "1",
     "CLAUDE_LUMO_LOCAL": "{{LUMO_LOCAL}}",

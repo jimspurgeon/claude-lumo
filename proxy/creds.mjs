@@ -19,8 +19,10 @@ import { platform } from "node:process";
 
 // ---------- candidate cookie databases ----------
 
-function firefoxDbs() {
-  const roots = [
+// `rootsOverride` (used by tests): an explicit list of profile dirs to search instead of
+// the real browser locations below. `undefined` keeps the default behavior.
+function firefoxDbs(rootsOverride) {
+  const roots = rootsOverride ?? [
     // Windows
     process.env.APPDATA && join(process.env.APPDATA, "Mozilla", "Firefox", "Profiles"),
     process.env.APPDATA && join(process.env.APPDATA, "LibreWolf", "Profiles"),
@@ -210,7 +212,19 @@ function readChromium(entry) {
 
 // ---------- entry point ----------
 
-export function readLumoCredentials() {
+// `opts.firefoxProfiles` (tests only): an array of profile dirs to search for cookies.sqlite
+// instead of the real browser locations. When given, the env/manual/Firefox/Chromium fallback
+// chain is replaced by those dirs alone, so nothing outside them is read.
+export function readLumoCredentials(opts = {}) {
+  if (opts.firefoxProfiles) {
+    for (const root of opts.firefoxProfiles) {
+      for (const db of firefoxDbs([root])) {
+        try { const c = readFirefox(db); if (c) return c; } catch {}
+      }
+    }
+    return null;
+  }
+
   // 1. Environment
   if (process.env.LUMO_TOKEN && process.env.LUMO_UID)
     return { uid: process.env.LUMO_UID, token: process.env.LUMO_TOKEN, source: "env" };

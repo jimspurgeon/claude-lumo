@@ -1,5 +1,5 @@
 """Tests for render.py (personal agents, re-host settings and prompt parts). Run: python test_render.py"""
-import json, os, subprocess, sys, tempfile, unittest
+import json, os, re, subprocess, sys, tempfile, unittest
 
 import render
 
@@ -74,6 +74,13 @@ class PersonalAgents(unittest.TestCase):
             self.assertEqual(list(json.load(f)), ["a"])
         self.assertIn("skipping agent b", result.stderr)
 
+    def test_agents_limit_can_be_overridden_by_environment(self):
+        # AGENTS_LIMIT is read at import time, so check it in a fresh interpreter with the variable set.
+        out = subprocess.run([sys.executable, "-c", "import render; print(render.AGENTS_LIMIT)"],
+                              capture_output=True, text=True, check=True, cwd=HERE,
+                              env={**os.environ, "LUMO_AGENTS_LIMIT": "4321"}).stdout.strip()
+        self.assertEqual(out, "4321")
+
 
 class RehostedSessions(unittest.TestCase):
     """#77: a session Claude Code re-hosts by itself keeps --settings but loses the launcher's
@@ -128,8 +135,9 @@ class RehostedSessions(unittest.TestCase):
         self.assertEqual(entry["matcher"], "startup|clear|compact|resume|fork")
 
     def test_parts_stay_under_the_hook_output_cap_and_rebuild_the_prompt(self):
+        # Within the PARTS cap (overflow behaviour is covered by PromptOverflow below).
         with open(os.path.join(self.personal, "LUMO.md"), "w", encoding="utf-8") as f:
-            f.write("# Personal\n\n" + ("A rule that is long enough. " * 9 + "\n") * 80 + "x" * 12000 + "\n")
+            f.write("# Personal\n\n" + ("A rule that is long enough. " * 9 + "\n") * 80)
         self.settings()
         with open(os.path.join(self.state, "system-prompt.md"), encoding="utf-8") as f:
             prompt = f.read()
@@ -201,6 +209,15 @@ class RehostedSessions(unittest.TestCase):
         self.assertNotIn("export ANTHROPIC_AUTH_TOKEN", launcher)
         self.assertIn("unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY", launcher)
 
+    def test_compact_window_stays_below_the_proxy_token_window(self):
+        # The proxy clamps replies once the prompt nears CONTEXT_TOKENS, so Claude Code must compact
+        # before that point: the window is CONTEXT_TOKENS minus a margin of at least 12000.
+        s = self.settings()
+        context = render.context_tokens(HERE)
+        self.assertLessEqual(s["autoCompactWindow"], context - render.COMPACT_MARGIN)
+        self.assertGreaterEqual(context - s["autoCompactWindow"], 12000)
+        self.assertLessEqual(s["autoCompactWindow"], 119072)
+
     def test_settings_template_has_no_duplicate_keys(self):
         # json.load keeps only the last of two equal keys, which once dropped a SessionStart hook.
         def no_dupes(pairs):
@@ -209,7 +226,11 @@ class RehostedSessions(unittest.TestCase):
             self.assertFalse(dupes, f"duplicate keys: {dupes}")
             return dict(pairs)
         with open(os.path.join(HERE, "settings-lumo.json"), encoding="utf-8") as f:
-            json.load(f, object_pairs_hook=no_dupes)
+            # Placeholders are filled in by render.py before this file is parsed as JSON.
+            text = (f.read().replace("{{LUMO_LOCAL}}", "x").replace("{{PYTHON}}", "x")
+                    .replace("{{LUMO_DIR}}", "x").replace("{{STATE_DIR}}", "x")
+                    .replace("{{AUTO_COMPACT_WINDOW}}", "0"))
+        json.loads(text, object_pairs_hook=no_dupes)
 
     def test_api_key_helper_prints_the_key(self):
         os.makedirs(self.state)
@@ -222,6 +243,64 @@ class RehostedSessions(unittest.TestCase):
                "CLAUDE_LUMO_UPDATE_CHECK": "0"}  # no real update check from a test (#120)
         self.assertIn("[LUMO]", run_script("statusline.py", ["--lumo"], env).stdout)
         self.assertIn("[CLAUDE]", run_script("statusline.py", [], env).stdout)
+
+
+class PromptOverflow(unittest.TestCase):
+    """Audit 4: a prompt over PARTS * PART_LIMIT used to lose parts silently; now it is trimmed
+    with a visible notice, or fails loudly with LUMO_FAIL_ON_OVERFLOW=1."""
+
+    LUMO = ("A rule that is long enough to fill parts. " * 20 + "\n")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.personal = os.path.join(self.tmp.name, "personal")
+        self.state = os.path.join(self.tmp.name, "state")
+        os.makedirs(self.personal)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def oversized(self):
+        # Enough text that the split prompt needs more than PARTS parts.
+        with open(os.path.join(self.personal, "LUMO.md"), "w", encoding="utf-8") as f:
+            f.write("# Personal\n\n" + self.LUMO * (render.PARTS * render.PART_LIMIT // 800))
+
+    def run_overflow(self, env_extra=None):
+        self.oversized()
+        env = {**os.environ, **(env_extra or {})}
+        return subprocess.run([sys.executable, os.path.join(HERE, "render.py"), HERE, self.state,
+                               self.personal, "python"], capture_output=True, text=True, env=env)
+
+    def parts(self):
+        folder = os.path.join(self.state, "prompt-parts")
+        return sorted(os.listdir(folder), key=lambda n: int(n.split(".")[0]))
+
+    def test_overflow_is_trimmed_to_parts_with_a_notice(self):
+        result = self.run_overflow()
+        self.assertEqual(result.returncode, 0)
+        files = self.parts()
+        self.assertEqual(files, [f"{i}.md" for i in range(1, render.PARTS + 1)])
+        texts = []
+        for name in files:
+            with open(os.path.join(self.state, "prompt-parts", name), encoding="utf-8") as f:
+                texts.append(f.read())
+        # The last delivered part is cut to fit and ends with the visible truncation notice.
+        self.assertTrue(all(len(t) <= render.PART_LIMIT for t in texts))
+        lost = int(re.search(r"(\d+) chars lost", texts[-1]).group(1))
+        self.assertGreater(lost, 0)
+        self.assertIn(f"[claude-lumo: system prompt trimmed, {lost} chars lost; shorten LUMO.md]",
+                      texts[-1])
+        self.assertNotIn("never reaches the model", "".join(texts))
+        # The stderr error names the personal LUMO.md and the excess character count.
+        self.assertIn("LUMO.md", result.stderr)
+        self.assertIn(str(lost), result.stderr)
+
+    def test_overflow_fails_with_the_fail_flag(self):
+        result = self.run_overflow({"LUMO_FAIL_ON_OVERFLOW": "1"})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("LUMO.md", result.stderr)
+        self.assertIn("characters over", result.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.state, "prompt-parts")))
 
 
 class SplitPrompt(unittest.TestCase):
