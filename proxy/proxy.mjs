@@ -70,6 +70,8 @@ let nextId = 0;
 const server = http.createServer(async (req, res) => {
   const path = req.url.replace(/^\/v1/, "");
   if (path === "/debug/live") {
+    // Exposes in-flight reasoning tails (last 400 chars of each stream) to any local
+    // process: loopback only, no auth. Intentional, for local debugging of stuck turns.
     const now = Date.now(), rows = [...live.values()].map((r) => ({ id: r.id, model: r.model, secs: Math.round((now - r.t0) / 1000), idle: Math.round((now - r.last) / 1000), bytes: r.bytes, reasoning: r.stats?.reasoning.length ?? 0, content: r.stats?.content ?? 0, tail: r.stats?.reasoning.slice(-400) }));
     res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify(rows, null, 1));
   }

@@ -50,6 +50,17 @@ Two local ports are used: 4000 and 8790. Nothing leaves your machine except traf
 to lumo.proton.me. No credentials are stored in the repo, and re-running the installer
 is always safe.
 
+The system prompt is assembled at each launch by `render.py` (this repo's `LUMO.md`
+plus your personal one) and delivered to every session — re-hosted sessions included —
+as four SessionStart hook parts of up to 9000 characters each (hook output is capped at
+10,000), about 36,000 characters in total. If the assembled prompt exceeds that, render.py
+trims it visibly (a notice appears in the last delivered part) by default;
+`LUMO_FAIL_ON_OVERFLOW=1` aborts the launch instead.
+
+Note: the proxy's `/v1/debug/live` endpoint on 127.0.0.1 exposes the live reasoning
+tails of in-flight requests to any local process. It is kept functional for local
+debugging of stuck turns.
+
 ## Install
 
 ### One command (all OSes)
@@ -114,6 +125,16 @@ Manual fallback (any browser, 30 seconds): in DevTools, Application, Cookies,
 ```json
 {"uid": "AUTH-xxxxx without the AUTH- prefix", "token": "the cookie value"}
 ```
+
+`login.json` is plaintext by design: there is no keychain integration. Any local
+process running as your user can read it, and credential extraction from the browser
+is inherent to the keyless design — the tool trades secret storage for reading an
+existing login.
+
+If no login is found that way, the fallback credential scan walks every
+Chromium-family profile on the machine (Chrome, Edge, Brave, Vivaldi, Opera) looking
+for a Lumo login. The Firefox-first path is preferred; the scan only reads cookie
+databases.
 
 **Step 3: install claude-lumo.**
 
@@ -431,6 +452,10 @@ inline on the command line, and Windows caps a whole command line at 32,767
 characters. The launcher keeps the personal agents under 24,000 characters (100,000
 elsewhere) and skips any that do not fit, with a warning; the shared agent of that
 name is then used. Tests: `python test_render.py`.
+
+Skills pass through claude-lumo untouched: both `~/.claude/skills` and a project's
+`.claude/skills` work exactly as in plain Claude Code. The renderer only manages the
+system prompt, agents and settings; skills are Claude Code's own.
 
 Keep that folder under your own version control if you want it backed up.
 Instructions for every session, Claude or Lumo, belong in `~/.claude/CLAUDE.md` as
