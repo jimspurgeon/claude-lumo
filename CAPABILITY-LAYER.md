@@ -1,9 +1,9 @@
 # Capability layer
 
 Everything above `claude-lumo` itself: the skills chain, the memory archive, an
-unattended CI fixer, a weekly retro automation, and the first-month review
-checklist that binds them together. All of it is local to this machine; only
-`watch_ci.py` lives in this repo.
+unattended CI fixer, a weekly retro automation, the life-layer agent suites, and the
+first-month review checklist that binds them together. All of it is local to this
+machine; only `watch_ci.py` lives in this repo.
 
 ## Skills chain
 
@@ -110,3 +110,42 @@ Weekly for the first month:
   per night window.
 - **Journal growth sanity.** Entries stay distilled. If raw personal detail
   starts appearing, tighten the privacy text in the two local skills.
+
+## Life layer
+
+Three pull-based agent suites extend the machinery beyond code. Nothing here is
+scheduled: each runs only when invoked, by design.
+
+Design rule for every life-layer agent (non-negotiable): it must either DO something
+(close a loop) or SAY exactly one thing at the moment it is actionable. No dashboards,
+no summary feeds, nothing the user has to remember to check.
+
+Privacy boundary: raw health, financial and relationship data lives in
+`~/life/archive` and never crosses into model context wholesale. Skills read targeted
+ranges (grep, specific dates) and surface distilled answers, per the recall skill's
+boundary.
+
+| Suite | Skills | Data |
+|---|---|---|
+| Medical timeline | log-symptom, correlate, brief | `~/life/archive/medical/` |
+| Single-action router | next | today's journal + MEMORY.md |
+| Prediction journal | predict, calibrate | `~/life/archive/predictions/log.md` |
+
+- **Medical** (`/log-symptom`): captures a symptom entry with same-day weather fetched
+  from Open-Meteo at logging time (schema in `medical/SCHEMA.md`; entries prepend
+  monthly under `medical/entries/`). `/correlate <range>` joins symptoms against stored
+  weather, reports one paragraph with explicit small-sample caveats. `/brief` generates
+  a pre-appointment page from the timeline. correlate is UNVALIDATED until
+  `medical/VALIDATION.md` records a comparison against manual findings (gate currently
+  not-yet-applicable; see that file).
+- **Router** (`/next <energy>`): returns exactly one action sized to the reported energy
+  level, one sentence of justification, no alternatives. Exists to collapse a paralyzing
+  list to one item.
+- **Predictions** (`/predict <claim> <conf>% by <date>`, `/calibrate <range>`): falsifiable
+  claims with confidence and horizon; calibrate reports hit-rate versus stated confidence
+  per bucket and flags DUE predictions that quietly never resolved. Scores honesty over
+  time.
+
+The six skills live in `~/.claude/skills/local/` (claude-config repo, commits 533a6cd and
+bd5c8a8); schemas and data live in the `~/life/archive` repo (commits d4e8c91, 8ea4a2f,
+1b87e1c). Nothing is scheduled — pull-based by design.
