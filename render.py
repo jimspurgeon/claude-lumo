@@ -28,8 +28,9 @@ COMPACT_MARGIN = 12000
 
 # Claude reads --agents from a file only with --print, so for normal sessions the agents travel
 # inline on the command line. Windows caps a whole command line at 32,767 characters; keep room for
-# the rest of it. Linux caps one argument at 128 KiB.
-AGENTS_LIMIT = 24000 if os.name == "nt" else 100000
+# the rest of it (hence the low default there). Linux caps one argument at 128 KiB.
+# LUMO_AGENTS_LIMIT overrides the default.
+AGENTS_LIMIT = int(os.environ.get("LUMO_AGENTS_LIMIT", 24000 if os.name == "nt" else 100000))
 # Frontmatter fields passed through to claude; the Markdown body becomes the prompt.
 AGENT_FIELDS = ("description", "tools", "disallowedTools", "model")
 # hooks/lumo-prompt.py is how the system prompt reaches every session, launched or re-hosted (#77).

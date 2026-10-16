@@ -74,6 +74,13 @@ class PersonalAgents(unittest.TestCase):
             self.assertEqual(list(json.load(f)), ["a"])
         self.assertIn("skipping agent b", result.stderr)
 
+    def test_agents_limit_can_be_overridden_by_environment(self):
+        # AGENTS_LIMIT is read at import time, so check it in a fresh interpreter with the variable set.
+        out = subprocess.run([sys.executable, "-c", "import render; print(render.AGENTS_LIMIT)"],
+                              capture_output=True, text=True, check=True, cwd=HERE,
+                              env={**os.environ, "LUMO_AGENTS_LIMIT": "4321"}).stdout.strip()
+        self.assertEqual(out, "4321")
+
 
 class RehostedSessions(unittest.TestCase):
     """#77: a session Claude Code re-hosts by itself keeps --settings but loses the launcher's
