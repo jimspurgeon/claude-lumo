@@ -20,6 +20,7 @@ import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 import { upstreamChat, retryText } from "./sniffer.mjs";
 import { createContextFit } from "./context-fit.mjs";
 import { chatResponse, isWebSearchRequest, runLumoSearch, webSearchUnavailable } from "./websearch-guard.mjs";
+import { rotateLog, pruneDir } from "./maintenance.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 const UPSTREAM = "https://lumo.proton.me/api/ai/v1";
@@ -27,6 +28,8 @@ const LOG = join(import.meta.dirname, "proxy.log");
 const DEBUG = join(import.meta.dirname, "debug");
 const log = (m) => { try { appendFileSync(LOG, `${new Date().toISOString()} ${m}\n`); } catch {} };
 let creds = readLumoCredentials();
+rotateLog(LOG, 10 * 1024 * 1024); // one generation: proxy.log -> proxy.log.1
+pruneDir(DEBUG, 50); // cap accumulated conversation dumps
 log(`start port=${PORT} creds=${creds ? "ok" : "MISSING"}`);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

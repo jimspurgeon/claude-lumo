@@ -43,6 +43,7 @@ from wipe import (
     history_rewrite,
     stale_temp_scratch,
     stale_lumo_logs,
+    stale_debug_dumps,
     stale_config_stores,
     find_project_of_session,
     collect_candidates,
@@ -769,6 +770,37 @@ class TestStaleLumoLogs:
         monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(lumo_state))
         result = stale_lumo_logs(30)
         assert len([r for r in result if r[0] == "lumo-log"]) == 2
+
+
+class TestStaleDebugDumps:
+    """Tests for stale_debug_dumps: the repo's proxy/debug/ spill."""
+
+    def test_stale_dump_files_and_folders(self, tmp_path):
+        debug_dir = tmp_path / "proxy" / "debug"
+        debug_dir.mkdir(parents=True)
+        old_time = time.time() - 40 * 86400
+        now = time.time()
+
+        old_dump = debug_dir / "conv-old.json"
+        old_dump.write_text("conversation")
+        os.utime(str(old_dump), (old_time, old_time))
+
+        old_folder = debug_dir / "conv-old-dir"
+        old_folder.mkdir()
+        child = old_folder / "nested.txt"
+        child.write_text("more")
+        os.utime(str(old_folder), (old_time, old_time))
+
+        fresh = debug_dir / "conv-fresh.json"
+        fresh.write_text("recent")
+        os.utime(str(fresh), (now, now))
+
+        result = stale_debug_dumps(30, repo_root=str(tmp_path))
+        assert {r[0] for r in result} == {"debug-dump"}
+        assert sorted(r[1] for r in result) == sorted([str(old_dump), str(old_folder)])
+
+    def test_missing_debug_dir_is_empty(self, tmp_path):
+        assert stale_debug_dumps(30, repo_root=str(tmp_path / "nope")) == []
 
 
 class TestStaleConfigStores:
