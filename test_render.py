@@ -1,5 +1,5 @@
 """Tests for render.py (personal agents, re-host settings and prompt parts). Run: python test_render.py"""
-import json, os, subprocess, sys, tempfile, unittest
+import json, os, re, subprocess, sys, tempfile, unittest
 
 import render
 
@@ -135,8 +135,9 @@ class RehostedSessions(unittest.TestCase):
         self.assertEqual(entry["matcher"], "startup|clear|compact|resume|fork")
 
     def test_parts_stay_under_the_hook_output_cap_and_rebuild_the_prompt(self):
+        # Within the PARTS cap (overflow behaviour is covered by PromptOverflow below).
         with open(os.path.join(self.personal, "LUMO.md"), "w", encoding="utf-8") as f:
-            f.write("# Personal\n\n" + ("A rule that is long enough. " * 9 + "\n") * 80 + "x" * 12000 + "\n")
+            f.write("# Personal\n\n" + ("A rule that is long enough. " * 9 + "\n") * 80)
         self.settings()
         with open(os.path.join(self.state, "system-prompt.md"), encoding="utf-8") as f:
             prompt = f.read()
@@ -242,6 +243,64 @@ class RehostedSessions(unittest.TestCase):
                "CLAUDE_LUMO_UPDATE_CHECK": "0"}  # no real update check from a test (#120)
         self.assertIn("[LUMO]", run_script("statusline.py", ["--lumo"], env).stdout)
         self.assertIn("[CLAUDE]", run_script("statusline.py", [], env).stdout)
+
+
+class PromptOverflow(unittest.TestCase):
+    """Audit 4: a prompt over PARTS * PART_LIMIT used to lose parts silently; now it is trimmed
+    with a visible notice, or fails loudly with LUMO_FAIL_ON_OVERFLOW=1."""
+
+    LUMO = ("A rule that is long enough to fill parts. " * 20 + "\n")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.personal = os.path.join(self.tmp.name, "personal")
+        self.state = os.path.join(self.tmp.name, "state")
+        os.makedirs(self.personal)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def oversized(self):
+        # Enough text that the split prompt needs more than PARTS parts.
+        with open(os.path.join(self.personal, "LUMO.md"), "w", encoding="utf-8") as f:
+            f.write("# Personal\n\n" + self.LUMO * (render.PARTS * render.PART_LIMIT // 800))
+
+    def run_overflow(self, env_extra=None):
+        self.oversized()
+        env = {**os.environ, **(env_extra or {})}
+        return subprocess.run([sys.executable, os.path.join(HERE, "render.py"), HERE, self.state,
+                               self.personal, "python"], capture_output=True, text=True, env=env)
+
+    def parts(self):
+        folder = os.path.join(self.state, "prompt-parts")
+        return sorted(os.listdir(folder), key=lambda n: int(n.split(".")[0]))
+
+    def test_overflow_is_trimmed_to_parts_with_a_notice(self):
+        result = self.run_overflow()
+        self.assertEqual(result.returncode, 0)
+        files = self.parts()
+        self.assertEqual(files, [f"{i}.md" for i in range(1, render.PARTS + 1)])
+        texts = []
+        for name in files:
+            with open(os.path.join(self.state, "prompt-parts", name), encoding="utf-8") as f:
+                texts.append(f.read())
+        # The last delivered part is cut to fit and ends with the visible truncation notice.
+        self.assertTrue(all(len(t) <= render.PART_LIMIT for t in texts))
+        lost = int(re.search(r"(\d+) chars lost", texts[-1]).group(1))
+        self.assertGreater(lost, 0)
+        self.assertIn(f"[claude-lumo: system prompt trimmed, {lost} chars lost; shorten LUMO.md]",
+                      texts[-1])
+        self.assertNotIn("never reaches the model", "".join(texts))
+        # The stderr error names the personal LUMO.md and the excess character count.
+        self.assertIn("LUMO.md", result.stderr)
+        self.assertIn(str(lost), result.stderr)
+
+    def test_overflow_fails_with_the_fail_flag(self):
+        result = self.run_overflow({"LUMO_FAIL_ON_OVERFLOW": "1"})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("LUMO.md", result.stderr)
+        self.assertIn("characters over", result.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.state, "prompt-parts")))
 
 
 class SplitPrompt(unittest.TestCase):

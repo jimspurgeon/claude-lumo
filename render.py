@@ -38,6 +38,8 @@ AGENT_FIELDS = ("description", "tools", "disallowedTools", "model")
 # under that, one hook per part; settings-lumo.json registers PARTS hooks.
 PART_LIMIT = 9000
 PARTS = 4
+# Appended to the last delivered part when the prompt had to be trimmed to PARTS parts.
+TRIM_NOTICE = "[claude-lumo: system prompt trimmed, {} chars lost; shorten LUMO.md]"
 
 
 def merge(base, extra):
@@ -140,14 +142,36 @@ def split_prompt(text, limit=PART_LIMIT):
     return [header.format(i, len(chunks)) + c for i, c in enumerate(chunks, 1)]
 
 
-def write_parts(state, prompt):
-    folder = os.path.join(state, "prompt-parts")
-    os.makedirs(folder, exist_ok=True)
+def overflow_message(personal, parts):
+    """The overflow complaint shared by both modes: names the personal LUMO.md and the excess."""
+    excess = sum(len(p) for p in parts) - PARTS * PART_LIMIT
+    return (f"claude-lumo: error: the system prompt needs {len(parts)} parts of {PART_LIMIT} characters but "
+            f"only {PARTS} hooks deliver them; the personal LUMO.md at "
+            f"{os.path.join(personal, 'LUMO.md') if personal else '<personal>'} puts it {excess} characters "
+            f"over the {PARTS}-part cap")
+
+
+def trim_parts(parts):
+    """Keep the first PARTS-1 parts whole and cut the last to fit, marking the cut visibly."""
+    excess = sum(len(p) for p in parts) - PARTS * PART_LIMIT
+    notice = TRIM_NOTICE.format(excess)
+    last = parts[PARTS - 1]
+    return parts[:PARTS - 1] + [last[:PART_LIMIT - len(notice) - 1] + "\n" + notice]
+
+
+def write_parts(state, prompt, personal=""):
     parts = split_prompt(prompt)
     if len(parts) > PARTS:
-        print(f"claude-lumo: the system prompt needs {len(parts)} parts of {PART_LIMIT} characters but only "
-              f"{PARTS} hooks deliver them, so the rest never reaches the model; shorten the personal LUMO.md",
-              file=sys.stderr)
+        if os.environ.get("LUMO_FAIL_ON_OVERFLOW", "") == "1":
+            print(overflow_message(personal, parts) + "; launch aborted (LUMO_FAIL_ON_OVERFLOW=1)",
+                  file=sys.stderr)
+            sys.exit(1)
+        print(overflow_message(personal, parts)
+              + f"; delivering only the first {PARTS} parts, trimmed at the end (set "
+                f"LUMO_FAIL_ON_OVERFLOW=1 to fail instead of trimming)", file=sys.stderr)
+        parts = trim_parts(parts)
+    folder = os.path.join(state, "prompt-parts")
+    os.makedirs(folder, exist_ok=True)
     for i, part in enumerate(parts, 1):
         write(os.path.join(folder, f"{i}.md"), part)
     for name in os.listdir(folder):
@@ -212,7 +236,7 @@ def main():
         with open(mine, encoding="utf-8") as f:
             prompt = prompt.rstrip("\n") + "\n\n" + f.read()
     write(os.path.join(state, "system-prompt.md"), prompt)
-    write_parts(state, prompt)
+    write_parts(state, prompt, personal)
 
     agents = load_agents(os.path.join(personal, "agents"))
     out = os.path.join(state, "agents.json")
