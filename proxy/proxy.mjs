@@ -12,7 +12,7 @@
 //   retried once, else the turn ends with a visible message (see tool-guard.mjs, issue #11).
 // - Adds the closest real text to failed Edit results, so the retry copies it (see edit-hints.mjs).
 import http from "node:http";
-import { appendFileSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readLumoCredentials } from "./creds.mjs";
 import { createUpstream } from "./upstream.mjs";

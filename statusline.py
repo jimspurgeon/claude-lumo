@@ -190,8 +190,9 @@ def looks_like_fallback(actual, configured):
 # 35 automatic compactions in lumo sessions (Claude Code 2.1.296, compact_boundary preTokens):
 # at autoCompactWindow 100000 they fired between 64K and 81K, mostly 66K to 72K; at 110000 (one
 # session so far) between 77K and 84K. That fits window - min(max output, 20000) - 13000 to
-# within a few percent, so the bar can read about 96% when a compaction fires. settings-lumo.json
-# sets 133000, so compaction fires near 100K, below Lumo's 131072-token window for prompt and
+# within a few percent, so the bar can read about 96% when a compaction fires. The window is
+# derived at render time from context-fit.mjs's CONTEXT_TOKENS minus a 12000 margin (119072),
+# so compaction fires well below Lumo's 131072-token window for prompt and
 # reply together (the proxy shrinks max_tokens to fit a long prompt, see context-fit.mjs).
 COMPACT_OUTPUT_RESERVE_CAP = 20000
 COMPACT_BUFFER = 13000
