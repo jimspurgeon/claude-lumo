@@ -208,11 +208,26 @@ class TestStateFile:
             "attempts": [],
         }
 
-    def test_corrupt_file_is_fresh(self, tmp_path):
+    def test_corrupt_file_is_fresh(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(watch_ci, "journal_dir", lambda: str(tmp_path / "journal"))
         path = str(tmp_path / "state.json")
         with open(path, "w") as fh:
             fh.write("{not json")
         assert watch_ci.load_state(path)["runs"] == []
+        # A reset must be named in the journal, never silent.
+        today = datetime.now().strftime("%Y-%m-%d")
+        log = tmp_path / "journal" / ("ci-watcher-%s.log" % today)
+        assert "resetting handled run history" in log.read_text(encoding="utf-8")
+
+    def test_non_dict_state_resets_logged(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(watch_ci, "journal_dir", lambda: str(tmp_path / "journal"))
+        path = str(tmp_path / "state.json")
+        with open(path, "w") as fh:
+            fh.write("[1, 2]")
+        assert watch_ci.load_state(path) == {"runs": [], "attempts": []}
+        today = datetime.now().strftime("%Y-%m-%d")
+        log = tmp_path / "journal" / ("ci-watcher-%s.log" % today)
+        assert "resetting handled run history" in log.read_text(encoding="utf-8")
 
     def test_runs_list_bounded(self, tmp_path):
         path = str(tmp_path / "state.json")
@@ -353,6 +368,24 @@ class TestPollCycle:
         assert watch_ci.run_is_new(state, "a/b", 9)  # other branch: not handled
         assert not watch_ci.run_is_new(state, "a/b", 10)
 
+    def test_fix_attempt_runs_cleanup_afterwards(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(watch_ci, "journal_dir", lambda: str(tmp_path / "journal"))
+        monkeypatch.setattr(watch_ci, "state_path", lambda: str(tmp_path / "s.json"))
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        payload = self._gh_payload(("5",))
+        # gh returns the failed run; git worktree add/remove succeed (FakeRunner's
+        # default (0, "")); the claude-lumo call is caught the same way.
+        runner = FakeRunner([("gh run list", 0, payload)])
+        config = [{"repo": "a/b", "branch": None, "path": "C:/wt"}]
+        monkeypatch.setattr(watch_ci, "tempfile_dir", lambda: "T:/tmp")
+        monkeypatch.setattr(watch_ci, "resolve_claude_cmd", lambda: "claude-lumo")
+        state = make_state()
+        watch_ci.poll_cycle(config, state, dry_run=False, runner=runner, now=datetime(2026, 10, 15, 20, 0))
+        argvs = [" ".join(c[0]) for c in runner.calls]
+        assert any("worktree add" in a for a in argvs)
+        assert any("worktree remove" in a for a in argvs)  # cleanup fired
+        assert any(a.startswith("claude-lumo -p") for a in argvs)
+
 
 class TestJournalAndReport:
     def test_log_event_writes_dated_file(self, tmp_path, monkeypatch):
@@ -449,3 +482,99 @@ class TestCreateWorktree:
             )
             is None
         )
+
+
+class TestResolveClaudeCmd:
+    def test_which_finds_cmd_shim_uses_resolved_path(self):
+        # Injected which, no real filesystem: a .cmd shim resolves to its path.
+        fake_which = lambda name: "C:/npm/claude-lumo.CMD" if name == "claude-lumo" else None
+        assert watch_ci.resolve_claude_cmd(which=fake_which) == "C:/npm/claude-lumo.CMD"
+
+    def test_which_finds_posix_path_uses_it(self):
+        fake_which = lambda name: "/usr/local/bin/claude-lumo" if name == "claude-lumo" else None
+        assert watch_ci.resolve_claude_cmd(which=fake_which) == "/usr/local/bin/claude-lumo"
+
+    def test_which_returns_none_falls_back_to_bare_name(self):
+        assert watch_ci.resolve_claude_cmd(which=lambda name: None) == "claude-lumo"
+
+
+class TestPsQuote:
+    def test_plain_text_unchanged(self):
+        assert watch_ci.ps_quote("hello world") == "hello world"
+
+    def test_single_quotes_doubled(self):
+        assert watch_ci.ps_quote("it's a'test") == "it''s a''test"
+
+    def test_empty(self):
+        assert watch_ci.ps_quote("") == ""
+
+    def test_notify_escapes_quotes_in_command(self):
+        runner = FakeRunner(
+            [
+                ("powershell -NoProfile -Command Get-Module", 0, "BurntToast 0.8.5"),
+                ("powershell -NoProfile -Command New-BurntToastNotification", 0, ""),
+            ]
+        )
+        watch_ci.notify_desktop("it's ready", "run 1 done", runner=runner)
+        sent = [argv for argv, _ in runner.calls if "New-BurntToastNotification" in " ".join(argv)]
+        assert sent and "-Text 'it''s ready', 'run 1 done'" in sent[0][3]
+
+
+class TestCleanupWorktree:
+    def test_orca_rm_used_when_orca_available(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(watch_ci, "journal_dir", lambda: str(tmp_path / "journal"))
+        monkeypatch.setattr(shutil, "which", lambda name: "C:/orca" if name == "orca" else None)
+        runner = FakeRunner([("orca worktree rm", 0, "{}")])
+        watch_ci.cleanup_worktree(
+            "C:/wt/ci-fix-12345678",
+            {"repo": "a/b", "branch": None, "path": "C:/clone"},
+            runner=runner,
+        )
+        argv = runner.calls[0][0]
+        assert argv == ["orca", "worktree", "rm", "--worktree", "path:C:/wt/ci-fix-12345678"]
+
+    def test_git_fallback_when_orca_rm_fails(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(watch_ci, "journal_dir", lambda: str(tmp_path / "journal"))
+        monkeypatch.setattr(shutil, "which", lambda name: "C:/orca" if name == "orca" else None)
+        runner = FakeRunner(
+            [
+                ("orca worktree rm", 1, "boom"),
+                ("git -C", 0, ""),
+            ]
+        )
+        watch_ci.cleanup_worktree(
+            "C:/wt/ci-fix-12345678",
+            {"repo": "a/b", "branch": None, "path": "C:/clone"},
+            runner=runner,
+        )
+        argv = runner.calls[1][0]
+        assert argv[:5] == ["git", "-C", "C:/clone", "worktree", "remove"]
+
+    def test_git_used_directly_when_no_orca(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(watch_ci, "journal_dir", lambda: str(tmp_path / "journal"))
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        runner = FakeRunner([("git -C", 0, "")])
+        watch_ci.cleanup_worktree(
+            "C:/wt/ci-fix-12345678",
+            {"repo": "a/b", "branch": None, "path": "C:/clone"},
+            runner=runner,
+        )
+        argv = runner.calls[0][0]
+        assert argv[:5] == ["git", "-C", "C:/clone", "worktree", "remove"]
+
+    def test_no_local_path_logs_and_skips(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(watch_ci, "journal_dir", lambda: str(tmp_path / "journal"))
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        runner = FakeRunner()
+        watch_ci.cleanup_worktree(
+            "C:/wt/ci-fix-12345678",
+            {"repo": "a/b", "branch": None, "path": None},
+            runner=runner,
+        )
+        assert runner.calls == []
+        today = datetime.now().strftime("%Y-%m-%d")
+        log = tmp_path / "journal" / ("ci-watcher-%s.log" % today)
+        assert "left in place" in log.read_text(encoding="utf-8")
+
+    def test_none_worktree_is_noop(self):
+        watch_ci.cleanup_worktree(None, {"repo": "a/b"}, runner=FakeRunner())

@@ -79,6 +79,7 @@ LOG_PREFIXES = {
     "throttled": "THROTTLED",
     "attempt": "ATTEMPT",
     "outcome": "OUTCOME",
+    "cleanup": "CLEANUP",
     "error": "ERROR",
 }
 
@@ -167,9 +168,17 @@ def load_state(path):
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        log_event(
+            "error",
+            "state file %s unreadable (%s); resetting handled run history" % (path, exc),
+        )
         return {"runs": [], "attempts": []}
     if not isinstance(data, dict):
+        log_event(
+            "error",
+            "state file %s has unexpected shape; resetting handled run history" % path,
+        )
         return {"runs": [], "attempts": []}
     data.setdefault("runs", [])
     data.setdefault("attempts", [])
@@ -431,13 +440,31 @@ def build_prompt(conf_repo, run_id):
     ).format(run=run_id, repo=conf_repo["repo"])
 
 
+def resolve_claude_cmd(which=None, default=DEFAULT_CLAUDE_LUMO):
+    """Resolve the claude-lumo executable to a form shell=False can launch.
+
+    On Windows, `claude-lumo` on PATH is an npm .cmd shim; passing the bare
+    name with shell=False raises FileNotFoundError. shutil.which() resolves it
+    to an absolute .cmd/.bat path that CreateProcess can execute directly
+    (verified empirically on this machine). Pure function: which is injectable.
+    """
+    which = which or shutil.which
+    resolved = which(default)
+    if resolved:
+        # Absolute path to the shim; subprocess handles .cmd/.bat directly.
+        return resolved
+    # Not on PATH: fall back to the bare name (works on POSIX).
+    return default
+
+
 def launch_fix(conf_repo, run_id, worktree, claude_cmd=None, runner=None):
     """Run the headless claude-lumo fix session in the worktree.
 
-    Returns (returncode, output). claude_cmd defaults to the claude-lumo wrapper.
+    Returns (returncode, output). claude_cmd defaults to the resolved
+    claude-lumo executable (see resolve_claude_cmd).
     """
     runner = runner or run_command
-    claude_cmd = claude_cmd or DEFAULT_CLAUDE_LUMO
+    claude_cmd = claude_cmd or resolve_claude_cmd()
     prompt = build_prompt(conf_repo, run_id)
     argv = [claude_cmd, "-p", prompt]
     code, out = runner(argv, cwd=worktree, timeout=3600)
@@ -528,6 +555,11 @@ def render_report(lines, day_label, now=None):
     return "\n".join(out)
 
 
+def ps_quote(value):
+    """Escape a value for a single-quoted PowerShell string literal ('' per ')."""
+    return value.replace("'", "''")
+
+
 def notify_desktop(title, message, runner=None):
     """BurntToast notification; silently skipped when unavailable or failing."""
     runner = runner or run_command
@@ -539,8 +571,9 @@ def notify_desktop(title, message, runner=None):
         return False
     if code != 0 or "BurntToast" not in out:
         return False
-    command = (
-        "New-BurntToastNotification -Text '%s', '%s'" % (title, message)
+    command = "New-BurntToastNotification -Text '%s', '%s'" % (
+        ps_quote(title),
+        ps_quote(message),
     )
     try:
         code, _out = runner(["powershell", "-NoProfile", "-Command", command], timeout=30)
@@ -604,6 +637,12 @@ def poll_cycle(config, state, dry_run=False, runner=None, now=None):
                 continue
             record_attempt(state, now)
             save_state(path, state)
+            # NOTE: record_attempt runs before worktree creation, so a setup
+            # failure still consumes one throttle slot. That ordering is
+            # deliberate: an hour of repeated worktree-creation failures (disk
+            # full, orca broken) must not spin through unlimited attempts, and
+            # the run is already marked handled so it is never retried anyway.
+            # Conservative on budget, safe against setup-failure loops.
             worktree = create_worktree(conf_repo, run_id, runner=runner)
             if not worktree:
                 log_event(
@@ -622,13 +661,58 @@ def poll_cycle(config, state, dry_run=False, runner=None, now=None):
                 code, out = launch_fix(conf_repo, run_id, worktree, runner=runner)
             except Exception as exc:  # a failed fix attempt must never kill the loop
                 log_event("outcome", "%s run %s: launch error %s" % (repo, run_id, exc), now=now)
+                cleanup_worktree(worktree, conf_repo, runner=runner, now=now)
                 continue
             log_event(
                 "outcome",
                 "%s run %s: exit %s in %s" % (repo, run_id, code, worktree),
                 now=now,
             )
+            cleanup_worktree(worktree, conf_repo, runner=runner, now=now)
     save_state(path, state)
+
+
+def cleanup_worktree(worktree, conf_repo, runner=None, now=None):
+    """Best-effort removal of a fix-attempt worktree after the attempt ends.
+
+    Failures are swallowed and logged: cleanup must never mask the attempt's
+    own outcome. Uses the same runner seam as everything else.
+    """
+    if not worktree:
+        return
+    runner = runner or run_command
+    local = conf_repo.get("path")
+    now = now or datetime.now()
+    try:
+        if local:
+            removed = False
+            if shutil.which("orca"):
+                # Orca-managed worktree: going through `git worktree remove`
+                # would leave Orca's records stale, so try the orca CLI first
+                # (best-effort; create_worktree falls back to plain git when
+                # orca create fails, so a failed orca rm falls back to git too).
+                argv = ["orca", "worktree", "rm", "--worktree", "path:%s" % worktree]
+                code, out = runner(argv, timeout=120)
+                removed = code == 0
+            if not removed:
+                argv = ["git", "-C", local, "worktree", "remove", "--force", worktree]
+                code, out = runner(argv, timeout=120)
+                if code != 0:
+                    log_event(
+                        "cleanup",
+                        "could not remove worktree %s (%s)"
+                        % (worktree, (out or "").strip()[:200]),
+                        now=now,
+                    )
+        else:
+            log_event(
+                "cleanup",
+                "no local path; worktree %s left in place" % worktree,
+                now=now,
+            )
+            return
+    except Exception as exc:
+        log_event("cleanup", "worktree cleanup error %s: %s" % (worktree, exc), now=now)
 
 
 def main(argv=None):

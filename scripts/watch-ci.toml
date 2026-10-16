@@ -1,4 +1,5 @@
-# ci-watcher config (scripts/watch_ci.py). Copy to scripts/watch-ci.toml and edit.
+# ci-watcher live config (scripts/watch_ci.py), read by watch_ci.py each run.
+# Edit this file directly to change what the watcher monitors.
 # Format: TOML (stdlib tomllib parses it; zero dependencies).
 
 [[repos]]
