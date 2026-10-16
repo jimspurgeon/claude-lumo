@@ -19,7 +19,12 @@ always win:
   <state dir>/agents.json, which the launcher passes to claude with --agents, so in claude-lumo they
   replace the agents of the same name in ~/.claude/agents. No such files: no agents.json.
 """
-import glob, json, os, sys
+import glob, json, os, re, sys
+
+# The compaction window must stay below the token window the proxy fits replies into (it clamps
+# max_tokens once prompt + reply would not fit), so it is derived from CONTEXT_TOKENS minus this
+# margin rather than hardcoded in settings-lumo.json.
+COMPACT_MARGIN = 12000
 
 # Claude reads --agents from a file only with --print, so for normal sessions the agents travel
 # inline on the command line. Windows caps a whole command line at 32,767 characters; keep room for
@@ -161,11 +166,30 @@ def write(path, text):
     os.replace(tmp, path)
 
 
+def context_tokens(lumo):
+    """The proxy's token window (CONTEXT_TOKENS in proxy/context-fit.mjs), the one value Claude
+    Code's compaction window must stay below. Falls back to 131072 with a warning when the file
+    or the constant cannot be found (renamed or restructured without this renderer catching up)."""
+    path = os.path.join(lumo, "proxy", "context-fit.mjs")
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = re.search(r"\bCONTEXT_TOKENS\s*=\s*(\d+)", f.read())
+    except OSError:
+        m = None
+    if not m:
+        print(f"claude-lumo: {path} has no CONTEXT_TOKENS constant; falling back to 131072 for the "
+              f"compaction window", file=sys.stderr)
+        return 131072
+    return int(m.group(1))
+
+
 def main():
     lumo, state, personal, python = (a.replace("\\", "/") for a in sys.argv[1:5])
+    window = context_tokens(lumo) - COMPACT_MARGIN
     with open(os.path.join(lumo, "settings-lumo.json"), encoding="utf-8") as f:
         text = (f.read().replace("{{LUMO_DIR}}", lumo).replace("{{PYTHON}}", python)
-                .replace("{{STATE_DIR}}", state).replace("{{LUMO_LOCAL}}", personal))
+                .replace("{{STATE_DIR}}", state).replace("{{LUMO_LOCAL}}", personal)
+                .replace("{{AUTO_COMPACT_WINDOW}}", str(window)))
     settings = json.loads(text)
     config_dir = sys.argv[5].replace("\\", "/") if len(sys.argv) > 5 else ""
     mine = os.path.join(personal, "settings.json")

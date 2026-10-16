@@ -201,6 +201,15 @@ class RehostedSessions(unittest.TestCase):
         self.assertNotIn("export ANTHROPIC_AUTH_TOKEN", launcher)
         self.assertIn("unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY", launcher)
 
+    def test_compact_window_stays_below_the_proxy_token_window(self):
+        # The proxy clamps replies once the prompt nears CONTEXT_TOKENS, so Claude Code must compact
+        # before that point: the window is CONTEXT_TOKENS minus a margin of at least 12000.
+        s = self.settings()
+        context = render.context_tokens(HERE)
+        self.assertLessEqual(s["autoCompactWindow"], context - render.COMPACT_MARGIN)
+        self.assertGreaterEqual(context - s["autoCompactWindow"], 12000)
+        self.assertLessEqual(s["autoCompactWindow"], 119072)
+
     def test_settings_template_has_no_duplicate_keys(self):
         # json.load keeps only the last of two equal keys, which once dropped a SessionStart hook.
         def no_dupes(pairs):
@@ -209,7 +218,11 @@ class RehostedSessions(unittest.TestCase):
             self.assertFalse(dupes, f"duplicate keys: {dupes}")
             return dict(pairs)
         with open(os.path.join(HERE, "settings-lumo.json"), encoding="utf-8") as f:
-            json.load(f, object_pairs_hook=no_dupes)
+            # Placeholders are filled in by render.py before this file is parsed as JSON.
+            text = (f.read().replace("{{LUMO_LOCAL}}", "x").replace("{{PYTHON}}", "x")
+                    .replace("{{LUMO_DIR}}", "x").replace("{{STATE_DIR}}", "x")
+                    .replace("{{AUTO_COMPACT_WINDOW}}", "0"))
+        json.loads(text, object_pairs_hook=no_dupes)
 
     def test_api_key_helper_prints_the_key(self):
         os.makedirs(self.state)
