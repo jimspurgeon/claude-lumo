@@ -1,9 +1,9 @@
 # Capability layer
 
 Everything above `claude-lumo` itself: the skills chain, the memory archive, an
-unattended CI fixer, a weekly retro automation, and the first-month review
-checklist that binds them together. All of it is local to this machine; only
-`watch_ci.py` lives in this repo.
+unattended CI fixer, a weekly retro automation, the life-layer agent suites, and the
+first-month review checklist that binds them together. All of it is local to this
+machine; only `watch_ci.py` lives in this repo.
 
 ## Skills chain
 
