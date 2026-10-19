@@ -49,6 +49,14 @@ def test_litellm_yaml_registers_the_hook():
     assert isinstance(ws.handler, ws.LumoWebSearchBlocks)
 
 
+def test_litellm_yaml_disables_cooldowns():
+    """One deployment per model: a LiteLLM cooldown would turn one 429 into many (#130)."""
+    yaml = open(os.path.join(ROOT, "proxy", "litellm.yaml"), encoding="utf-8").read()
+    block = re.search(r"^router_settings:[ \t]*\n((?:[ \t]+.*\n)+)", yaml, re.M)
+    assert block, "litellm.yaml has no router_settings block"
+    assert re.search(r"^\s+disable_cooldowns:\s*true\s*$", block.group(1), re.M)
+
+
 def test_detects_the_web_search_tool_only():
     assert ws.is_web_search_request(REQ)
     assert not ws.is_web_search_request({"tools": [{"name": "Bash", "input_schema": {}}]})

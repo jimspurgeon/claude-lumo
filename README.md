@@ -507,6 +507,7 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | WebSearch shows "Did 0 searches" although it found results | Fixed in 1.4.3: `proxy/lumo_websearch.py` (a LiteLLM callback registered in `proxy/litellm.yaml`) adds the `server_tool_use` / `web_search_tool_result` blocks Claude Code counts, with the query and each cited URL. It adds nothing when the search was unavailable, so a failed search still reads as 0. If the count is 0 after a search that cited sources, check that `litellm.yaml` still lists `callbacks: lumo_websearch.handler` and that `~/.claude-lumo/litellm.log` shows no import error. |
 | `python` / `python3` not found | Install Python 3.12+. On Windows, make sure it is added to PATH during installation. |
 | "No Lumo login found" | Log in at lumo.proton.me in a supported browser, or use the manual `login.json` fallback above. |
+| "429 No deployments available for selected model ... All deployments for selected model are in cooldown" | Fixed in #130: LiteLLM benched the only deployment after one real 429, failing every request (parallel subagents included) for about 5 s. `proxy/litellm.yaml` now sets `router_settings: disable_cooldowns: true`, so a rate limit reaches Claude Code as Lumo's own 429 with its Retry-After and is retried. Takes effect after LiteLLM restarts. |
 | `NODE_ENV` warning | Ignore harmless warnings about NODE_ENV from LiteLLM. |
 
 ## Development
