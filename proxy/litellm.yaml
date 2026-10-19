@@ -17,5 +17,10 @@ litellm_settings:
   callbacks: lumo_websearch.handler
   drop_params: true
   request_timeout: 900
+router_settings:
+  # Each model name has one deployment, so a cooldown has nothing to fail over to; it only turns
+  # one upstream 429 (already retried by the proxy) into "All deployments ... in cooldown" 429s
+  # for every request in the window, parallel subagents included (#130).
+  disable_cooldowns: true
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
