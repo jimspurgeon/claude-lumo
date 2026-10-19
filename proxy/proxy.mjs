@@ -24,9 +24,25 @@ import { chatResponse, isWebSearchRequest, runLumoSearch, webSearchUnavailable }
 import { rotateLog, pruneDir } from "./maintenance.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
-const LOG = join(import.meta.dirname, "proxy.log");
+// LUMO_PROXY_LOG lets tests redirect fatal-crash logging to a temp file (#132).
+const LOG = process.env.LUMO_PROXY_LOG || join(import.meta.dirname, "proxy.log");
 const DEBUG = join(import.meta.dirname, "debug");
 const log = (m) => { try { appendFileSync(LOG, `${new Date().toISOString()} ${m}\n`); } catch {} };
+
+// Fatal-exit handlers (#132): after an uncaughtException/unhandledRejection it is not safe
+// to keep serving (Node docs), so log synchronously and exit non-zero so a supervisor
+// (scripts/install-supervisor.ps1) can restart us. writeFileSync with flag "a" appends without
+// buffering; the try/catch guarantees exit(1) even when the log write itself fails.
+const fatal = (kind, err) => {
+  try {
+    const detail = err?.stack ? `${err.message ?? err}\n${err.stack}` : String(err);
+    writeFileSync(LOG, `${new Date().toISOString()} fatal: ${kind}: ${detail}\n`, { flag: "a" });
+  } catch {}
+  process.exit(1);
+};
+process.on("uncaughtException", (err) => fatal("uncaughtException", err));
+process.on("unhandledRejection", (reason) => fatal("unhandledRejection", reason));
+
 const credsRef = { current: readLumoCredentials() }; // mutable: upstream() refreshes it after a 401
 rotateLog(LOG, 10 * 1024 * 1024); // one generation: proxy.log -> proxy.log.1
 pruneDir(DEBUG, 50); // cap accumulated conversation dumps
