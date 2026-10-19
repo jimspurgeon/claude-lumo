@@ -104,8 +104,12 @@ $winswProxy = @"
 # --- NSSM commands ------------------------------------------------------------
 # NSSM restarts a service by default when the process exits non-zero; the delay
 # comes from AppRestartDelay. Rotation via AppRotateOnline + AppRotateBytes.
+# Inner quotes on the install lines below use single quotes so the embedded
+# double quotes survive when the generated line is pasted back into PowerShell;
+# a space-containing exe/config path then still arrives as one argument (#140).
+# Paths containing a single quote would break, but never occur in these layouts.
 $nssmCommands = @"
-nssm install LumoLiteLLM "$LiteLLMExeResolved" "--config `"$LiteLLMConfigResolved`" --host 127.0.0.1 --port 4000"
+nssm install LumoLiteLLM '$LiteLLMExeResolved' '--config "$LiteLLMConfigResolved" --host 127.0.0.1 --port 4000'
 nssm set LumoLiteLLM AppDirectory "$StateDir"
 nssm set LumoLiteLLM AppEnvironmentExtra PYTHONIOENCODING=utf-8
 nssm set LumoLiteLLM AppStdout "$StateDir\logs\litellm.log"
@@ -113,7 +117,7 @@ nssm set LumoLiteLLM AppStderr "$StateDir\logs\litellm.log"
 nssm set LumoLiteLLM AppRotateFiles 1
 nssm set LumoLiteLLM AppRotateBytes $MaxLogBytes
 nssm set LumoLiteLLM AppRestartDelay $RestartDelaySeconds
-nssm install LumoProxy "node" "--no-warnings proxy.mjs"
+nssm install LumoProxy 'node' '--no-warnings proxy.mjs'
 nssm set LumoProxy AppDirectory "$ProxyDir"
 nssm set LumoProxy AppStdout "$ProxyDir\logs\proxy.out.log"
 nssm set LumoProxy AppStderr "$ProxyDir\logs\proxy.out.log"
