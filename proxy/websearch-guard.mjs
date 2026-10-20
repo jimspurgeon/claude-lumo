@@ -4,7 +4,7 @@
 // WebSearch is a *server-side* tool from Claude Code's perspective: when the
 // model calls it, Claude Code sends a second request to the backend with
 // `web_search_options: {}`, no tools, and a prompt like "Perform a web search
-// for the query: ..." (captured as proxy/debug/cap-6.req.json). Lumo ignores
+// for the query: ..." (captured as <state>/debug/cap-6.req.json). Lumo ignores
 // that field and would answer from training data, which Claude Code then wraps
 // as the "tool result": fabricated sources presented as search output.
 //
