@@ -80,11 +80,10 @@ def test_install_sh_tolerates_unhashed_requirements():
     sh = INSTALL_SH.read_text(encoding="utf-8")
     # Guard: only pass --require-hashes when the file actually carries hashes (#147). The
     # piped script can be master's while $D holds an old release tag's unhashed file.
-    assert re.search(r'grep -q [\x27"]\^?\s?\*?--hash=sha256:[\x27"]\s+"\$D/requirements\.txt"', sh), (
+    assert re.search(r"grep -q ['\"]\^ \*--hash=sha256:['\"]\s+\"\$D/requirements\.txt\"", sh), (
         "no sha256 detection guarding --require-hashes in install.sh"
     )
-    fallback = re.search(r'pip install -q (-r "--\$?D?/requirements\.txt"|"-r \"\$D/requirements\.txt\"|-r "\$D/requirements\.txt")', sh)
-    assert re.search(r"pip install -q\s+-r \"\$D/requirements\.txt\"", sh.replace("--require-hashes ", "")), (
+    assert re.search(r"pip install -q\s+-r \"\$D/requirements\.txt\"", sh), (
         "no hashless fallback pip install in install.sh"
     )
     assert "pre-#135" in sh or "hash-lock" in sh, (
