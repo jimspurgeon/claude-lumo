@@ -3,14 +3,56 @@
 # Every model name Claude Code asks for (opus, sonnet, fable pins, subagents) maps to Lumo;
 # names containing "haiku" or "lite" go to lumo-lite.
 model_list:
+  # Per-deployment timeout and retry settings (#133). Every key below was verified against
+  # the installed LiteLLM 1.104.2 source (~/.claude-lumo/litellm-venv), not just docs:
+  # - stream_timeout: LiteLLM_Params field (types/router.py GenericLiteLLMParams) for
+  #   stream=True calls; Router._get_stream_timeout (router.py:4038) reads it from the
+  #   deployment's litellm_params before falling back to router request_timeout.
+  # - timeout: same field for non-streaming calls; Router._get_non_stream_timeout
+  #   (router.py:4048) prefers the deployment value over router request_timeout.
+  # - num_retries: not a typed LiteLLM_Params field but kept (LiteLLM_Params allows extra
+  #   keys); Router._set_deployment_num_retries_on_exception (router.py:3777) reads it
+  #   per deployment and async_function_with_retries (router.py:7624) uses it as the
+  #   retry count for that deployment's failures.
+  # Values: deployment timeouts beat litellm_settings.request_timeout (900) in the
+  # lookup order above, so a stalled upstream now fails here at 90 s streamed / 45 s
+  # whole-call instead of hanging for 900 s, and well before Claude Code's API_TIMEOUT_MS
+  # (default 600000 ms), so LiteLLM surfaces the clear error first (#133). num_retries 1
+  # keeps total attempts low: the lumo proxy already retries a missing first byte twice
+  # (upstream.mjs) and Claude Code retries up to 10 times; stacking more here multiplies
+  # upstream calls per turn.
   - model_name: lumo-lite
-    litellm_params: { model: hosted_vllm/lumo-lite, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+    litellm_params:
+      model: hosted_vllm/lumo-lite
+      api_base: "http://127.0.0.1:8790/v1"
+      api_key: lumo-proxy
+      stream_timeout: 90
+      timeout: 45
+      num_retries: 1
   - model_name: "*haiku*"
-    litellm_params: { model: hosted_vllm/lumo-lite, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+    litellm_params:
+      model: hosted_vllm/lumo-lite
+      api_base: "http://127.0.0.1:8790/v1"
+      api_key: lumo-proxy
+      stream_timeout: 90
+      timeout: 45
+      num_retries: 1
   - model_name: lumo-max
-    litellm_params: { model: hosted_vllm/lumo-max, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+    litellm_params:
+      model: hosted_vllm/lumo-max
+      api_base: "http://127.0.0.1:8790/v1"
+      api_key: lumo-proxy
+      stream_timeout: 90
+      timeout: 45
+      num_retries: 1
   - model_name: "*"
-    litellm_params: { model: hosted_vllm/lumo-max, api_base: "http://127.0.0.1:8790/v1", api_key: lumo-proxy }
+    litellm_params:
+      model: hosted_vllm/lumo-max
+      api_base: "http://127.0.0.1:8790/v1"
+      api_key: lumo-proxy
+      stream_timeout: 90
+      timeout: 45
+      num_retries: 1
 litellm_settings:
   # Adds the server_tool_use + web_search_tool_result blocks Claude Code counts for WebSearch
   # (lumo_websearch.py, loaded from this file's directory).
