@@ -232,6 +232,26 @@ class RehostedSessions(unittest.TestCase):
                     .replace("{{AUTO_COMPACT_WINDOW}}", "0"))
         json.loads(text, object_pairs_hook=no_dupes)
 
+    def test_settings_deny_credential_and_cookie_reads(self):
+        # #136: a Lumo-specific deny floor. Lumo sessions inherit every user allow rule, so
+        # without denies a weaker model inherits allowances written for Opus; these block reads
+        # of the master key, the manual login fallback, Claude Code credentials and any .env.
+        deny = self.settings()["permissions"]["deny"]
+        for rule in ("Read(~/.claude-lumo/master.key)", "Read(~/.claude-lumo/login.json)",
+                     "Read(~/.claude/.credentials.json)", "Read(~/.claude.json)",
+                     "Read(//**/.env)", "Read(//**/.env.*)"):
+            self.assertIn(rule, deny)
+        # Browser cookie stores hold the AUTH-<uid> Lumo login the proxy reads (proxy/creds.mjs),
+        # so they are denied too, on every OS. Windows paths are matched in POSIX form (//c/...).
+        for rule in ("Read(//c/Users/*/AppData/**/Cookies)",
+                     "Read(//c/Users/*/AppData/**/cookies.sqlite)",
+                     "Read(~/Library/Application Support/**/Cookies)",
+                     "Read(~/Library/Application Support/**/cookies.sqlite)",
+                     "Read(~/.mozilla/**/cookies.sqlite)",
+                     "Read(~/.librewolf/**/cookies.sqlite)",
+                     "Read(~/.config/**/Cookies)"):
+            self.assertIn(rule, deny)
+
     def test_api_key_helper_prints_the_key(self):
         os.makedirs(self.state)
         with open(os.path.join(self.state, "master.key"), "w") as f:
