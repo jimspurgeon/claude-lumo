@@ -549,7 +549,8 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | `scripts/pre-push` | Opt-in git pre-push hook running the tombstone check |
 | `migrate-to-lumo.sh` / `migrate-from-lumo.sh` | Move Lumo sessions into / out of the separate store (see above) |
 | `test_update_check.py`, `tests/test_revert.py` | Update check, `claude-lumo update`, busy-flag registry, restart offer, revert guards |
-| `requirements.txt` | Just `litellm[proxy]` pinned |
+| `requirements.txt` | `litellm[proxy]` and its transitive dependencies, every pin sha256 hash-locked (#135); regenerated with `pip-compile --generate-hashes` (caveat at the top of the file) |
+| `package.json` | Only `engines.node` (tested majors: 22 and 24); no dependencies or scripts (#135) |
 
 Runtime state (not in the repo): `~/.claude-lumo/` holds the LiteLLM venv, a random
 local key, logs, and the settings and system prompt rendered at each launch.
