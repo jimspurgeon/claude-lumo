@@ -73,3 +73,35 @@ def test_install_sh_uses_require_hashes_and_warns():
     assert re.search(r"WARNING.*outside the engines range", sh), (
         "no non-fatal Node engines warning in install.sh"
     )
+
+
+def test_install_sh_tolerates_unhashed_requirements():
+    """install.sh detects a pre-hash-lock requirements.txt and falls back without aborting (#147)."""
+    sh = INSTALL_SH.read_text(encoding="utf-8")
+    # Guard: only pass --require-hashes when the file actually carries hashes (#147). The
+    # piped script can be master's while $D holds an old release tag's unhashed file.
+    assert re.search(r'grep -q [\x27"]\^?\s?\*?--hash=sha256:[\x27"]\s+"\$D/requirements\.txt"', sh), (
+        "no sha256 detection guarding --require-hashes in install.sh"
+    )
+    fallback = re.search(r'pip install -q (-r "--\$?D?/requirements\.txt"|"-r \"\$D/requirements\.txt\"|-r "\$D/requirements\.txt")', sh)
+    assert re.search(r"pip install -q\s+-r \"\$D/requirements\.txt\"", sh.replace("--require-hashes ", "")), (
+        "no hashless fallback pip install in install.sh"
+    )
+    assert "pre-#135" in sh or "hash-lock" in sh, (
+        "warning message does not name the hash-lock transition (#147)"
+    )
+
+
+def test_requirements_in_exists():
+    """requirements.in exists so the pip-compile regen command in requirements.txt is runnable."""
+    src = REQ.read_text(encoding="utf-8")
+    assert "--output-file requirements.txt requirements.in" in src, (
+        "requirements.txt points at requirements.in as the pip-compile input"
+    )
+    rin = ROOT / "requirements.in"
+    assert rin.exists(), "requirements.in referenced by requirements.txt is missing"
+    pins = [
+        l.strip() for l in rin.read_text(encoding="utf-8").splitlines()
+        if l.strip() and not l.strip().startswith("#")
+    ]
+    assert pins == ["litellm[proxy]==1.104.2"], f"requirements.in should hold only the litellm pin: {pins}"

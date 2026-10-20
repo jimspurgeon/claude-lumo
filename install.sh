@@ -166,7 +166,19 @@ if [ ! -x "$LITELLM" ]; then
   "$PY" -m venv "$VENV"
   # --require-hashes: every pin in requirements.txt carries a sha256 (#135), so pip refuses
   # any artifact whose hash does not match — no floating transitive dependencies.
-  "$VP" -m pip install -q --require-hashes -r "$D/requirements.txt"
+  # Deploy-order hazard (#147): the script being piped from master can be newer than the
+  # release tag whose requirements.txt is actually on disk in $D. Old tags (pre-hash-lock)
+  # have no hashes, and pip aborts on --require-hashes with an unhashed file, so detect that
+  # and fall back to a plain install with a warning. Requirements-format changes must ship
+  # in a release tag before (or with) any install.sh that assumes them.
+  if grep -q '^ *--hash=sha256:' "$D/requirements.txt"; then
+    "$VP" -m pip install -q --require-hashes -r "$D/requirements.txt"
+  else
+    echo "WARNING: $D/requirements.txt carries no sha256 hashes (pre-#135 release tag," 2>&1
+    echo "likely v1.4.8 or older). Installing without hash verification; upgrade to a"      2>&1
+    echo "release tag after the hash-lock change (#135) to get verified installs."          2>&1
+    "$VP" -m pip install -q -r "$D/requirements.txt"
+  fi
 fi
 [ -s "$S/master.key" ] || "$PY" -c "import secrets;print('sk-lumo-'+secrets.token_hex(24))" > "$S/master.key"
 
