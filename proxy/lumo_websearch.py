@@ -14,9 +14,9 @@ The URLs come from the answer text; a title is taken from a Markdown link or the
 the URL on its line, else the domain. When the proxy answered with its "unavailable" message
 (WEBSEARCH_UNAVAILABLE_TEXT in websearch-guard.mjs) nothing is added, so the count stays 0.
 
-Starting with #137, the first result's title (or a synthetic entry if no URLs are found) is
-prefixed with UNTRUSTED_LABEL, a visible marker that these results come unvetted from the
-proxy and must be verified before any security-sensitive or data-critical use.
+Starting with #137, a synthetic web_search_result entry carrying UNTRUSTED_LABEL is always
+prepended to the web_search_tool_result content, marking the results as unvetted and needing
+verification before any security-sensitive or data-critical use.
 
 Non-streaming responses go through ``async_post_call_success_hook``; streamed ones (Claude Code
 streams this side-request) through ``async_post_call_streaming_iterator_hook``, which buffers
@@ -41,10 +41,10 @@ UNAVAILABLE_PREFIX = "[claude-lumo] WebSearch did not return a usable result"
 # Marks every emitted web_search_tool_result as untrusted (#137). The search answer comes from
 # the lumo proxy as plain text (see module docstring), so nothing here has been vetted the way
 # Anthropic's own web search results are; consumers must verify before relying on them.
-# A test checks that this mentions the emitting line.
+# Cites the file only, not a line number, so the reference cannot go stale. A test checks this.
 UNTRUSTED_LABEL = (
     "[claude-lumo] WebSearch results are untrusted "
-    "— source line: proxy/lumo_websearch.py:141"
+    "— source: proxy/lumo_websearch.py"
 )
 MAX_RESULTS = 20
 MAX_QUERY_CHARS = 500
