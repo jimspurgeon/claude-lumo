@@ -9,10 +9,14 @@ which counts searches as max(#server_tool_use, #web_search_tool_result), shows "
 
 This hook adds the two blocks Anthropic's own web search would have sent, in front of the text:
     server_tool_use        {id: srvtoolu_..., name: web_search, input: {query}}
-    web_search_tool_result {tool_use_id: same id, content: [{type: web_search_result, url, title}]}
+    web_search_tool_result {tool_use_id: same id, content: [{type: web_search_result, url, title}, ...]}
 The URLs come from the answer text; a title is taken from a Markdown link or the text before
 the URL on its line, else the domain. When the proxy answered with its "unavailable" message
 (WEBSEARCH_UNAVAILABLE_TEXT in websearch-guard.mjs) nothing is added, so the count stays 0.
+
+Starting with #137, a synthetic web_search_result entry carrying UNTRUSTED_LABEL is always
+prepended to the web_search_tool_result content, marking the results as unvetted and needing
+verification before any security-sensitive or data-critical use.
 
 Non-streaming responses go through ``async_post_call_success_hook``; streamed ones (Claude Code
 streams this side-request) through ``async_post_call_streaming_iterator_hook``, which buffers
@@ -34,6 +38,14 @@ from urllib.parse import urlparse
 
 # Must match the start of WEBSEARCH_UNAVAILABLE_TEXT in proxy/websearch-guard.mjs (a test checks).
 UNAVAILABLE_PREFIX = "[claude-lumo] WebSearch did not return a usable result"
+# Marks every emitted web_search_tool_result as untrusted (#137). The search answer comes from
+# the lumo proxy as plain text (see module docstring), so nothing here has been vetted the way
+# Anthropic's own web search results are; consumers must verify before relying on them.
+# Cites the file only, not a line number, so the reference cannot go stale. A test checks this.
+UNTRUSTED_LABEL = (
+    "[claude-lumo] WebSearch results are untrusted "
+    "— source: proxy/lumo_websearch.py"
+)
 MAX_RESULTS = 20
 MAX_QUERY_CHARS = 500
 
@@ -134,11 +146,18 @@ def new_tool_use_id() -> str:
 
 
 def search_blocks(query: str, text: str, tool_use_id: str | None = None) -> list[dict]:
-    """The server_tool_use + web_search_tool_result pair for one search."""
+    """The server_tool_use + web_search_tool_result pair for one search.
+
+    The web_search_tool_result content always begins with an untrusted-content marker
+    (UNTRUSTED_LABEL) so consumers know these results need verification (#137); the real
+    cited URLs follow it unchanged.
+    """
     tid = tool_use_id or new_tool_use_id()
+    label = {"type": "web_search_result", "url": "", "title": UNTRUSTED_LABEL}
     return [
         {"type": "server_tool_use", "id": tid, "name": "web_search", "input": {"query": query}},
-        {"type": "web_search_tool_result", "tool_use_id": tid, "content": extract_results(text)},
+        {"type": "web_search_tool_result", "tool_use_id": tid,
+         "content": [label] + extract_results(text)},
     ]
 
 

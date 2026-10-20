@@ -88,14 +88,52 @@ def test_non_streaming_injects_before_the_text():
     use, result, text = msg["content"]
     assert use == {"type": "server_tool_use", "id": "srvtoolu_x", "name": "web_search", "input": {"query": "lumo news"}}
     assert result["type"] == "web_search_tool_result" and result["tool_use_id"] == "srvtoolu_x"
-    assert len(result["content"]) == 3
+    # The first entry carries the untrusted label (url: ""), then the 3 cited URLs.
+    assert result["content"][0]["type"] == "web_search_result"
+    assert result["content"][0]["url"] == ""
+    assert ws.UNTRUSTED_LABEL in result["content"][0]["title"]
+    assert len(result["content"]) == 4  # label + 3 URL results
     assert text == {"type": "text", "text": ANSWER}
 
 
-def test_non_streaming_without_urls_gets_an_empty_result_list():
+def test_untrusted_label_states_the_required_text():
+    """The label must name the constraint and cite the source file (#137)."""
+    assert "WebSearch results are untrusted" in ws.UNTRUSTED_LABEL
+    assert "source: proxy/lumo_websearch.py" in ws.UNTRUSTED_LABEL
+
+
+def test_untrusted_label_appears_in_web_search_tool_result():
+    """WebSearch results are marked as untrusted with source attribution (#137)."""
+    msg = message(ANSWER)
+    ws.inject_into_message(msg, REQ, tool_use_id="srvtoolu_test")
+    result_block = msg["content"][1]
+    assert result_block["type"] == "web_search_tool_result"
+    first_content = result_block["content"][0]
+    assert first_content["type"] == "web_search_result"
+    assert "[claude-lumo] WebSearch results are untrusted" in first_content["title"]
+    assert "source: proxy/lumo_websearch.py" in first_content["title"]
+
+
+def test_untrusted_label_appears_in_the_streamed_output():
+    """The label survives the streaming path too (#137)."""
+    raw = ws.format_sse(sse(ANSWER)).encode()
+    out = asyncio.run(_collect(ws.handler.async_post_call_streaming_iterator_hook(None, _agen([raw]), REQ)))
+    assert len(out) == 1
+    blocks = [d["content_block"] for _, d in ws.parse_sse(out[0].decode())
+              if d.get("type") == "content_block_start"]
+    result = next(b for b in blocks if b.get("type") == "web_search_tool_result")
+    assert ws.UNTRUSTED_LABEL in result["content"][0]["title"]
+
+
+def test_non_streaming_without_urls_still_carries_the_label():
     msg = message("A real answer without links.")
     assert ws.inject_into_message(msg, REQ)
-    assert msg["content"][1]["content"] == []
+    result_block = msg["content"][1]
+    # No URLs: one synthetic web_search_result entry carries just the untrusted label.
+    assert len(result_block["content"]) == 1
+    assert result_block["content"][0]["type"] == "web_search_result"
+    assert result_block["content"][0]["url"] == ""
+    assert ws.UNTRUSTED_LABEL == result_block["content"][0]["title"]
     assert msg["content"][0]["id"].startswith("srvtoolu_")
 
 
@@ -127,7 +165,11 @@ def test_streaming_inserts_blocks_and_reindexes():
     assert events[2][1]["delta"] == {"type": "input_json_delta", "partial_json": '{"query": "lumo news"}'}
     result = events[4][1]["content_block"]
     assert result["type"] == "web_search_tool_result" and result["tool_use_id"] == "srvtoolu_y"
-    assert len(result["content"]) == 3
+    # The first entry carries the untrusted label (url: ""), then the 3 cited URLs.
+    assert result["content"][0]["type"] == "web_search_result"
+    assert result["content"][0]["url"] == ""
+    assert ws.UNTRUSTED_LABEL in result["content"][0]["title"]
+    assert len(result["content"]) == 4  # label + 3 URL results
 
 
 def test_streaming_unavailable_or_no_tool_is_untouched():
@@ -159,6 +201,7 @@ def test_handler_streaming_hook_rewrites_byte_chunks():
     assert len(out) == 1 and isinstance(out[0], bytes)
     types = [d.get("content_block", {}).get("type") for _, d in ws.parse_sse(out[0].decode())
              if d.get("type") == "content_block_start"]
+    # The injected blocks are server_tool_use and web_search_tool_result (still only two blocks).
     assert types == ["server_tool_use", "web_search_tool_result", "text"]
 
 
