@@ -136,9 +136,13 @@ if ($Tool -eq "winsw") {
     Write-Output ""
     Write-Output "=== Install commands (run as the current user, in PowerShell) ==="
     Write-Output "# 1. Download WinSW 2.12 (x64) and set up one directory per service:"
+    # The two foreach-body lines below use single-quoted Write-Output strings
+    # so the emitted lines keep their inner double quotes when pasted back
+    # into PowerShell; $HOME and $s stay literal and expand in the user's own
+    # shell (#143).
     Write-Output "    foreach (`$s in 'LumoLiteLLM','LumoProxy') {"
-    Write-Output "        New-Item -ItemType Directory -Force "`$HOME\.lumoservices\`$s\logs" | Out-Null"
-    Write-Output "        Invoke-WebRequest https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe -OutFile "`$HOME\.lumoservices\`$s\WinSW.exe""
+    Write-Output '        New-Item -ItemType Directory -Force "$HOME\.lumoservices\$s\logs" | Out-Null'
+    Write-Output '        Invoke-WebRequest https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe -OutFile "$HOME\.lumoservices\$s\WinSW.exe"'
     Write-Output "    }"
     Write-Output "# 2. Save each xml block above as `$HOME\.lumoservices\<id>\<id>.xml"
     Write-Output "    #    (fill in LITELLM_MASTER_KEY in LumoLiteLLM.xml from $MasterKeyFile)"
