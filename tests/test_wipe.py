@@ -771,9 +771,25 @@ class TestStaleLumoLogs:
         result = stale_lumo_logs(30)
         assert len([r for r in result if r[0] == "lumo-log"]) == 2
 
+    def test_rotated_proxy_logs_in_logs_subfolder(self, tmp_path, monkeypatch):
+        """#134: proxy.log and its rotated proxy.log.1 live in <state>/logs/."""
+        old_time = time.time() - 40 * 86400
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        for name in ("proxy.log", "proxy.log.1"):
+            log = logs_dir / name
+            log.write_text("line\n")
+            os.utime(str(log), (old_time, old_time))
+
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(tmp_path))
+        result = stale_lumo_logs(30)
+        assert sorted(r[1] for r in result) == [
+            str(logs_dir / "proxy.log"), str(logs_dir / "proxy.log.1")]
+
 
 class TestStaleDebugDumps:
-    """Tests for stale_debug_dumps: the repo's proxy/debug/ spill."""
+    """Tests for stale_debug_dumps: <state>/debug/ (since #134) plus the old
+    repo-relative proxy/debug/ spill for proxies not yet restarted."""
 
     def test_stale_dump_files_and_folders(self, tmp_path):
         debug_dir = tmp_path / "proxy" / "debug"
@@ -801,6 +817,41 @@ class TestStaleDebugDumps:
 
     def test_missing_debug_dir_is_empty(self, tmp_path):
         assert stale_debug_dumps(30, repo_root=str(tmp_path / "nope")) == []
+
+    def test_state_dir_debug_dumps_collected(self, tmp_path, monkeypatch):
+        """#134: dumps now land in <state>/debug/; stale ones are collected."""
+        state_debug = tmp_path / "state" / "debug"
+        state_debug.mkdir(parents=True)
+        old_time = time.time() - 40 * 86400
+        now = time.time()
+
+        old_dump = state_debug / "cap-1.sse"
+        old_dump.write_text("raw stream")
+        os.utime(str(old_dump), (old_time, old_time))
+
+        fresh = state_debug / "cap-2.sse"
+        fresh.write_text("raw stream")
+        os.utime(str(fresh), (now, now))
+
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(tmp_path / "state"))
+        result = stale_debug_dumps(30, repo_root=str(tmp_path / "elsewhere"))
+        assert [r[1] for r in result] == [str(old_dump)]
+
+    def test_both_state_and_repo_debug_dirs_collected(self, tmp_path, monkeypatch):
+        """Old repo spill and new state-dir dumps are both listed."""
+        state_debug = tmp_path / "state" / "debug"
+        state_debug.mkdir(parents=True)
+        repo_debug = tmp_path / "repo" / "proxy" / "debug"
+        repo_debug.mkdir(parents=True)
+        old_time = time.time() - 40 * 86400
+        for f in state_debug / "cap-new.txt", repo_debug / "cap-old.txt":
+            f.write_text("x")
+            os.utime(str(f), (old_time, old_time))
+
+        monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(tmp_path / "state"))
+        result = stale_debug_dumps(30, repo_root=str(tmp_path / "repo"))
+        assert sorted(r[1] for r in result) == sorted(
+            [str(state_debug / "cap-new.txt"), str(repo_debug / "cap-old.txt")])
 
 
 class TestStaleConfigStores:

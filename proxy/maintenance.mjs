@@ -1,7 +1,31 @@
 // Run: node --test proxy/maintenance.test.mjs
-// Startup housekeeping helpers (log rotation, debug-dump pruning), split out of
-// proxy.mjs so they are unit-testable without starting the server.
+// Housekeeping helpers (state-dir paths, log rotation, debug-dump pruning), split
+// out of proxy.mjs so they are unit-testable without starting the server.
 import { readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+// Where the proxy keeps its logs and debug dumps (#134): under the Lumo state
+// dir, so a repo checkout stays clean. CLAUDE_LUMO_STATE_DIR wins, then
+// ~/.claude-lumo, the same convention every other claude-lumo script uses.
+export function resolveStatePaths(env = process.env, home = homedir()) {
+  const stateDir = env.CLAUDE_LUMO_STATE_DIR || join(home, ".claude-lumo");
+  return {
+    stateDir,
+    logPath: join(stateDir, "logs", "proxy.log"),
+    debugDir: join(stateDir, "debug"),
+  };
+}
+
+// One housekeeping pass: rotate the log if it is over maxLogBytes, prune the
+// debug dir down to maxDumpFiles. Called at startup and after every log line,
+// so the caps hold for a long-running proxy, not only at startup (#134).
+export function makeHousekeeper(logPath, debugDir, { maxLogBytes, maxDumpFiles } = {}) {
+  return () => {
+    if (maxLogBytes) rotateLog(logPath, maxLogBytes);
+    if (maxDumpFiles) pruneDir(debugDir, maxDumpFiles);
+  };
+}
 
 // If logPath exists and exceeds maxBytes, rename it to logPath + ".1" (one
 // generation, overwriting any previous .1). Errors are swallowed, like the

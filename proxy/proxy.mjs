@@ -3,7 +3,8 @@
 // - On 401 "Invalid access token": re-reads the cookie and retries once (fixes overnight expiry).
 // - Retries connection errors, 429 (honouring Retry-After, max 30s), 5xx, and requests with no response within LUMO_FIRST_BYTE_MS
 //   (default 240s), before any bytes are streamed (2 retries, backoff).
-// - Logs time-to-first-byte and duration of every chat request to proxy.log.
+// - Logs time-to-first-byte and duration of every chat request to <state>/logs/proxy.log
+//   (CLAUDE_LUMO_STATE_DIR, default ~/.claude-lumo; #134) and rotates it at runtime.
 // - Detects Lumo error payloads returned with HTTP 200 (non-SSE JSON bodies) and logs their
 //   type/code (never message content); a transient no_db_connection error is retried once
 //   after a short backoff (see sniffer.mjs, issue #43).
@@ -21,13 +22,18 @@ import { createToolGuard, escapeDone } from "./tool-guard.mjs";
 import { upstreamChat, retryText } from "./sniffer.mjs";
 import { createContextFit } from "./context-fit.mjs";
 import { chatResponse, isWebSearchRequest, runLumoSearch, webSearchUnavailable } from "./websearch-guard.mjs";
-import { rotateLog, pruneDir } from "./maintenance.mjs";
+import { resolveStatePaths, makeHousekeeper } from "./maintenance.mjs";
 
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
-// LUMO_PROXY_LOG lets tests redirect fatal-crash logging to a temp file (#132).
-const LOG = process.env.LUMO_PROXY_LOG || join(import.meta.dirname, "proxy.log");
-const DEBUG = join(import.meta.dirname, "debug");
-const log = (m) => { try { appendFileSync(LOG, `${new Date().toISOString()} ${m}\n`); } catch {} };
+// Logs and dumps live under the Lumo state dir, not the repo checkout (#134).
+// LUMO_PROXY_LOG overrides the log path so tests can redirect fatal-crash
+// logging to a temp file (#132).
+const { stateDir: STATE_DIR, logPath: stateLog, debugDir: DEBUG } = resolveStatePaths();
+const LOG = process.env.LUMO_PROXY_LOG || stateLog;
+mkdirSync(join(STATE_DIR, "logs"), { recursive: true });
+mkdirSync(DEBUG, { recursive: true });
+const housekeep = makeHousekeeper(LOG, DEBUG, { maxLogBytes: 10 * 1024 * 1024, maxDumpFiles: 50 });
+const log = (m) => { try { appendFileSync(LOG, `${new Date().toISOString()} ${m}\n`); housekeep(); } catch {} };
 
 // Fatal-exit handlers (#132): after an uncaughtException/unhandledRejection it is not safe
 // to keep serving (Node docs), so log synchronously and exit non-zero so a supervisor
@@ -44,9 +50,8 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 process.on("unhandledRejection", (reason) => fatal("unhandledRejection", reason));
 
 const credsRef = { current: readLumoCredentials() }; // mutable: upstream() refreshes it after a 401
-rotateLog(LOG, 10 * 1024 * 1024); // one generation: proxy.log -> proxy.log.1
-pruneDir(DEBUG, 50); // cap accumulated conversation dumps
-log(`start port=${PORT} creds=${credsRef.current ? "ok" : "MISSING"}`);
+housekeep(); // at startup: rotate the log to a single .1 generation, cap the dumps
+log(`start port=${PORT} creds=${credsRef.current ? "ok" : "MISSING"} state=${STATE_DIR}`);
 
 const upstream = createUpstream({ credsRef, log }); // test seam: fetch/readCreds/sleep/timeouts injectable (see upstream.mjs)
 
@@ -151,7 +156,7 @@ const server = http.createServer(async (req, res) => {
       const s = sse.stats; let req = {}; try { req = JSON.parse(body); } catch {}
       fitter.learn(body, s.promptTokens);
       extra = ` model=${req.model} max_tokens=${req.max_tokens ?? req.max_completion_tokens ?? "-"}${fit ? ` fit=${fit.from}->${fit.to}` : ""} prompt_tokens=${s.promptTokens ?? "-"} reasoning=${s.reasoning.length}c content=${s.content}c tools=${s.tools} finish=${s.finish || "none"} dropped_tool=${sse.guard.dropped} repaired_tool=${sse.guard.repaired} tool_retry=${sse.guard.retry}`;
-      if (s.reasoning.length > 30000) {
+      if (s.reasoning.length > 30000 && process.env.LUMO_CAPTURE_REASONING === "1") {
         const f = join(DEBUG, `${new Date().toISOString().replace(/[:.]/g, "-")}.txt`);
         try { mkdirSync(DEBUG, { recursive: true }); writeFileSync(f, s.reasoning); extra += ` dump=${f}`; } catch {}
       }

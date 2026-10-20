@@ -1,10 +1,10 @@
 // Run: node --test proxy/maintenance.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, statSync, utimesSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { rotateLog, pruneDir } from "./maintenance.mjs";
+import { rotateLog, pruneDir, resolveStatePaths, makeHousekeeper } from "./maintenance.mjs";
 
 let dir;
 test.beforeEach(() => {
@@ -18,6 +18,39 @@ const setMtime = (path, daysAgo) => {
   const t = new Date(Date.now() - daysAgo * 86400 * 1000);
   utimesSync(path, t, t);
 };
+
+test("resolveStatePaths honors CLAUDE_LUMO_STATE_DIR", () => {
+  const env = { CLAUDE_LUMO_STATE_DIR: join(tmpdir(), "custom-state") };
+  const paths = resolveStatePaths(env, join("/home", "user"));
+  assert.equal(paths.stateDir, env.CLAUDE_LUMO_STATE_DIR);
+  assert.equal(paths.logPath, join(env.CLAUDE_LUMO_STATE_DIR, "logs", "proxy.log"));
+  assert.equal(paths.debugDir, join(env.CLAUDE_LUMO_STATE_DIR, "debug"));
+});
+
+test("resolveStatePaths falls back to ~/.claude-lumo", () => {
+  const paths = resolveStatePaths({}, join("/home", "user"));
+  assert.equal(paths.stateDir, join("/home", "user", ".claude-lumo"));
+  assert.equal(paths.logPath, join("/home", "user", ".claude-lumo", "logs", "proxy.log"));
+  assert.equal(paths.debugDir, join("/home", "user", ".claude-lumo", "debug"));
+});
+
+test("makeHousekeeper rotates only once the log passes the cap, on every call", () => {
+  // Runtime rotation (#134): the first pass leaves an under-cap log alone; after
+  // the log grows past the cap, the next pass (after any log line) rotates it.
+  const log = join(dir, "test.log");
+  const dump = join(dir, "dump");
+  mkdirSync(dump);
+  writeFileSync(log, "x".repeat(50));
+  const housekeep = makeHousekeeper(log, dump, { maxLogBytes: 100, maxDumpFiles: 50 });
+  housekeep();
+  assert.ok(existsSync(log));
+  assert.ok(!existsSync(log + ".1"));
+  appendFileSync(log, "y".repeat(100)); // simulated growth while running
+  housekeep();
+  assert.ok(!existsSync(log));
+  assert.ok(existsSync(log + ".1"));
+  assert.equal(statSync(log + ".1").size, 150);
+});
 
 test("rotateLog renames a log over the threshold to .1", () => {
   const log = join(dir, "proxy.log");

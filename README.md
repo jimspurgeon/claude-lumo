@@ -399,6 +399,47 @@ from a normal terminal cannot see Lumo-store sessions: resume them via
 Uninstall removes `~/.claude-lumo` including the separate store, but not what lives
 in `~/.claude` (run migrate-from-lumo.sh first if you want those sessions kept).
 
+### Proxy logs and debug dumps
+
+The Lumo proxy writes its log and its optional debug dumps under the state
+directory, not inside this repo's checkout, so a clone stays clean and the files
+survive an update:
+
+| File | Path |
+|---|---|
+| Request log (one line per chat request) | `<state>/logs/proxy.log` |
+| Rotated log (one generation) | `<state>/logs/proxy.log.1` |
+| Raw capture / reasoning dumps | `<state>/debug/` |
+
+`<state>` is `CLAUDE_LUMO_STATE_DIR` if set, else `~/.claude-lumo` — the same
+variable every other claude-lumo script honours. Both directories are created on
+startup.
+
+**Rotation and pruning at runtime.** `proxy.log` is rotated to a single
+`proxy.log.1` generation once it passes 10 MB, and `<state>/debug/` is pruned to
+the 50 newest entries (by mtime). This runs at startup and after every log line,
+so the caps hold for a proxy left running for weeks, not only at the moment it
+starts.
+
+**Environment variables.**
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CLAUDE_LUMO_STATE_DIR` | `~/.claude-lumo` | Where logs and dumps live |
+| `LUMO_CAPTURE=1` | off | Save the raw request and stream of each chat turn to `<state>/debug/` |
+| `LUMO_CAPTURE_REASONING=1` | off | Also save a turn's reasoning text to `<state>/debug/` when it exceeds 30 KB |
+
+Both capture variables are opt-in and off by default: the reasoning dumps can be
+large and contain the model's own thinking, so they are only written when you ask
+for them.
+
+**Migration.** Earlier releases wrote `proxy/proxy.log` and `proxy/debug/` inside
+the repo checkout. Those paths are no longer used; the running proxy keeps writing
+to whichever path it started with until you restart it. After restarting, the old
+repo-relative `proxy/debug/` dumps are picked up by `claude-lumo wipe` like the
+new `<state>/debug/` ones, but the old `proxy/proxy.log` and `proxy.log.1` are not
+collected — delete them by hand if you want them gone.
+
 ### Plain Claude Code opt-in
 
 The wipe offer and audit features work with plain Claude Code too. Add this to your
@@ -497,13 +538,14 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | Update notice stuck on the status line | It clears on the next `claude-lumo update`; it also expires after 7 days. `CLAUDE_LUMO_UPDATE_CHECK=0` disables the check entirely. |
 | `ECONNREFUSED` mid-response | Proxy or LiteLLM crashed. Run any `claude-lumo` command again; it restarts both automatically. |
 | 401 from Lumo | Log in again at lumo.proton.me in your browser; the proxy picks up the fresh cookie by itself. |
-| "Slow thinking" or stuck at 5 min | Normal on lumo-max (~16 tok/s, minutes-long reasoning). Not a hang if requests keep finishing: `proxy/proxy.log` logs each one, and `curl 127.0.0.1:8790/v1/debug/live` shows what is in flight. `LUMO_CAPTURE=1` on the proxy saves raw requests and streams to `proxy/debug/`. |
+| "Slow thinking" or stuck at 5 min | Normal on lumo-max (~16 tok/s, minutes-long reasoning). Not a hang if requests keep finishing: `~/.claude-lumo/logs/proxy.log` logs each one, and `curl 127.0.0.1:8790/v1/debug/live` shows what is in flight. `LUMO_CAPTURE=1` on the proxy saves raw requests and streams to `~/.claude-lumo/debug/`. |
+| Proxy exits at startup (`mkdir` error in `EACCES`/`EPERM`) | Since #134 the proxy creates `<state>/logs` and `<state>/debug` at startup and exits if that fails, rather than running with logs silently going nowhere. Make `CLAUDE_LUMO_STATE_DIR` (default `~/.claude-lumo`) writable, or point the variable at a folder that is. |
 | "Invalid tool parameters" on parallel tool calls | Fixed in the proxy (it splits tool calls LiteLLM would merge). If it returns after a LiteLLM upgrade, check `splitToolCallChunks` in `proxy/proxy.mjs`. |
-| Agent stops mid-task right after saying what it will do next | Most often the reply mentioned `[DONE]` (an SSE fixture, say): LiteLLM ends the stream on any line containing it, so the proxy escapes it inside JSON (#13). Otherwise Lumo announced a tool call that never arrived intact; the proxy repairs it or retries once (`dropped_tool`, `repaired_tool`, `tool_retry` in `proxy/proxy.log`), and if both fail the turn ends with a visible `[claude-lumo] Your tool call was lost in transit` message. See `proxy/tool-guard.mjs`. |
+| Agent stops mid-task right after saying what it will do next | Most often the reply mentioned `[DONE]` (an SSE fixture, say): LiteLLM ends the stream on any line containing it, so the proxy escapes it inside JSON (#13). Otherwise Lumo announced a tool call that never arrived intact; the proxy repairs it or retries once (`dropped_tool`, `repaired_tool`, `tool_retry` in the proxy log), and if both fail the turn ends with a visible `[claude-lumo] Your tool call was lost in transit` message. See `proxy/tool-guard.mjs`. |
 | Left-arrow in the agents view, then re-entering that agent, causes permanent `no_db_connection` failures (#60) | One cause is fixed in #77: Claude Code re-hosts such a session without the launcher's environment, so its requests reached LiteLLM without the local key. The settings now supply the key through `apiKeyHelper`, the rest of the launcher environment, and the system prompt through `hooks/lumo-prompt.py`; the proxy retries with `prompt_cache_key` stripped after two consecutive `no_db_connection` errors. If failures persist, start a fresh session or `claude-lumo --resume <session_id>`; fresh sessions get a new cache key. |
-| "response exceeded the 32000 output token maximum" | The model spent its whole budget thinking before it answered; `proxy/proxy.log` shows `finish=length content=0c tools=0`. Split the work into smaller steps, one batch per tool call. The cap is `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in `settings-lumo.json`; you can raise it in your own `settings.json`, but each stuck turn then runs longer, at about 1.2K tokens a minute on lumo-max. |
+| "response exceeded the 32000 output token maximum" | The model spent its whole budget thinking before it answered; the proxy log shows `finish=length content=0c tools=0`. Split the work into smaller steps, one batch per tool call. The cap is `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in `settings-lumo.json`; you can raise it in your own `settings.json`, but each stuck turn then runs longer, at about 1.2K tokens a minute on lumo-max. |
 | Failed Edit with a "[claude-lumo]" note | The proxy added the closest real text to an Edit whose old text was not in the file; retry by copying the text between the markers. |
-| WebSearch says it did not return a usable result | Expected when Lumo answered from memory, cited no sources, timed out (120 s) or hit an upstream error; the model is told so instead of getting training-data guesses. Outcome is in `proxy/proxy.log` (`websearch=ok`, `no_search`, `no_sources`, `timeout`, `err_<type>`). Retry, or use WebFetch for specific URLs. |
+| WebSearch says it did not return a usable result | Expected when Lumo answered from memory, cited no sources, timed out (120 s) or hit an upstream error; the model is told so instead of getting training-data guesses. Outcome is in the proxy log (`websearch=ok`, `no_search`, `no_sources`, `timeout`, `err_<type>`). Retry, or use WebFetch for specific URLs. |
 | WebSearch shows "Did 0 searches" although it found results | Fixed in 1.4.3: `proxy/lumo_websearch.py` (a LiteLLM callback registered in `proxy/litellm.yaml`) adds the `server_tool_use` / `web_search_tool_result` blocks Claude Code counts, with the query and each cited URL. It adds nothing when the search was unavailable, so a failed search still reads as 0. If the count is 0 after a search that cited sources, check that `litellm.yaml` still lists `callbacks: lumo_websearch.handler` and that `~/.claude-lumo/litellm.log` shows no import error. |
 | `python` / `python3` not found | Install Python 3.12+. On Windows, make sure it is added to PATH during installation. |
 | "No Lumo login found" | Log in at lumo.proton.me in a supported browser, or use the manual `login.json` fallback above. |
@@ -529,7 +571,7 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | `statusline.py` | Prints the `[LUMO]`/`[CLAUDE]` status line; `--lumo` forces `[LUMO]` (keep that flag if your personal `settings.json` overrides `statusLine`); chains to `statusline-next.sh` when present |
 | `wipe.py` | Conversation data wipe (see above) |
 | `privacy_audit.py` | Data safety posture audit (see above) |
-| `proxy/proxy.mjs` | Lumo proxy: cookie auth, retries, stream repair (split multi-tool-call chunks), per-request stats in `proxy/proxy.log`, `/v1/debug/live` |
+| `proxy/proxy.mjs` | Lumo proxy: cookie auth, retries, stream repair (split multi-tool-call chunks), per-request stats in `<state>/logs/proxy.log`, `/v1/debug/live` |
 | `proxy/sniffer.mjs` | Buffer non-SSE chat responses; extract error type/code; retry `no_db_connection`. Tests: `node --test proxy/sniffer.test.mjs` |
 | `proxy/context-fit.mjs` | Keeps prompt + reply inside Lumo's 131072-token window: learns each session's bytes-per-token ratio and cuts `max_tokens` (#65). Tests: `node --test proxy/context-fit.test.mjs` |
 | `proxy/edit-hints.mjs` | Adds the closest real text to a failed Edit (and a reminder to Read before Edit or Write). Claude Code checks edits before any hook runs, so this has to live in the proxy |

@@ -11,15 +11,19 @@ import { spawn } from "node:child_process";
 const timeoutMs = 10000; // fail the test if spawn hangs
 
 // Spawns a child that imports proxy.mjs then throws/rejects after a short delay.
+// CLAUDE_LUMO_STATE_DIR points at a temp dir so the child never creates or prunes
+// the real ~/.claude-lumo/logs and ~/.claude-lumo/debug (#134).
 async function spawnProxyCrash({ port, logFile, throwKind }) {
   const code = `import "./proxy.mjs"; setTimeout(() => {
     if (${throwKind === "exception"}) throw new Error("test-uncaught-exception-${port}");
     else Promise.reject(new Error("test-unhandled-rejection-${port}"));
   }, 400);`;
+  const stateDir = mkdtempSync(join(tmpdir(), "lumo-proxy-state-"));
   return new Promise((resolve) => {
     const p = spawn("node", ["--input-type=module", "-e", code], {
       cwd: import.meta.dirname,
-      env: { ...process.env, LUMO_PROXY_PORT: String(port), LUMO_PROXY_LOG: logFile },
+      env: { ...process.env, LUMO_PROXY_PORT: String(port), LUMO_PROXY_LOG: logFile,
+             CLAUDE_LUMO_STATE_DIR: stateDir },
       stdio: ["inherit", "pipe", "pipe"],
     });
     let stdout = "", stderr = "";

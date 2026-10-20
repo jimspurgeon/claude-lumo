@@ -11,7 +11,8 @@ a done marker exists, or (allowlist mode) the project is outside the allowlist f
 
 Stores enumerated: projects/<project>/<session>.jsonl and folders, session-env/, file-history/,
 tasks/, history.jsonl (matching lines only), Lumo state logs, temp scratch (claude-* under
-CLAUDE_CODE_TMPDIR or TEMP), stale proxy debug dumps (the repo's proxy/debug/ spill). Settings,
+CLAUDE_CODE_TMPDIR or TEMP), stale proxy debug dumps (moved to <state>/debug/ in #134, old
+repo-relative proxy/debug/ still collected). Settings,
 credentials, memory and config are never touched:
 a project wipe keeps projects/<project>/memory/ and deletes the rest of that project folder.
 Orca data is report-only: the wipe output lists what Orca keeps and how to clear it by hand.
@@ -570,43 +571,54 @@ def stale_temp_scratch(temp_dir, days):
 
 
 def stale_lumo_logs(days):
-    """Top-level log files in the Lumo state folder, older than the cutoff."""
+    """Log files in the Lumo state folder, older than the cutoff. Covers the
+    top level (litellm.log) and the proxy's logs/ subfolder (proxy.log and its
+    rotated proxy.log.1, which no longer matches *.log and is globbed by name)."""
     lumo_state = resolve_state_dir()
     if not os.path.isdir(lumo_state):
         return []
     cutoff = time.time() - days * 86400
     out = []
-    for path in glob.glob(os.path.join(lumo_state, "*.log")):
-        try:
-            if os.path.getmtime(path) < cutoff:
-                out.append(("lumo-log", path))
-        except OSError:
-            pass
+    patterns = [os.path.join(lumo_state, "*.log"),
+                os.path.join(lumo_state, "logs", "*.log*")]
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            try:
+                if os.path.getmtime(path) < cutoff:
+                    out.append(("lumo-log", path))
+            except OSError:
+                pass
     return out
 
 
 def stale_debug_dumps(days, repo_root=None):
-    """Entries in the repo's proxy/debug conversation dumps older than the cutoff.
-    proxy/debug/ sits next to proxy/proxy.mjs in this script's repo, not the
-    Lumo state dir; gitignored spill, aged out like the Lumo logs."""
+    """Entries in the proxy's debug conversation dumps older than the cutoff.
+    #134 moved the dumps from the repo's proxy/debug/ into the Lumo state dir
+    (<state>/debug/); the old repo-relative spill is still collected for
+    machines that have not restarted the proxy yet."""
+    roots = []
+    state_debug = os.path.join(resolve_state_dir(), "debug")
+    if os.path.isdir(state_debug) and not is_any_link(state_debug):
+        roots.append(state_debug)
     root = repo_root or os.path.dirname(os.path.abspath(__file__))
     debug_dir = os.path.join(root, "proxy", "debug")
-    if not os.path.isdir(debug_dir) or is_any_link(debug_dir):
-        return []
+    if os.path.isdir(debug_dir) and not is_any_link(debug_dir):
+        roots.append(debug_dir)
     cutoff = time.time() - days * 86400
     out = []
-    try:
-        entries = list(os.scandir(debug_dir))
-    except OSError:
-        return out
-    for entry in entries:
+    for debug_dir in roots:
         try:
-            if not (entry.is_dir(follow_symlinks=False) or entry.is_file(follow_symlinks=False)):
-                continue
-            if entry.stat().st_mtime < cutoff:
-                out.append(("debug-dump", entry.path))
+            entries = list(os.scandir(debug_dir))
         except OSError:
-            pass
+            continue
+        for entry in entries:
+            try:
+                if not (entry.is_dir(follow_symlinks=False) or entry.is_file(follow_symlinks=False)):
+                    continue
+                if entry.stat().st_mtime < cutoff:
+                    out.append(("debug-dump", entry.path))
+            except OSError:
+                pass
     return out
 
 
