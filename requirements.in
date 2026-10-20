@@ -1,0 +1,5 @@
+# Inputs for the hash-locked requirements.txt (#135): just litellm[proxy], pinned; every
+# other entry in requirements.txt is a transitive picked by pip-compile. Regenerate with:
+#   pip-compile --generate-hashes --output-file requirements.txt requirements.in
+# Bump the pin here (and re-run pip-compile), never in requirements.txt directly.
+litellm[proxy]==1.104.2
