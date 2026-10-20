@@ -118,5 +118,22 @@
     "commit": "",
     "pr": ""
   },
-  "includeCoAuthoredBy": false
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "deny": [
+      "Read(~/.claude-lumo/master.key)",
+      "Read(~/.claude-lumo/login.json)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.claude.json)",
+      "Read(//**/.env)",
+      "Read(//**/.env.*)",
+      "Read(//c/Users/*/AppData/**/Cookies)",
+      "Read(//c/Users/*/AppData/**/cookies.sqlite)",
+      "Read(~/Library/Application Support/**/Cookies)",
+      "Read(~/Library/Application Support/**/cookies.sqlite)",
+      "Read(~/.mozilla/**/cookies.sqlite)",
+      "Read(~/.librewolf/**/cookies.sqlite)",
+      "Read(~/.config/**/Cookies)"
+    ]
+  }
 }
