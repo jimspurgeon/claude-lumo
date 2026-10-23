@@ -1,5 +1,11 @@
 {
   "model": "lumo-max",
+  "fallbackModel": [],
+  "modelPicker": {
+    "options": [
+      { "model": "lumo-local", "label": "lumo-local (llama.cpp local)", "description": "Local LFM 2.5 24B via llama-server on port 8080" }
+    ]
+  },
   "autoCompactWindow": {{AUTO_COMPACT_WINDOW}},
   "env": {
     "CLAUDE_LUMO": "1",

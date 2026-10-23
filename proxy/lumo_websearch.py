@@ -49,6 +49,20 @@ UNTRUSTED_LABEL = (
 MAX_RESULTS = 20
 MAX_QUERY_CHARS = 500
 
+# The local llama.cpp backend (issue #150). It is not behind the lumo proxy, so web search never
+# ran for it; injecting fake search-result blocks would misreport what happened. Both spellings:
+# Claude Code asks for "lumo-local", LiteLLM rewrites data["model"] to the deployment's model
+# string once routed ("openai/lfm2.5-24b"), so match either.
+LOCAL_MODEL_MARKERS = ("lumo-local", "lfm2.5-24b")
+
+
+def is_local_model(data: Any) -> bool:
+    """True when the request targets the local llama.cpp backend (lumo-local)."""
+    model = data.get("model") if isinstance(data, dict) else None
+    if not isinstance(model, str):
+        return False
+    return any(marker in model for marker in LOCAL_MODEL_MARKERS)
+
 _URL_RE = re.compile(r"https?://[^\s<>\"'`\]\[(){}|\\^]+")
 _MD_LINK_RE = re.compile(r"\[([^\]\n]{1,200})\]\((https?://[^\s)]+)\)")
 _QUERY_RE = re.compile(r"perform a web search for the query:\s*(.+)", re.IGNORECASE)
@@ -273,7 +287,7 @@ def _as_dict(obj: Any) -> dict | None:
 class LumoWebSearchBlocks(_Base):  # type: ignore[misc,valid-type]
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: Any, response: Any) -> Any:
         try:
-            if not is_web_search_request(data):
+            if not is_web_search_request(data) or is_local_model(data):
                 return response
             msg = _as_dict(response)
             if msg is None or msg.get("type") != "message":
@@ -286,7 +300,7 @@ class LumoWebSearchBlocks(_Base):  # type: ignore[misc,valid-type]
 
     async def async_post_call_streaming_iterator_hook(self, user_api_key_dict: Any, response: Any,
                                                       request_data: dict) -> AsyncGenerator[Any, None]:
-        if not is_web_search_request(request_data):
+        if not is_web_search_request(request_data) or is_local_model(request_data):
             async for chunk in response:
                 yield chunk
             return

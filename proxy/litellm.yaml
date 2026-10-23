@@ -45,6 +45,20 @@ model_list:
       stream_timeout: 90
       timeout: 45
       num_retries: 1
+  # lumo-local (issue #150): the local llama.cpp backend (LFM 2.5 24B on :8080). Deliberately
+  # unlike the hosted deployments above: a local model can take minutes per reply under GPU
+  # pressure, so the per-deployment timeouts are generous (and beat the #133 hosted values,
+  # which would cut a healthy local generation off at 90 s). num_retries 1 matches hosted:
+  # a retry re-runs a minutes-long generation. Claude Code's own API_TIMEOUT_MS still bounds
+  # the wait client-side.
+  - model_name: lumo-local
+    litellm_params:
+      model: openai/lfm2.5-24b
+      api_base: "http://127.0.0.1:8080/v1"
+      api_key: local
+      stream_timeout: 3600
+      timeout: 3600
+      num_retries: 1
   - model_name: "*"
     litellm_params:
       model: hosted_vllm/lumo-max

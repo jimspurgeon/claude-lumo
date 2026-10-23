@@ -184,6 +184,19 @@ def looks_like_fallback(actual, configured):
     return normalize_model(actual) != normalize_model(configured)
 
 
+# The local llama.cpp backend (issue #150). Claude Code sends the LiteLLM model_name
+# ("lumo-local"); the backend itself may answer with its own id ("lfm2.5-24b"), which
+# transcripts record. There is no per-model env in Claude Code's settings (the env block is
+# static for the session), so the backend is detected from the model id.
+LOCAL_BACKEND_MARKERS = ("lumo-local", "lfm2.5-")
+
+
+def is_local_backend(*model_ids):
+    """True when any of the model ids belongs to the local llama.cpp backend."""
+    return any(isinstance(m, str) and any(marker in m for marker in LOCAL_BACKEND_MARKERS)
+               for m in model_ids)
+
+
 # Issue #65: Claude Code compacts well before the model's window is full, so a percentage of the
 # window (context_window.used_percentage) read "ctx 35%" moments before a compaction. The trigger
 # point is not documented and not in the status JSON, so this is an approximation calibrated on
@@ -291,7 +304,8 @@ if LUMO and started and ver and ver != "dev" and started != ver:
     restart_txt = f"  \x1b[33mrestart to load {ver}\x1b[0m"
     ver_txt = f"  {started}"  # the version slot names what this session runs, not the install (#117)
 if LUMO:
-    sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} via local proxy{pct}{ver_txt}{restart_txt}  (Claude: run `claude`)")
+    backend = "via local llama.cpp" if is_local_backend(shown, actual) else "via local proxy"
+    sys.stdout.write(f"\x1b[1;35m[LUMO]\x1b[0m {shown} {backend}{pct}{ver_txt}{restart_txt}  (Claude: run `claude`)")
 else:
     sys.stdout.write(f"\x1b[1;33m[CLAUDE]\x1b[0m {shown}{pct}  (Lumo: run `claude-lumo`)")
 sys.stdout.flush()
