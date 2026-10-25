@@ -39,6 +39,10 @@ case "$OS" in
 esac
 
 mkdir -p "$S" "$BIN"
+# Put our own bin dir on PATH for the rest of this script: the Claude Code installer drops
+# its binary in ~/.local/bin on Linux, and without this the check right after it would
+# report "still not on PATH" for an install that actually worked.
+case ":$PATH:" in *":$BIN:"*) ;; *) PATH="$BIN:$PATH"; export PATH;; esac
 
 # === Linux helper functions =============================================================
 # Many Linux environments the one-liner is piped into differ from the Ubuntu-with-sudo
@@ -46,11 +50,16 @@ mkdir -p "$S" "$BIN"
 # root with no sudo binary; Fedora/Bazzite-family systems have dnf, not apt. So the
 # prerequisite steps below go through these three helpers instead of `sudo apt-get`.
 # as_root CMD ARGS: run as root — directly when we already are root, else sudo, else su.
+# Package-manager invocations are always run with stdin closed and (on the deb family)
+# DEBIAN_FRONTEND=noninteractive: this script's own stdin is the install script itself
+# when piped (`curl ... | bash`), and apt/debconf will happily read and discard it as
+# prompt input, silently truncating the script mid-run ("half an install, exit 0").
 as_root() {
-  if [ "$(id -u)" = "0" ]; then "$@"
-  elif command -v sudo >/dev/null 2>&1; then sudo "$@"
-  else su -c "$*"
-  fi
+  local run
+  if [ "$(id -u)" = "0" ]; then run=("$@")
+  elif command -v sudo >/dev/null 2>&1; then run=(sudo "$@")
+  else run=(su -c "$*"); fi
+  DEBIAN_FRONTEND=noninteractive "${run[@]}" </dev/null
 }
 # PM: the first package manager found on PATH ("" when none).
 PM=""
@@ -150,6 +159,23 @@ if ! command -v "$PY" >/dev/null 2>&1; then
     linux)   pkg_install python || { echo "Manual: https://python.org"; exit 1; };;
   esac
   command -v python >/dev/null 2>&1 || PY="python3"
+fi
+# Version gate, not just existence: distros still ship 3.11 or older (Debian 12) while the
+# hash-locked requirements (e.g. numpy 2.5.4) need >=3.12. Failing here with a clear message
+# beats dying inside pip's resolver six steps later with a wall of version tables.
+if command -v "$PY" >/dev/null 2>&1; then
+  PYVER="$("$PY" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo 0)"
+  PYMAJ="${PYVER%%.*}"; PYMIN="${PYVER#*.}"
+  case "$PYMAJ" in ''|*[!0-9]*) PYMAJ=0;; esac
+  case "$PYMIN" in ''|*[!0-9]*) PYMIN=0;; esac
+  if [ "$PYMAJ" -lt 3 ] || { [ "$PYMAJ" -eq 3 ] && [ "$PYMIN" -lt 12 ]; }; then
+    echo "ERROR: Python $PYVER found, but claude-lumo needs Python 3.12+ (the hash-locked" >&2
+    echo "requirements need it; e.g. Debian 12's python3 is 3.11). Install Python 3.12+ and" >&2
+    echo "re-run, or use a newer base image. On immutable/atomic distros (Bazzite, Silverblue)" >&2
+    echo "a distrobox container with python3.12+ is the intended path:" >&2
+    echo "  distrobox create -n lumo -i debian:13   # then: distrobox enter lumo" >&2
+    exit 1
+  fi
 fi
 
 # Claude Code — install from latest if missing

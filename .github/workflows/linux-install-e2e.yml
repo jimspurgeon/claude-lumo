@@ -24,9 +24,9 @@ on:
         required: false
         default: 'master'
       images:
-        description: 'JSON array of Docker images (default: ["ubuntu:24.04","debian:12","fedora:latest"])'
+        description: 'JSON array of Docker images (default: ["ubuntu:24.04","debian:13","fedora:latest"])'
         required: false
-        default: '["ubuntu:24.04","debian:12","fedora:latest"]'
+        default: '["ubuntu:24.04","debian:13","fedora:latest"]'
       preseed:
         description: 'Pre-seed ~/.claude/lumo at the pinned SHA ("true") or test the pure one-liner, which installs the newest release tag ("false")'
         required: false
@@ -41,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ${{ fromJSON(github.event.inputs.images || '["ubuntu:24.04","debian:12","fedora:latest"]') }}
+        image: ${{ fromJSON(github.event.inputs.images || '["ubuntu:24.04","debian:13","fedora:latest"]') }}
 
     name: ${{ matrix.image }}
     steps:
