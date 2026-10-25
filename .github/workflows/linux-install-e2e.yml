@@ -43,12 +43,17 @@ jobs:
     steps:
       - name: Resolve ref to pinned SHA
         run: |
+          set -euo pipefail
+          REF="${{ inputs.ref || 'master' }}"
           git clone --quiet --filter=blob:none --no-checkout \
             "https://github.com/${{ github.repository }}.git" /tmp/src
-          SHA="$(git -C /tmp/src rev-parse "${{ inputs.ref || 'master' }}^{commit}")"
+          # A clone only creates local refs for the default branch; fetch the ref we want
+          # (works for branches, tags and raw SHAs) and pin to the commit it resolves to.
+          git -C /tmp/src fetch --quiet --depth=1 origin "$REF"
+          SHA="$(git -C /tmp/src rev-parse "FETCH_HEAD^{commit}")"
           echo "SHA=$SHA" >> "$GITHUB_ENV"
           echo "SAFE_IMAGE=$(echo '${{ matrix.image }}' | tr -c 'a-zA-Z0-9.-' '-')" >> "$GITHUB_ENV"
-          echo "resolved ${{ inputs.ref || 'master' }} -> $SHA"
+          echo "resolved $REF -> $SHA"
 
       - name: Install one-liner + smoke test (single container)
         timeout-minutes: 30
