@@ -1,0 +1,107 @@
+# linux-install-e2e.yml: run the claude-lumo one-line install end-to-end in bare Linux
+# containers and smoke-test the installed launcher. Manual trigger only.
+#
+# What "end-to-end" means here (no browser login exists in CI):
+#   1. The real one-liner: curl -sL <raw install.sh at REF> | bash, in a fresh container
+#      with no prerequisites installed (the installer must auto-install them).
+#   2. The installer's claimed artifacts exist: clone at ~/.claude/lumo, litellm venv,
+#      master.key, claude-lumo on PATH location (~/.local/bin).
+#   3. The launcher boots: proxy health :8790 and litellm health :4000 answer, and
+#      `claude-lumo --version` execs Claude Code (both health gates pass without a
+#      lumo.proton.me login; only actual LLM calls need credentials).
+#
+# REF input: which ref's install.sh to pipe. 'master' tests the production one-liner;
+# a branch name tests a patched install.sh before merge.
+
+name: Linux Install E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Ref whose install.sh to test (default: master)'
+        required: false
+        default: 'master'
+      images:
+        description: 'Comma-separated Docker images (default: ubuntu:24.04,debian:12,fedora:latest,archlinux:base)'
+        required: false
+        default: 'ubuntu:24.04,debian:12,fedora:latest'
+
+permissions:
+  contents: read
+
+jobs:
+  install-e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(format('["{0}"]', join(split(inputs.images || 'ubuntu:24.04,debian:12,fedora:latest', ','), '","'))) }}
+
+    name: ${{ matrix.image }}
+    steps:
+      - name: Install one-liner + smoke test (single container)
+        timeout-minutes: 30
+        run: |
+          IMAGE="${{ matrix.image }}"
+          REF="${{ inputs.ref || 'master' }}"
+          INSTALL_URL="https://raw.githubusercontent.com/${{ github.repository }}/$REF/install.sh"
+          LOGDIR="$(mktemp -d)"
+
+          echo "== image: $IMAGE"
+          echo "== install.sh from: $INSTALL_URL"
+
+          docker run --rm \
+            -e HOME=/root \
+            -e TERM=dumb \
+            -v "$LOGDIR:/logs" \
+            "$IMAGE" bash -c '
+          set -x
+          FAIL=0
+
+          echo "=== before: what the fresh image has ==="
+          for c in git node npm python python3 curl claude sudo; do
+            command -v "$c" >/dev/null 2>&1 && echo "have: $c" || echo "MISSING: $c"
+          done
+
+          echo "=== run the one-liner ==="
+          # The real thing, unmodified.
+          if ! curl -sL "'"$INSTALL_URL"'" | bash >/logs/install.log 2>&1; then
+            echo "ONE-LINER FAILED (exit $?): full log follows"
+            cat /logs/install.log
+            exit 1
+          fi
+          echo "--- install.log (filtered) ---"
+          grep -vE "^$" /logs/install.log | tail -40
+
+          echo "=== artifacts ==="
+          [ -d "$HOME/.claude/lumo/.git" ] && echo "OK: clone at ~/.claude/lumo" || { echo "FAIL: no clone at ~/.claude/lumo"; FAIL=1; }
+          [ -d "$HOME/.claude-lumo/litellm-venv" ] && echo "OK: litellm venv" || { echo "FAIL: no litellm venv"; FAIL=1; }
+          [ -x "$HOME/.local/bin/claude-lumo" ] && echo "OK: claude-lumo wrapper" || { echo "FAIL: no claude-lumo wrapper"; FAIL=1; }
+          [ -s "$HOME/.claude-lumo/master.key" ] && echo "OK: master.key" || { echo "FAIL: no master.key"; FAIL=1; }
+
+          echo "=== launcher smoke test: claude-lumo --version ==="
+          # ~/.local/bin is the documented PATH location; use it explicitly.
+          export PATH="$HOME/.local/bin:$PATH"
+          timeout 120 "$HOME/.local/bin/claude-lumo" --version > /logs/version.log 2>&1
+          RC=$?
+          echo "exit code: $RC"
+          cat /logs/version.log || true
+          # --version goes through the full launcher: health checks, proxy + litellm boot.
+          # Without a browser login the run itself still must succeed.
+          [ $RC -eq 0 ] || { echo "FAIL: claude-lumo --version exited $RC"; FAIL=1; }
+
+          echo "=== health endpoints (started by the launcher run above) ==="
+          curl -s --max-time 5 http://127.0.0.1:8790/v1/health && echo "" || { echo "FAIL: proxy :8790 not healthy"; FAIL=1; }
+          curl -s --max-time 5 http://127.0.0.1:4000/health/liveliness && echo "" || { echo "FAIL: litellm :4000 not healthy"; FAIL=1; }
+
+          exit $FAIL
+          '
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.image }}
+          path: /tmp/tmp.*/install.log
+          if-no-files-found: ignore
