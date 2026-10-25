@@ -349,6 +349,38 @@ class SpawnDetached(unittest.TestCase):
             self.assertIn("ok-119", text)
             time.sleep(0.5)  # let the child exit so the temp dir can be removed on Windows
 
+    @unittest.skipUnless(os.name == "nt", "Windows console flags")
+    def test_windows_child_gets_a_hidden_console_not_none(self):
+        """#164: DETACHED_PROCESS left litellm.exe console-less, so its python children opened a
+        visible terminal window, and closing it killed LiteLLM. The flags must give a hidden
+        console instead, and still leave the caller's process group and job."""
+        import subprocess
+        with mock.patch.object(subprocess, "Popen") as popen:
+            sr.spawn_detached(["x"])
+        flags = popen.call_args.kwargs["creationflags"]
+        self.assertTrue(flags & subprocess.CREATE_NO_WINDOW)
+        self.assertFalse(flags & subprocess.DETACHED_PROCESS)
+        self.assertTrue(flags & subprocess.CREATE_NEW_PROCESS_GROUP)
+        self.assertTrue(flags & subprocess.CREATE_BREAKAWAY_FROM_JOB)
+
+    @unittest.skipUnless(os.name == "nt", "Windows console flags")
+    def test_windows_grandchild_shares_the_windowless_console(self):
+        """The real spawner: a child that starts a console grandchild (as litellm.exe does) must
+        not make Windows open a window for it."""
+        import time
+        grandchild = "import ctypes; print('hwnd', ctypes.windll.kernel32.GetConsoleWindow())"
+        child = ("import subprocess, sys; subprocess.run([sys.executable, '-c', %r])" % grandchild)
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "child.log")
+            sr.spawn_detached([sys.executable, "-c", child], cwd=d, log=log)
+            deadline, text = time.monotonic() + 20, ""
+            while time.monotonic() < deadline and "hwnd" not in text:
+                time.sleep(0.1)
+                with open(log, encoding="utf-8") as f:
+                    text = f.read()
+            self.assertIn("hwnd 0", text)
+            time.sleep(0.5)
+
 
 class StartService(unittest.TestCase):
     """--start: the launcher's Windows path (#164). Spawns one service detached, stops nothing."""

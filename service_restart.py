@@ -183,7 +183,12 @@ def spawn_detached(argv, cwd=None, env=None, log=None):
         kw = {"cwd": cwd, "env": env, "stdin": subprocess.DEVNULL, "stdout": out,
               "stderr": subprocess.STDOUT if log else subprocess.DEVNULL, "close_fds": True}
         if os.name == "nt":
-            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            # A hidden console of its own, not DETACHED_PROCESS: litellm.exe is a launcher stub
+            # whose python children are console programs, and a console-less parent makes Windows
+            # open a new visible terminal window for them. Closing that blank "litellm.exe" window
+            # killed LiteLLM (#164). With CREATE_NO_WINDOW the children share a console that has
+            # no window, belongs to no terminal, and so has nothing to close.
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             try:  # outlive the terminal's job object when it allows that, else start without
                 subprocess.Popen(argv, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **kw)
             except OSError:
