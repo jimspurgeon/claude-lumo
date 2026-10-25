@@ -633,5 +633,7 @@ ProcessId,CommandLine`) points at your test. Never `taskkill /IM node.exe`: on t
 machine node.exe also runs the production Lumo proxy and LiteLLM (issue #71). After
 cleanup, verify production is still up with
 `curl -s --max-time 5 http://127.0.0.1:8790/v1/health`; if a test stopped the proxy,
-restart it (`cd ~/.claude/lumo/proxy && nohup node --no-warnings proxy.mjs`) and
-report it. Hiding it is a finding.
+restart it with `python ~/.claude/lumo/service_restart.py --start proxy` (or `--start
+litellm`) and report it. Hiding it is a finding. On Windows a plain `nohup ... &` from a
+terminal or an agent's shell ties the service to that console, so it dies when that
+terminal or session closes (#164); `service_restart.py` starts it detached.
