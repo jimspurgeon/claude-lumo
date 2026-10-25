@@ -23,9 +23,9 @@ on:
         required: false
         default: 'master'
       images:
-        description: 'Comma-separated Docker images (default: ubuntu:24.04,debian:12,fedora:latest,archlinux:base)'
+        description: 'JSON array of Docker images (default: ["ubuntu:24.04","debian:12","fedora:latest"])'
         required: false
-        default: 'ubuntu:24.04,debian:12,fedora:latest'
+        default: '["ubuntu:24.04","debian:12","fedora:latest"]'
 
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ${{ fromJSON(format('["{0}"]', join(split(inputs.images || 'ubuntu:24.04,debian:12,fedora:latest', ','), '","'))) }}
+        image: ${{ fromJSON(github.event.inputs.images || '["ubuntu:24.04","debian:12","fedora:latest"]') }}
 
     name: ${{ matrix.image }}
     steps:
