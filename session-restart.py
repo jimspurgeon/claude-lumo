@@ -73,7 +73,7 @@ def is_pid_alive(pid):
         try:
             result = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
             )
             # tasklist prints an "INFO: No tasks ..." line when the pid is gone; the pid
             # appears as its own whitespace-delimited column only when the process exists.
@@ -154,12 +154,12 @@ def list_orca_terminals(orca_cmd):
     try:
         result = subprocess.run(
             [orca_cmd, "terminal", "list", "--json"],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
         )
         if result.returncode != 0:
             return []
         return json.loads(result.stdout).get("result", {}).get("terminals", [])
-    except (subprocess.TimeoutExpired, OSError, ValueError):
+    except (subprocess.TimeoutExpired, OSError, ValueError, TypeError):
         return []
 
 
@@ -177,7 +177,7 @@ def list_tmux_panes():
     try:
         result = subprocess.run(
             ["tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}"],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
         )
         if result.returncode != 0:
             return []
