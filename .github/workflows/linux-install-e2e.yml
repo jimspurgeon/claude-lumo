@@ -1,17 +1,18 @@
 # linux-install-e2e.yml: run the claude-lumo one-line install end-to-end in bare Linux
 # containers and smoke-test the installed launcher. Manual trigger only.
 #
-# What "end-to-end" means here (no browser login exists in CI):
-#   1. The real one-liner: curl -sL <raw install.sh at REF> | bash, in a fresh container
-#      with no prerequisites installed (the installer must auto-install them).
-#   2. The installer's claimed artifacts exist: clone at ~/.claude/lumo, litellm venv,
-#      master.key, claude-lumo on PATH location (~/.local/bin).
-#   3. The launcher boots: proxy health :8790 and litellm health :4000 answer, and
-#      `claude-lumo --version` execs Claude Code (both health gates pass without a
-#      lumo.proton.me login; only actual LLM calls need credentials).
+# Integrity: install.sh is NEVER executed straight off a mutable remote ref. The ref
+# (input, default master) is first resolved to a commit SHA in a checkout of this same
+# repository; the container then fetches install.sh from that immutable SHA-pinned URL,
+# sanity-checks it (non-empty, looks like claude-lumo's installer), and only then pipes
+# it into bash — reproducing the one-liner's piped execution (no SRC dir, clone path).
 #
-# REF input: which ref's install.sh to pipe. 'master' tests the production one-liner;
-# a branch name tests a patched install.sh before merge.
+# What "end-to-end" means here (no browser login exists in CI):
+#   1. Piped install in a fresh container with no prerequisites (installer auto-installs).
+#   2. Claimed artifacts exist: clone at ~/.claude/lumo, litellm venv, master.key,
+#      claude-lumo wrapper at ~/.local/bin.
+#   3. Launcher boots: `claude-lumo --version` exits 0 and proxy :8790 / litellm :4000
+#      health endpoints answer (both pass without a lumo.proton.me login).
 
 name: Linux Install E2E
 
@@ -40,39 +41,64 @@ jobs:
 
     name: ${{ matrix.image }}
     steps:
+      - name: Resolve ref to pinned SHA
+        run: |
+          git clone --quiet --filter=blob:none --no-checkout \
+            "https://github.com/${{ github.repository }}.git" /tmp/src
+          SHA="$(git -C /tmp/src rev-parse "${{ inputs.ref || 'master' }}^{commit}")"
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          echo "SAFE_IMAGE=$(echo '${{ matrix.image }}' | tr -c 'a-zA-Z0-9.-' '-')" >> "$GITHUB_ENV"
+          echo "resolved ${{ inputs.ref || 'master' }} -> $SHA"
+
       - name: Install one-liner + smoke test (single container)
         timeout-minutes: 30
+        env:
+          SHA: ${{ env.SHA }}
         run: |
+          set -euo pipefail
           IMAGE="${{ matrix.image }}"
-          REF="${{ inputs.ref || 'master' }}"
-          INSTALL_URL="https://raw.githubusercontent.com/${{ github.repository }}/$REF/install.sh"
+          INSTALL_URL="https://raw.githubusercontent.com/${{ github.repository }}/$SHA/install.sh"
           LOGDIR="$(mktemp -d)"
+          echo "LOGDIR=$LOGDIR" >> "$GITHUB_ENV"
 
-          echo "== image: $IMAGE"
-          echo "== install.sh from: $INSTALL_URL"
-
-          docker run --rm \
-            -e HOME=/root \
-            -e TERM=dumb \
-            -v "$LOGDIR:/logs" \
-            "$IMAGE" bash -c '
-          set -x
+          # Inner script runs INSIDE the container; env passes the pinned URL in.
+          INNER="$LOGDIR/inner.sh"
+          cat > "$INNER" <<'EOS'
+          set -uo pipefail
           FAIL=0
+          INSTALL_URL="${INSTALL_URL:?}"
 
           echo "=== before: what the fresh image has ==="
           for c in git node npm python python3 curl claude sudo; do
             command -v "$c" >/dev/null 2>&1 && echo "have: $c" || echo "MISSING: $c"
           done
 
-          echo "=== run the one-liner ==="
-          # The real thing, unmodified.
-          if ! curl -sL "'"$INSTALL_URL"'" | bash >/logs/install.log 2>&1; then
-            echo "ONE-LINER FAILED (exit $?): full log follows"
+          echo "=== fetch install.sh (pinned SHA) ==="
+          if ! command -v curl >/dev/null 2>&1; then
+            echo "NOTE: image ships no curl; bootstrapping it as the package manager allows."
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update -qq && apt-get install -y -qq curl ca-certificates
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y -q curl ca-certificates
+            elif command -v apk >/dev/null 2>&1; then
+              apk add -q curl ca-certificates
+            else
+              echo "FAIL: no curl and no known package manager"; exit 1
+            fi
+          fi
+          curl -fsSL --retry 3 "$INSTALL_URL" -o /logs/install.sh
+          # Sanity checks before anything executes.
+          [ -s /logs/install.sh ] || { echo "FAIL: fetched install.sh is empty"; exit 1; }
+          grep -q "claude-lumo" /logs/install.sh || { echo "FAIL: fetched script is not claude-lumo's installer"; exit 1; }
+
+          echo "=== piped install (one-liner semantics) ==="
+          if ! cat /logs/install.sh | bash > /logs/install.log 2>&1; then
+            echo "ONE-LINER FAILED: full log follows"
             cat /logs/install.log
             exit 1
           fi
-          echo "--- install.log (filtered) ---"
-          grep -vE "^$" /logs/install.log | tail -40
+          echo "--- install.log tail ---"
+          tail -30 /logs/install.log
 
           echo "=== artifacts ==="
           [ -d "$HOME/.claude/lumo/.git" ] && echo "OK: clone at ~/.claude/lumo" || { echo "FAIL: no clone at ~/.claude/lumo"; FAIL=1; }
@@ -81,14 +107,11 @@ jobs:
           [ -s "$HOME/.claude-lumo/master.key" ] && echo "OK: master.key" || { echo "FAIL: no master.key"; FAIL=1; }
 
           echo "=== launcher smoke test: claude-lumo --version ==="
-          # ~/.local/bin is the documented PATH location; use it explicitly.
           export PATH="$HOME/.local/bin:$PATH"
           timeout 120 "$HOME/.local/bin/claude-lumo" --version > /logs/version.log 2>&1
           RC=$?
           echo "exit code: $RC"
           cat /logs/version.log || true
-          # --version goes through the full launcher: health checks, proxy + litellm boot.
-          # Without a browser login the run itself still must succeed.
           [ $RC -eq 0 ] || { echo "FAIL: claude-lumo --version exited $RC"; FAIL=1; }
 
           echo "=== health endpoints (started by the launcher run above) ==="
@@ -96,12 +119,21 @@ jobs:
           curl -s --max-time 5 http://127.0.0.1:4000/health/liveliness && echo "" || { echo "FAIL: litellm :4000 not healthy"; FAIL=1; }
 
           exit $FAIL
-          '
+          EOS
+
+          docker run --rm \
+            -e HOME=/root \
+            -e TERM=dumb \
+            -e INSTALL_URL="$INSTALL_URL" \
+            -v "$LOGDIR:/logs" \
+            "$IMAGE" bash /logs/inner.sh
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ matrix.image }}
-          path: /tmp/tmp.*/install.log
+          name: logs-${{ env.SAFE_IMAGE }}
+          path: |
+            ${{ env.LOGDIR }}/install.log
+            ${{ env.LOGDIR }}/version.log
           if-no-files-found: ignore
