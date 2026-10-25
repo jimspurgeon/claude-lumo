@@ -39,6 +39,74 @@ case "$OS" in
 esac
 
 mkdir -p "$S" "$BIN"
+# Put our own bin dir on PATH for the rest of this script: the Claude Code installer drops
+# its binary in ~/.local/bin on Linux, and without this the check right after it would
+# report "still not on PATH" for an install that actually worked.
+case ":$PATH:" in *":$BIN:"*) ;; *) PATH="$BIN:$PATH"; export PATH;; esac
+
+# === Linux helper functions =============================================================
+# Many Linux environments the one-liner is piped into differ from the Ubuntu-with-sudo
+# desktop the original auto-install assumed: bare containers and distrobox shells run as
+# root with no sudo binary; Fedora/Bazzite-family systems have dnf, not apt. So the
+# prerequisite steps below go through these three helpers instead of `sudo apt-get`.
+# as_root CMD ARGS: run as root — directly when we already are root, else sudo, else su.
+# Package-manager invocations are always run with stdin closed and (on the deb family)
+# DEBIAN_FRONTEND=noninteractive: this script's own stdin is the install script itself
+# when piped (`curl ... | bash`), and apt/debconf will happily read and discard it as
+# prompt input, silently truncating the script mid-run ("half an install, exit 0").
+as_root() {
+  local run
+  if [ "$(id -u)" = "0" ]; then run=("$@")
+  elif command -v sudo >/dev/null 2>&1; then run=(sudo "$@")
+  else run=(su -c "$*"); fi
+  DEBIAN_FRONTEND=noninteractive "${run[@]}" </dev/null
+}
+# PM: the first package manager found on PATH ("" when none).
+PM=""
+if [ "$OS" = "linux" ]; then
+  for _pm in apt-get dnf yum pacman zypper apk; do
+    command -v "$_pm" >/dev/null 2>&1 && { PM="$_pm"; break; }
+  done
+fi
+# pkg_install GROUP...: install a named group of packages with the distro family's own
+# names for it. Falls back to false so callers can print their Manual: hint.
+pkg_install() {
+  for _group in "$@"; do
+    case "$PM:$_group" in
+      apt-get:tools)  as_root apt-get update -qq && as_root apt-get install -y git ca-certificates;;
+      dnf:tools|yum:tools) as_root "$PM" install -y git;;
+      pacman:tools)  as_root pacman -Sy --noconfirm --needed git;;
+      zypper:tools)  as_root zypper -n install git;;
+      apk:tools)     as_root apk add git;;
+      apt-get:python) as_root apt-get update -qq && as_root apt-get install -y python3 python3-venv python3-pip;;
+      dnf:python|yum:python) as_root "$PM" install -y python3 python3-pip;;
+      pacman:python) as_root pacman -Sy --noconfirm --needed python;;
+      zypper:python) as_root zypper -n install python3 python3-pip;;
+      apk:python)    as_root apk add python3 py3-pip;;
+      *) return 1;;
+    esac || return 1
+  done
+}
+# node_install_linux: install Node 22 via the distro (arch/zypper ship a current one) or
+# NodeSource (deb/rpm families), so `apt-only` never blocks Fedora-family systems. The
+# setup script is downloaded to a file first: piping it into `sudo -E bash -` breaks when
+# as_root is a no-op passthrough (root containers), where `-E` would become the command.
+node_install_linux() {
+  local ns_setup rc=1
+  ns_setup="$(mktemp)"
+  case "$PM" in
+    apt-get) curl -fsSL https://deb.nodesource.com/setup_22.x -o "$ns_setup" && as_root bash "$ns_setup" \
+               && as_root apt-get install -y nodejs && rc=0;;
+    dnf|yum) curl -fsSL https://rpm.nodesource.com/setup_22.x -o "$ns_setup" && as_root bash "$ns_setup" \
+               && as_root "$PM" install -y nodejs && rc=0;;
+    pacman)  as_root pacman -Sy --noconfirm --needed nodejs && rc=0;;
+    zypper) as_root zypper -n install nodejs20 || as_root zypper -n install nodejs; rc=$?;;
+    *)       ;;
+  esac
+  rm -f "$ns_setup"
+  return "$rc"
+}
+# =========================================================================================
 
 # === Prerequisites checks with auto-install ===
 echo "Checking prerequisites..."
@@ -49,7 +117,7 @@ if ! command -v git >/dev/null 2>&1; then
   case "$OS" in
     windows) winget install --accept-source-agreements --accept-package-agreements Git.Git || { echo "Manual: download https://git-scm.com"; exit 1; };;
     macos)   xcode-select --install 2>/dev/null || brew install git || { echo "Manual: https://git-scm.com"; exit 1; };;
-    linux)   sudo apt-get update -qq && sudo apt-get install -y git || { echo "Manual: https://git-scm.com"; exit 1; };;
+    linux)   pkg_install tools || { echo "Manual: https://git-scm.com"; exit 1; };;
   esac
 fi
 
@@ -64,7 +132,7 @@ if [ "$NODE_OK" = "0" ]; then
   case "$OS" in
     windows) winget install --accept-source-agreements --accept-package-agreements OpenJS.NodeJS.LTS || { echo "Manual: https://nodejs.org"; exit 1; };;
     macos)   brew install node || { echo "Manual: https://nodejs.org"; exit 1; };;
-    linux)   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs || { echo "Manual: https://nodejs.org"; exit 1; };;
+    linux)   node_install_linux || { echo "Manual: https://nodejs.org"; exit 1; };;
   esac
   hash -r 2>/dev/null || true
 fi
@@ -88,9 +156,26 @@ if ! command -v "$PY" >/dev/null 2>&1; then
   case "$OS" in
     windows) winget install --accept-source-agreements --accept-package-agreements Python.Python.3.12 || { echo "Manual: https://python.org (tick 'Add to PATH')"; exit 1; };;
     macos)   brew install python@3.12 || { echo "Manual: https://python.org"; exit 1; };;
-    linux)   sudo apt-get update -qq && sudo apt-get install -y python3 python3-venv python3-pip || { echo "Manual: https://python.org"; exit 1; };;
+    linux)   pkg_install python || { echo "Manual: https://python.org"; exit 1; };;
   esac
   command -v python >/dev/null 2>&1 || PY="python3"
+fi
+# Version gate, not just existence: distros still ship 3.11 or older (Debian 12) while the
+# hash-locked requirements (e.g. numpy 2.5.4) need >=3.12. Failing here with a clear message
+# beats dying inside pip's resolver six steps later with a wall of version tables.
+if command -v "$PY" >/dev/null 2>&1; then
+  PYVER="$("$PY" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo 0)"
+  PYMAJ="${PYVER%%.*}"; PYMIN="${PYVER#*.}"
+  case "$PYMAJ" in ''|*[!0-9]*) PYMAJ=0;; esac
+  case "$PYMIN" in ''|*[!0-9]*) PYMIN=0;; esac
+  if [ "$PYMAJ" -lt 3 ] || { [ "$PYMAJ" -eq 3 ] && [ "$PYMIN" -lt 12 ]; }; then
+    echo "ERROR: Python $PYVER found, but claude-lumo needs Python 3.12+ (the hash-locked" >&2
+    echo "requirements need it; e.g. Debian 12's python3 is 3.11). Install Python 3.12+ and" >&2
+    echo "re-run, or use a newer base image. On immutable/atomic distros (Bazzite, Silverblue)" >&2
+    echo "a distrobox container with python3.12+ is the intended path:" >&2
+    echo "  distrobox create -n lumo -i debian:13   # then: distrobox enter lumo" >&2
+    exit 1
+  fi
 fi
 
 # Claude Code — install from latest if missing
@@ -153,17 +238,31 @@ fi
 
 # A folder that arrived as a zip (saved on Windows, or one of the v1.0/v1.1 release zips)
 # can carry CRLF line endings, which break the shebang on Linux/macOS. Strip CRs from
-# every shell script we just installed so `bash\r` never happens again.
+# every shell script we just installed so `bash\r` never happens again. (The check is
+# done with grep, not cmp: minimal Fedora images ship no diffutils, and a failing cmp
+# would invert the test and rewrite every file.)
 for f in "$D"/*.sh "$D"/scripts/*.sh; do
   [ -f "$f" ] || continue
-  if ! tr -d "\r" < "$f" | cmp -s - "$f"; then
+  if grep -q $'\r' "$f" 2>/dev/null; then
     tr -d "\r" < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     echo "Fixed line endings: $f"
   fi
 done
 
 if [ ! -x "$LITELLM" ]; then
-  "$PY" -m venv "$VENV"
+  # Debian/Ubuntu split venv support into a separate python3-venv package, so a system
+  # python3 can pass the prerequisite check yet fail here ("ensurepip is not available").
+  # Retry once after installing the distro's venv package instead of dying on the spot.
+  "$PY" -m venv "$VENV" || {
+    echo "venv creation failed (often a missing python3-venv / ensurepip); trying once more after"
+    echo "installing the distro's venv packages..."
+    case "$PM" in
+      apt-get) as_root apt-get update -qq && as_root apt-get install -y python3-venv python3-full;;
+      dnf|yum) as_root "$PM" install -y python3-pip;;   # pulls in the venv machinery
+      *) :;;
+    esac
+    "$PY" -m venv "$VENV"
+  }
   # --require-hashes: every pin in requirements.txt carries a sha256 (#135), so pip refuses
   # any artifact whose hash does not match — no floating transitive dependencies.
   # Deploy-order hazard (#147): the script being piped from master can be newer than the
