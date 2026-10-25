@@ -94,5 +94,61 @@ class RestartSessions(unittest.TestCase):
         self.assertEqual([(c[1], c[2]) for c in calls], [("bbbbbbbb2", "w")])
 
 
+class ListOrcaTerminals(unittest.TestCase):
+    """Encoding handling for the orca CLI call (#167).
+
+    orca emits UTF-8. On Windows, subprocess.run(text=True) with no encoding decodes
+    with the ANSI code page (cp1252), which has no mapping for byte 0x90; the decode
+    error fires in subprocess's reader thread, stdout comes back None, and
+    json.loads(None) raised TypeError out of a function that only caught
+    (TimeoutExpired, OSError, ValueError). The whole session-restart script died.
+    """
+
+    # Valid UTF-8 JSON whose bytes cannot be decoded as cp1252: U+0090 encodes to
+    # C2 90, and 0x90 is undefined in cp1252. Real orca output contains such bytes
+    # whenever a worktree path has non-ASCII characters.
+    PAYLOAD = (b'{"result":{"terminals":[{"handle": "t1", "worktreePath": "C:/Users/Jim/'
+               + "path-\u00e9-\u0090-chars".encode("utf-8")
+               + b'"}]}}\n')
+
+    def fake_run(self, seen):
+        """Stand-in for subprocess.run that records the kwargs it was called with."""
+        def run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen.update(kwargs)
+            class R:
+                returncode = 0
+                stdout = self.PAYLOAD.decode(kwargs.get("encoding") or "utf-8",
+                                             kwargs.get("errors") or "strict")
+            return R()
+        return run
+
+    def test_payload_really_breaks_the_windows_default(self):
+        # Guard the guard: if this payload decoded as cp1252, the regression test
+        # below would pass even with the bug present.
+        with self.assertRaises(UnicodeDecodeError):
+            self.PAYLOAD.decode("cp1252")
+
+    def test_explicit_utf8_encoding_is_passed(self):
+        seen = {}
+        with mock.patch.object(session_restart.subprocess, "run", self.fake_run(seen)):
+            terminals = session_restart.list_orca_terminals("orca")
+        self.assertEqual(seen.get("encoding"), "utf-8")
+        self.assertEqual(seen.get("errors"), "replace")
+        self.assertEqual(terminals[0]["handle"], "t1")
+        self.assertEqual(seen["cmd"], ["orca", "terminal", "list", "--json"])
+
+    def test_none_stdout_returns_empty_list(self):
+        # Belt-and-braces: even if stdout is None (a decode failure in a reader
+        # thread our fix does not control), json.loads(None) raising TypeError must
+        # surface as [] instead of crashing the whole script.
+        class R:
+            returncode = 0
+            stdout = None
+        with mock.patch.object(session_restart.subprocess, "run",
+                               lambda cmd, **kw: R()):
+            self.assertEqual(session_restart.list_orca_terminals("orca"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
