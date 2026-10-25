@@ -40,6 +40,59 @@ esac
 
 mkdir -p "$S" "$BIN"
 
+# === Linux helper functions =============================================================
+# Many Linux environments the one-liner is piped into differ from the Ubuntu-with-sudo
+# desktop the original auto-install assumed: bare containers and distrobox shells run as
+# root with no sudo binary; Fedora/Bazzite-family systems have dnf, not apt. So the
+# prerequisite steps below go through these three helpers instead of `sudo apt-get`.
+# as_root CMD ARGS: run as root — directly when we already are root, else sudo, else su.
+as_root() {
+  if [ "$(id -u)" = "0" ]; then "$@"
+  elif command -v sudo >/dev/null 2>&1; then sudo "$@"
+  else su -c "$*"
+  fi
+}
+# PM: the first package manager found on PATH ("" when none).
+PM=""
+if [ "$OS" = "linux" ]; then
+  for _pm in apt-get dnf yum pacman zypper apk; do
+    command -v "$_pm" >/dev/null 2>&1 && { PM="$_pm"; break; }
+  done
+fi
+# pkg_install GROUP...: install a named group of packages with the distro family's own
+# names for it. Falls back to false so callers can print their Manual: hint.
+pkg_install() {
+  for _group in "$@"; do
+    case "$PM:$_group" in
+      apt-get:tools)  as_root apt-get update -qq && as_root apt-get install -y git ca-certificates;;
+      dnf:tools|yum:tools) as_root "$PM" install -y git;;
+      pacman:tools)  as_root pacman -Sy --noconfirm --needed git;;
+      zypper:tools)  as_root zypper -n install git;;
+      apk:tools)     as_root apk add git;;
+      apt-get:python) as_root apt-get update -qq && as_root apt-get install -y python3 python3-venv python3-pip;;
+      dnf:python|yum:python) as_root "$PM" install -y python3 python3-pip;;
+      pacman:python) as_root pacman -Sy --noconfirm --needed python;;
+      zypper:python) as_root zypper -n install python3 python3-pip;;
+      apk:python)    as_root apk add python3 py3-pip;;
+      *) return 1;;
+    esac || return 1
+  done
+}
+# node_install_linux: install Node 22 via the distro (arch/zypper ship a current one) or
+# NodeSource (deb/rpm families), so `apt-only` never blocks Fedora-family systems.
+node_install_linux() {
+  case "$PM" in
+    apt-get) curl -fsSL https://deb.nodesource.com/setup_22.x | as_root -E bash - \
+               && as_root apt-get install -y nodejs;;
+    dnf|yum) curl -fsSL https://rpm.nodesource.com/setup_22.x | as_root bash - \
+               && as_root "$PM" install -y nodejs;;
+    pacman)  as_root pacman -Sy --noconfirm --needed nodejs;;
+    zypper)  as_root zypper -n install nodejs20 || as_root zypper -n install nodejs;;
+    *)       return 1;;
+  esac
+}
+# =========================================================================================
+
 # === Prerequisites checks with auto-install ===
 echo "Checking prerequisites..."
 
@@ -49,7 +102,7 @@ if ! command -v git >/dev/null 2>&1; then
   case "$OS" in
     windows) winget install --accept-source-agreements --accept-package-agreements Git.Git || { echo "Manual: download https://git-scm.com"; exit 1; };;
     macos)   xcode-select --install 2>/dev/null || brew install git || { echo "Manual: https://git-scm.com"; exit 1; };;
-    linux)   sudo apt-get update -qq && sudo apt-get install -y git || { echo "Manual: https://git-scm.com"; exit 1; };;
+    linux)   pkg_install tools || { echo "Manual: https://git-scm.com"; exit 1; };;
   esac
 fi
 
@@ -64,7 +117,7 @@ if [ "$NODE_OK" = "0" ]; then
   case "$OS" in
     windows) winget install --accept-source-agreements --accept-package-agreements OpenJS.NodeJS.LTS || { echo "Manual: https://nodejs.org"; exit 1; };;
     macos)   brew install node || { echo "Manual: https://nodejs.org"; exit 1; };;
-    linux)   curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs || { echo "Manual: https://nodejs.org"; exit 1; };;
+    linux)   node_install_linux || { echo "Manual: https://nodejs.org"; exit 1; };;
   esac
   hash -r 2>/dev/null || true
 fi
@@ -88,7 +141,7 @@ if ! command -v "$PY" >/dev/null 2>&1; then
   case "$OS" in
     windows) winget install --accept-source-agreements --accept-package-agreements Python.Python.3.12 || { echo "Manual: https://python.org (tick 'Add to PATH')"; exit 1; };;
     macos)   brew install python@3.12 || { echo "Manual: https://python.org"; exit 1; };;
-    linux)   sudo apt-get update -qq && sudo apt-get install -y python3 python3-venv python3-pip || { echo "Manual: https://python.org"; exit 1; };;
+    linux)   pkg_install python || { echo "Manual: https://python.org"; exit 1; };;
   esac
   command -v python >/dev/null 2>&1 || PY="python3"
 fi
@@ -163,7 +216,19 @@ for f in "$D"/*.sh "$D"/scripts/*.sh; do
 done
 
 if [ ! -x "$LITELLM" ]; then
-  "$PY" -m venv "$VENV"
+  # Debian/Ubuntu split venv support into a separate python3-venv package, so a system
+  # python3 can pass the prerequisite check yet fail here ("ensurepip is not available").
+  # Retry once after installing the distro's venv package instead of dying on the spot.
+  "$PY" -m venv "$VENV" || {
+    echo "venv creation failed (often a missing python3-venv / ensurepip); trying once more after"
+    echo "installing the distro's venv packages..."
+    case "$PM" in
+      apt-get) as_root apt-get update -qq && as_root apt-get install -y python3-venv python3-full;;
+      dnf|yum) as_root "$PM" install -y python3-pip;;   # pulls in the venv machinery
+      *) :;;
+    esac
+    "$PY" -m venv "$VENV"
+  }
   # --require-hashes: every pin in requirements.txt carries a sha256 (#135), so pip refuses
   # any artifact whose hash does not match — no floating transitive dependencies.
   # Deploy-order hazard (#147): the script being piped from master can be newer than the
