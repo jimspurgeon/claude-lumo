@@ -27,6 +27,10 @@ on:
         description: 'JSON array of Docker images (default: ["ubuntu:24.04","debian:12","fedora:latest"])'
         required: false
         default: '["ubuntu:24.04","debian:12","fedora:latest"]'
+      preseed:
+        description: 'Pre-seed ~/.claude/lumo at the pinned SHA ("true") or test the pure one-liner, which installs the newest release tag ("false")'
+        required: false
+        default: 'true'
 
 permissions:
   contents: read
@@ -59,6 +63,7 @@ jobs:
         timeout-minutes: 30
         env:
           SHA: ${{ env.SHA }}
+          PRESEED: ${{ inputs.preseed || 'true' }}
         run: |
           set -euo pipefail
           IMAGE="${{ matrix.image }}"
@@ -66,17 +71,45 @@ jobs:
           LOGDIR="$(mktemp -d)"
           echo "LOGDIR=$LOGDIR" >> "$GITHUB_ENV"
 
+          # preseed=true: seed a clone of the pinned SHA on the runner (fresh containers
+          # have no git yet) and hand it to the container, so the installer exercises
+          # the CLAUDE_LUMO_KEEP_CHECKOUT path (#100) and requirements.txt from the tested
+          # SHA is what pip actually sees. Without this the piped installer clones and
+          # checks out the newest v* tag, which on a feature branch is older than the
+          # install.sh being tested (the #147 deploy-order hazard) and would mask fixes
+          # to any repo file other than install.sh.
+          if [ "${PRESEED}" = "true" ]; then
+            git clone --quiet --filter=blob:none --no-checkout \
+              "https://github.com/${{ github.repository }}.git" "$LOGDIR/seed-src"
+            git -C "$LOGDIR/seed-src" fetch --quiet --depth=1 origin "$SHA"
+            git -C "$LOGDIR/seed-src" checkout --quiet FETCH_HEAD
+          fi
+
           # Inner script runs INSIDE the container; env passes the pinned URL in.
           INNER="$LOGDIR/inner.sh"
           cat > "$INNER" <<'EOS'
           set -uo pipefail
           FAIL=0
           INSTALL_URL="${INSTALL_URL:?}"
+          PRESEED="${PRESEED:-true}"
 
           echo "=== before: what the fresh image has ==="
           for c in git node npm python python3 curl claude sudo; do
             command -v "$c" >/dev/null 2>&1 && echo "have: $c" || echo "MISSING: $c"
           done
+
+          # preseed=true: the seeded clone (built on the runner, which has git) sits at
+          # /logs/seed-src inside this container. Move it into place as ~/.claude/lumo and
+          # set CLAUDE_LUMO_KEEP_CHECKOUT=1 (#100), the state after a real deploy: the
+          # installer keeps that checkout, so requirements.txt from the tested SHA is
+          # what pip actually sees. No git needed here; the clone comes with its .git.
+          if [ "$PRESEED" = "true" ]; then
+            [ -d /logs/seed-src/.git ] || { echo "FAIL: /logs/seed-src missing"; exit 1; }
+            mkdir -p "$HOME/.claude"
+            mv /logs/seed-src "$HOME/.claude/lumo"
+            export CLAUDE_LUMO_KEEP_CHECKOUT=1
+            echo "pre-seeded ~/.claude/lumo at the pinned SHA"
+          fi
 
           echo "=== fetch install.sh (pinned SHA) ==="
           if ! command -v curl >/dev/null 2>&1; then
@@ -130,6 +163,7 @@ jobs:
             -e HOME=/root \
             -e TERM=dumb \
             -e INSTALL_URL="$INSTALL_URL" \
+            -e PRESEED="${PRESEED}" \
             -v "$LOGDIR:/logs" \
             "$IMAGE" bash /logs/inner.sh
 

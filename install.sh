@@ -79,17 +79,23 @@ pkg_install() {
   done
 }
 # node_install_linux: install Node 22 via the distro (arch/zypper ship a current one) or
-# NodeSource (deb/rpm families), so `apt-only` never blocks Fedora-family systems.
+# NodeSource (deb/rpm families), so `apt-only` never blocks Fedora-family systems. The
+# setup script is downloaded to a file first: piping it into `sudo -E bash -` breaks when
+# as_root is a no-op passthrough (root containers), where `-E` would become the command.
 node_install_linux() {
+  local ns_setup rc=1
+  ns_setup="$(mktemp)"
   case "$PM" in
-    apt-get) curl -fsSL https://deb.nodesource.com/setup_22.x | as_root -E bash - \
-               && as_root apt-get install -y nodejs;;
-    dnf|yum) curl -fsSL https://rpm.nodesource.com/setup_22.x | as_root bash - \
-               && as_root "$PM" install -y nodejs;;
-    pacman)  as_root pacman -Sy --noconfirm --needed nodejs;;
-    zypper)  as_root zypper -n install nodejs20 || as_root zypper -n install nodejs;;
-    *)       return 1;;
+    apt-get) curl -fsSL https://deb.nodesource.com/setup_22.x -o "$ns_setup" && as_root bash "$ns_setup" \
+               && as_root apt-get install -y nodejs && rc=0;;
+    dnf|yum) curl -fsSL https://rpm.nodesource.com/setup_22.x -o "$ns_setup" && as_root bash "$ns_setup" \
+               && as_root "$PM" install -y nodejs && rc=0;;
+    pacman)  as_root pacman -Sy --noconfirm --needed nodejs && rc=0;;
+    zypper) as_root zypper -n install nodejs20 || as_root zypper -n install nodejs; rc=$?;;
+    *)       ;;
   esac
+  rm -f "$ns_setup"
+  return "$rc"
 }
 # =========================================================================================
 
@@ -206,10 +212,12 @@ fi
 
 # A folder that arrived as a zip (saved on Windows, or one of the v1.0/v1.1 release zips)
 # can carry CRLF line endings, which break the shebang on Linux/macOS. Strip CRs from
-# every shell script we just installed so `bash\r` never happens again.
+# every shell script we just installed so `bash\r` never happens again. (The check is
+# done with grep, not cmp: minimal Fedora images ship no diffutils, and a failing cmp
+# would invert the test and rewrite every file.)
 for f in "$D"/*.sh "$D"/scripts/*.sh; do
   [ -f "$f" ] || continue
-  if ! tr -d "\r" < "$f" | cmp -s - "$f"; then
+  if grep -q $'\r' "$f" 2>/dev/null; then
     tr -d "\r" < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     echo "Fixed line endings: $f"
   fi
