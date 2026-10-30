@@ -381,6 +381,40 @@ class SpawnDetached(unittest.TestCase):
             self.assertIn("hwnd 0", text)
             time.sleep(0.5)
 
+    def test_append_mode_preserves_crash_evidence(self):
+        """spawn_detached opens the log in append mode, not truncate (#173)."""
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "child.log")
+            # Write initial content
+            with open(log, "w") as f:
+                f.write("first run\n")
+            # Run once more
+            sr.spawn_detached([sys.executable, "-c", "print('second run')"], cwd=d, log=log)
+            deadline = time.monotonic() + 20
+            text = ""
+            while time.monotonic() < deadline and "second run" not in text:
+                time.sleep(0.1)
+                with open(log, encoding="utf-8") as f:
+                    text = f.read()
+            self.assertIn("second run", text)
+            self.assertIn("first run", text)
+            # The child still holds the log open until it exits; wait so the temp dir can be
+            # removed on Windows.
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    with open(log, "a"):
+                        pass
+                    try:
+                        os.remove(log)
+                    except PermissionError:
+                        time.sleep(0.1)
+                        continue
+                    break
+                except PermissionError:
+                    time.sleep(0.1)
+
 
 class StartService(unittest.TestCase):
     """--start: the launcher's Windows path (#164). Spawns one service detached, stops nothing."""
@@ -433,6 +467,72 @@ class StartService(unittest.TestCase):
             self.assertEqual(sr.main(["--install-dir", self.install, "--start", "litellm"]), 0)
         start.assert_called_once_with("litellm", install=self.install)
         restart.assert_not_called()
+
+    def test_start_rotates_an_oversized_litellm_log(self):
+        """#173: --start litellm rotates before spawning, so a relaunch appends to a bounded
+        log instead of one already past the cap."""
+        log = os.path.join(self.state, "litellm.log")
+        with open(log, "wb") as f:
+            f.truncate(sr.MAX_LOG_BYTES + 1)  # sparse: over the cap, instantly
+        with open(log + ".1", "wb") as f:
+            f.write(b"old")
+        self.assertTrue(self.start("litellm"))
+        self.assertFalse(os.path.exists(log), "the oversized log must be renamed away")
+        with open(log + ".1", "rb") as f:
+            self.assertEqual(f.read(), b"\0" * (sr.MAX_LOG_BYTES + 1))  # one generation
+
+    def test_start_leaves_a_small_litellm_log_alone(self):
+        log = os.path.join(self.state, "litellm.log")
+        with open(log, "wb") as f:
+            f.write(b"small")
+        self.assertTrue(self.start("litellm"))
+        with open(log, "rb") as f:
+            self.assertEqual(f.read(), b"small")
+
+
+class SpawnWatchdog(unittest.TestCase):
+    """--spawn-watchdog: the launcher's Windows path. Under `nohup ... &` the watchdog dies
+    with the terminal that launched it (#164), so it is spawned detached like the services."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = self.tmp.name
+        self.install = os.path.join(self.tmp.name, "lumo")
+        os.makedirs(os.path.join(self.install, "proxy"))
+        open(os.path.join(self.install, "proxy", "proxy.mjs"), "w").close()
+        self.out = []
+
+    def spawn(self, argv, cwd=None, env=None, log=None):
+        self.call = (tuple(argv), cwd, env)
+
+    def watchdog_installed(self):
+        os.makedirs(os.path.join(self.install, "scripts"), exist_ok=True)
+        open(os.path.join(self.install, "scripts", "watchdog.sh"), "w").close()
+
+    def test_spawns_the_script_with_the_state_dir(self):
+        self.watchdog_installed()
+        self.assertTrue(sr.spawn_watchdog(self.install, self.state, spawn=self.spawn))
+        argv, cwd, env = self.call
+        self.assertEqual(argv[1], os.path.join(self.install, "scripts", "watchdog.sh"))
+        self.assertEqual(cwd, self.install)
+        self.assertEqual(env["CLAUDE_LUMO_STATE_DIR"], self.state)
+
+    def test_missing_script_starts_nothing(self):
+        self.assertFalse(sr.spawn_watchdog(self.install, self.state, spawn=self.spawn))
+
+    def test_spawn_failure_is_false(self):
+        self.watchdog_installed()
+
+        def boom(*a, **k):
+            raise FileNotFoundError("bash")
+        self.assertFalse(sr.spawn_watchdog(self.install, self.state, spawn=boom))
+
+    def test_main_flag_calls_spawn_watchdog(self):
+        self.watchdog_installed()
+        with mock.patch.object(sr, "spawn_watchdog", return_value=True) as sp:
+            self.assertEqual(sr.main(["--install-dir", self.install, "--spawn-watchdog"]), 0)
+        sp.assert_called_once_with(self.install)
 
 
 class SessionOrder(unittest.TestCase):
