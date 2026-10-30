@@ -183,7 +183,12 @@ def spawn_detached(argv, cwd=None, env=None, log=None):
         kw = {"cwd": cwd, "env": env, "stdin": subprocess.DEVNULL, "stdout": out,
               "stderr": subprocess.STDOUT if log else subprocess.DEVNULL, "close_fds": True}
         if os.name == "nt":
-            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            # A hidden console of its own, not DETACHED_PROCESS: litellm.exe is a launcher stub
+            # whose python children are console programs, and a console-less parent makes Windows
+            # open a new visible terminal window for them. Closing that blank "litellm.exe" window
+            # killed LiteLLM (#164). With CREATE_NO_WINDOW the children share a console that has
+            # no window, belongs to no terminal, and so has nothing to close.
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             try:  # outlive the terminal's job object when it allows that, else start without
                 subprocess.Popen(argv, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **kw)
             except OSError:
@@ -313,15 +318,48 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
     return all_ok
 
 
+START_NAMES = {"proxy": PROXY_PORT, "litellm": LITELLM_PORT}
+
+
+def start_service(which, install=None, state=None, plat=None, spawn=spawn_detached, out=print):
+    """Start one service ("proxy" or "litellm") detached, without stopping or checking anything.
+
+    claude-lumo.sh calls this on Windows after a failed health check (#164). Its own `nohup ... &`
+    leaves the service attached to the terminal's console, so closing that terminal (an Orca tab,
+    a Windows Terminal window) ends the proxy and LiteLLM for every session at once. A detached
+    child has no console to lose. True when the process was started."""
+    install, state, plat = install or install_dir(), state or state_dir(), plat or platform_name()
+    svc = next(s for s in services(install, state, plat) if s["port"] == START_NAMES[which])
+    env = None
+    if svc["key_file"]:
+        try:
+            with open(svc["key_file"], encoding="utf-8") as f:
+                key = f.read().strip()
+        except OSError:
+            out(f"claude-lumo: could not read {svc['key_file']}, so {svc['name']} was not started")
+            return False
+        env = dict(os.environ, LITELLM_MASTER_KEY=key, PYTHONIOENCODING="utf-8")
+    try:
+        spawn(svc["argv"], cwd=svc["cwd"], env=env, log=svc["log"])
+    except OSError as e:
+        out(f"claude-lumo: could not start {svc['name']} ({e})")
+        return False
+    return True
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Restart the Lumo proxy and LiteLLM.")
     parser.add_argument("--dry-run", action="store_true", help="print the plan and change nothing")
     parser.add_argument("--install-dir", help="the claude-lumo install (default: ~/.claude/lumo)")
+    parser.add_argument("--start", choices=sorted(START_NAMES),
+                        help="only start this service, detached (the launcher's path on Windows)")
     args = parser.parse_args(argv)
     install = args.install_dir or install_dir()
     if not os.path.isfile(os.path.join(install, "proxy", "proxy.mjs")):
         print(f"No claude-lumo install at {install} (no proxy/proxy.mjs); pass --install-dir.")
         return 1
+    if args.start:
+        return 0 if start_service(args.start, install=install) else 1
     print("Restarting the proxy and LiteLLM:" if not args.dry_run else "Plan for the proxy and LiteLLM:")
     return 0 if restart_services(install=install, dry_run=args.dry_run) or args.dry_run else 1
 

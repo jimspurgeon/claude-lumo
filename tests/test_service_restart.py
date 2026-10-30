@@ -349,6 +349,91 @@ class SpawnDetached(unittest.TestCase):
             self.assertIn("ok-119", text)
             time.sleep(0.5)  # let the child exit so the temp dir can be removed on Windows
 
+    @unittest.skipUnless(os.name == "nt", "Windows console flags")
+    def test_windows_child_gets_a_hidden_console_not_none(self):
+        """#164: DETACHED_PROCESS left litellm.exe console-less, so its python children opened a
+        visible terminal window, and closing it killed LiteLLM. The flags must give a hidden
+        console instead, and still leave the caller's process group and job."""
+        import subprocess
+        with mock.patch.object(subprocess, "Popen") as popen:
+            sr.spawn_detached(["x"])
+        flags = popen.call_args.kwargs["creationflags"]
+        self.assertTrue(flags & subprocess.CREATE_NO_WINDOW)
+        self.assertFalse(flags & subprocess.DETACHED_PROCESS)
+        self.assertTrue(flags & subprocess.CREATE_NEW_PROCESS_GROUP)
+        self.assertTrue(flags & subprocess.CREATE_BREAKAWAY_FROM_JOB)
+
+    @unittest.skipUnless(os.name == "nt", "Windows console flags")
+    def test_windows_grandchild_shares_the_windowless_console(self):
+        """The real spawner: a child that starts a console grandchild (as litellm.exe does) must
+        not make Windows open a window for it."""
+        import time
+        grandchild = "import ctypes; print('hwnd', ctypes.windll.kernel32.GetConsoleWindow())"
+        child = ("import subprocess, sys; subprocess.run([sys.executable, '-c', %r])" % grandchild)
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "child.log")
+            sr.spawn_detached([sys.executable, "-c", child], cwd=d, log=log)
+            deadline, text = time.monotonic() + 20, ""
+            while time.monotonic() < deadline and "hwnd" not in text:
+                time.sleep(0.1)
+                with open(log, encoding="utf-8") as f:
+                    text = f.read()
+            self.assertIn("hwnd 0", text)
+            time.sleep(0.5)
+
+
+class StartService(unittest.TestCase):
+    """--start: the launcher's Windows path (#164). Spawns one service detached, stops nothing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = self.tmp.name
+        with open(os.path.join(self.state, "master.key"), "w", encoding="utf-8") as f:
+            f.write("sk-test\n")
+        self.install = os.path.join(self.tmp.name, "lumo")
+        os.makedirs(os.path.join(self.install, "proxy"))
+        open(os.path.join(self.install, "proxy", "proxy.mjs"), "w").close()
+        self.calls, self.out = [], []
+
+    def spawn(self, argv, cwd=None, env=None, log=None):
+        self.calls.append((tuple(argv), cwd, (env or {}).get("LITELLM_MASTER_KEY"), log))
+
+    def start(self, which, spawn=None):
+        return sr.start_service(which, self.install, self.state, "windows", spawn=spawn or self.spawn,
+                                out=self.out.append)
+
+    def test_proxy_starts_like_the_launcher(self):
+        self.assertTrue(self.start("proxy"))
+        self.assertEqual(self.calls, [(("node", "--no-warnings", "proxy.mjs"),
+                                       os.path.join(self.install, "proxy"), None, None)])
+
+    def test_litellm_gets_key_log_and_state_folder(self):
+        self.assertTrue(self.start("litellm"))
+        (argv, cwd, key, log), = self.calls
+        self.assertEqual(argv[0], os.path.join(self.state, "litellm-venv", "Scripts", "litellm.exe"))
+        self.assertEqual(argv[-4:], ("--host", "127.0.0.1", "--port", "4000"))
+        self.assertEqual((cwd, key, log), (self.state, "sk-test", os.path.join(self.state, "litellm.log")))
+
+    def test_missing_key_starts_nothing(self):
+        os.remove(os.path.join(self.state, "master.key"))
+        self.assertFalse(self.start("litellm"))
+        self.assertEqual(self.calls, [])
+        self.assertIn("could not read", self.out[0])
+
+    def test_spawn_failure_is_reported(self):
+        def boom(*a, **k):
+            raise FileNotFoundError("node")
+        self.assertFalse(self.start("proxy", spawn=boom))
+        self.assertIn("could not start the Lumo proxy", self.out[0])
+
+    def test_main_start_flag_only_starts(self):
+        with mock.patch.object(sr, "start_service", return_value=True) as start, \
+                mock.patch.object(sr, "restart_services") as restart:
+            self.assertEqual(sr.main(["--install-dir", self.install, "--start", "litellm"]), 0)
+        start.assert_called_once_with("litellm", install=self.install)
+        restart.assert_not_called()
+
 
 class SessionOrder(unittest.TestCase):
     """Other sessions first, then the proxy and LiteLLM, then the held-back continue notes."""

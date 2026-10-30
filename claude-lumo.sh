@@ -8,7 +8,7 @@ D="$HOME/.claude/lumo"; PROXY="$HOME/.claude/lumo/proxy"; S="${CLAUDE_LUMO_STATE
 LOCAL="${CLAUDE_LUMO_LOCAL:-$HOME/.claude/lumo-local}"
 
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) LITELLM="$VENV/Scripts/litellm.exe"; PY=python; native() { cygpath -m "$1"; };;
+  MINGW*|MSYS*|CYGWIN*) LITELLM="$VENV/Scripts/litellm.exe"; PY=python; WIN=1; native() { cygpath -m "$1"; };;
   *) LITELLM="$VENV/bin/litellm"; PY=$(command -v python3 >/dev/null && echo python3 || echo python); native() { echo "$1"; };;
 esac
 
@@ -57,13 +57,23 @@ case "$1" in
     ;;
 esac
 up() { curl -s -o /dev/null -m 2 -w '%{http_code}' "$1" 2>/dev/null | grep -q 200; }
-if ! up http://127.0.0.1:8790/v1/health; then
-  (cd "$PROXY" && nohup node --no-warnings proxy.mjs >/dev/null 2>&1 &)
+start_proxy() { (cd "$PROXY" && nohup node --no-warnings proxy.mjs >/dev/null 2>&1 &); }
+start_litellm() {
+  (LITELLM_MASTER_KEY="$(cat "$S/master.key")" PYTHONIOENCODING=utf-8 nohup "$LITELLM" \
+    --config "$PROXY/litellm.yaml" --host 127.0.0.1 --port 4000 > "$S/litellm.log" 2>&1 &)
+}
+# On Windows `nohup ... &` leaves the services attached to this terminal's console, so closing the
+# terminal that happened to start them ends them for every session (#164). service_restart.py
+# starts them detached instead, with the same command, folder, key and log.
+if [ -n "$WIN" ] && [ -f "$D/service_restart.py" ]; then
+  start_proxy() { CLAUDE_LUMO_STATE_DIR="$(native "$S")" "$PY" "$(native "$D")/service_restart.py" --install-dir "$(native "$D")" --start proxy; }
+  start_litellm() { CLAUDE_LUMO_STATE_DIR="$(native "$S")" "$PY" "$(native "$D")/service_restart.py" --install-dir "$(native "$D")" --start litellm; }
 fi
-KEY=$(cat "$S/master.key")
+if ! up http://127.0.0.1:8790/v1/health; then
+  start_proxy
+fi
 if ! up http://127.0.0.1:4000/health/liveliness; then
-  (LITELLM_MASTER_KEY="$KEY" PYTHONIOENCODING=utf-8 nohup "$LITELLM" --config "$PROXY/litellm.yaml" \
-    --host 127.0.0.1 --port 4000 > "$S/litellm.log" 2>&1 &)
+  start_litellm
   for i in $(seq 1 45); do up http://127.0.0.1:4000/health/liveliness && break; sleep 1; done
   up http://127.0.0.1:4000/health/liveliness || { echo "claude-lumo: LiteLLM did not start, see $S/litellm.log" >&2; exit 1; }
 fi
