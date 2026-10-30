@@ -33,6 +33,9 @@ Subcommands:
   wipe                     Delete finished projects' session data (offline)
   privacy-audit            Report on local data posture (offline, read-only)
 
+At startup a background watchdog (disable with CLAUDE_LUMO_WATCHDOG=0) restarts the
+proxy and LiteLLM if either dies, so transient crashes do not end every session.
+
 All other arguments are passed to `claude`, including its own flags; see
 `claude --help` or https://claude.com/docs for Claude Code usage.
 EOF
@@ -60,7 +63,7 @@ up() { curl -s -o /dev/null -m 2 -w '%{http_code}' "$1" 2>/dev/null | grep -q 20
 start_proxy() { (cd "$PROXY" && nohup node --no-warnings proxy.mjs >/dev/null 2>&1 &); }
 start_litellm() {
   (LITELLM_MASTER_KEY="$(cat "$S/master.key")" PYTHONIOENCODING=utf-8 nohup "$LITELLM" \
-    --config "$PROXY/litellm.yaml" --host 127.0.0.1 --port 4000 > "$S/litellm.log" 2>&1 &)
+    --config "$PROXY/litellm.yaml" --host 127.0.0.1 --port 4000 >> "$S/litellm.log" 2>&1 &)
 }
 # On Windows `nohup ... &` leaves the services attached to this terminal's console, so closing the
 # terminal that happened to start them ends them for every session (#164). service_restart.py
@@ -73,9 +76,29 @@ if ! up http://127.0.0.1:8790/v1/health; then
   start_proxy
 fi
 if ! up http://127.0.0.1:4000/health/liveliness; then
+  # Crash evidence must survive relaunch (#171, #173): rotate an oversized log, then append
+  # (start_litellm, either path). wc -c works on Git Bash, macOS and Linux alike (stat's
+  # size flag differs per platform).
+  if [ -f "$S/litellm.log" ] && [ "$(wc -c < "$S/litellm.log" | tr -d '[:space:]')" -gt 10485760 ]; then
+    mv -f "$S/litellm.log" "$S/litellm.log.1"
+  fi
   start_litellm
   for i in $(seq 1 45); do up http://127.0.0.1:4000/health/liveliness && break; sleep 1; done
   up http://127.0.0.1:4000/health/liveliness || { echo "claude-lumo: LiteLLM did not start, see $S/litellm.log" >&2; exit 1; }
+fi
+
+# Background watchdog: keeps the proxy and LiteLLM alive after launch (#171). Singleton via
+# pidfile, so repeated launches do not stack loops. Disable with CLAUDE_LUMO_WATCHDOG=0.
+# Like the services, the watchdog must not die with this terminal on Windows (#164): it goes
+# through service_restart.py there, degrading to nohup on an install without it. $BASH is
+# bash's own path to itself (never System32's WSL launcher, #91); POSIX keeps nohup.
+if [ "${CLAUDE_LUMO_WATCHDOG:-1}" != "0" ] && [ -f "$D/scripts/watchdog.sh" ]; then
+  if [ -n "$WIN" ] && [ -f "$D/service_restart.py" ]; then
+    CLAUDE_LUMO_BASH="$BASH" CLAUDE_LUMO_STATE_DIR="$(native "$S")" \
+      "$PY" "$(native "$D")/service_restart.py" --install-dir "$(native "$D")" --spawn-watchdog
+  else
+    (CLAUDE_LUMO_STATE_DIR="$S" nohup bash "$D/scripts/watchdog.sh" >/dev/null 2>&1 &)
+  fi
 fi
 
 # Separate data (optional): when enabled, build link layout and export CLAUDE_CONFIG_DIR so

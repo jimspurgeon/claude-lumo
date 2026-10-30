@@ -63,6 +63,14 @@ Note: the proxy's `/v1/debug/live` endpoint on 127.0.0.1 exposes the live reason
 tails of in-flight requests to any local process. It is kept functional for local
 debugging of stuck turns.
 
+**Watchdog.** A background watchdog (`scripts/watchdog.sh`) keeps the two local
+services alive: it probes `:8790` and `:4000` every 30 seconds and relaunches whichever
+died, the same way the launcher does, with exponential backoff so a crash-looping
+service cannot hammer the machine (#171). It never kills or restarts a healthy
+service, and it only ever probes those two ports. Events go to
+`~/.claude-lumo/logs/watchdog.log` (rotated at 10 MB). Disable it for a session by
+setting `CLAUDE_LUMO_WATCHDOG=0`.
+
 ## Install
 
 ### One command (all OSes)
@@ -565,6 +573,7 @@ rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" 2>/dev/
 | `update-check.py` | Silent background check for a newer release, at launch and about hourly from the status line; writes the status-line notice |
 | `session-restart.py` | After an update: finds running sessions, offers one choice for all of them (wait for all / interrupt all / one by one / skip all) and restarts them via Orca or tmux |
 | `service_restart.py` | Restarts the proxy and LiteLLM so they run the new release (after "wait for all" / "interrupt all", or by hand; `--dry-run` prints the plan) |
+| `scripts/watchdog.sh` | Background singleton watchdog: probes both services every 30s and relaunches a dead one with backoff (#171). Tests: `python -m pytest -q tests/test_watchdog.py` |
 | `settings-lumo.json` | Claude Code settings for Lumo sessions: model mapping, status line, hooks. `{{LUMO_DIR}}` and `{{PYTHON}}` are filled in at launch |
 | `LUMO.md` | System prompt content, delivered by `hooks/lumo-prompt.py` at startup and after /clear and /compact |
 | `render.py` | Builds `~/.claude-lumo/settings.json`, `system-prompt.md` and `agents.json` at each launch, merging personal additions over ours. Tests: `python test_render.py` |
