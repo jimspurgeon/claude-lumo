@@ -71,7 +71,7 @@ def services(install, state, plat):
          "argv": [litellm, "--config", yaml, "--host", "127.0.0.1", "--port", str(LITELLM_PORT)],
          "cwd": state, "key_file": key_file, "log": log,
          "manual": (f'LITELLM_MASTER_KEY="$(cat "{key_file}")" PYTHONIOENCODING=utf-8 nohup "{litellm}" '
-                    f'--config "{yaml}" --host 127.0.0.1 --port {LITELLM_PORT} > "{log}" 2>&1 &')},
+                    f'--config "{yaml}" --host 127.0.0.1 --port {LITELLM_PORT} >> "{log}" 2>&1 &')},
     ]
 
 
@@ -177,8 +177,9 @@ def http_healthy(url):
 
 
 def spawn_detached(argv, cwd=None, env=None, log=None):
-    """Start argv detached from this process, like the launcher's `nohup ... &`."""
-    out = open(log, "w", encoding="utf-8") if log else subprocess.DEVNULL
+    """Start argv detached from this process, like the launcher's `nohup ... &`. The log is
+    appended, never truncated: it holds the crash evidence for whatever died (#173)."""
+    out = open(log, "a", encoding="utf-8") if log else subprocess.DEVNULL
     try:
         kw = {"cwd": cwd, "env": env, "stdin": subprocess.DEVNULL, "stdout": out,
               "stderr": subprocess.STDOUT if log else subprocess.DEVNULL, "close_fds": True}
@@ -320,6 +321,18 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
 
 START_NAMES = {"proxy": PROXY_PORT, "litellm": LITELLM_PORT}
 
+MAX_LOG_BYTES = 10 * 1024 * 1024  # 10 MB, one generation: the launcher's rotation policy
+
+
+def rotate_log(path):
+    """Rename path to path.1 when it exceeds MAX_LOG_BYTES (#173). The relaunch appends to
+    the log either way, so crash evidence survives; a locked or missing file is left alone."""
+    try:
+        if os.path.getsize(path) > MAX_LOG_BYTES:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+
 
 def start_service(which, install=None, state=None, plat=None, spawn=spawn_detached, out=print):
     """Start one service ("proxy" or "litellm") detached, without stopping or checking anything.
@@ -339,10 +352,34 @@ def start_service(which, install=None, state=None, plat=None, spawn=spawn_detach
             out(f"claude-lumo: could not read {svc['key_file']}, so {svc['name']} was not started")
             return False
         env = dict(os.environ, LITELLM_MASTER_KEY=key, PYTHONIOENCODING="utf-8")
+    if svc["log"]:
+        rotate_log(svc["log"])
     try:
         spawn(svc["argv"], cwd=svc["cwd"], env=env, log=svc["log"])
     except OSError as e:
         out(f"claude-lumo: could not start {svc['name']} ({e})")
+        return False
+    return True
+
+
+def spawn_watchdog(install=None, state=None, spawn=spawn_detached, out=print):
+    """Start scripts/watchdog.sh detached, the way claude-lumo.sh would (#171).
+
+    The launcher's `nohup bash watchdog.sh &` dies with the terminal that ran it on Windows
+    (#164), leaving the stack unwatched, so on Windows it asks us instead. CLAUDE_LUMO_BASH
+    names the bash to use: on Windows a bare "bash" resolves to System32's WSL launcher before
+    the PATH is searched (#91). True when the watchdog was started."""
+    install, state = install or install_dir(), state or state_dir()
+    script = os.path.join(install, "scripts", "watchdog.sh")
+    if not os.path.isfile(script):
+        out(f"claude-lumo: no watchdog at {script}")
+        return False
+    bash = os.environ.get("CLAUDE_LUMO_BASH") or "bash"
+    env = dict(os.environ, CLAUDE_LUMO_STATE_DIR=state)
+    try:
+        spawn([bash, script], cwd=install, env=env)
+    except OSError as e:
+        out(f"claude-lumo: could not start the watchdog ({e})")
         return False
     return True
 
@@ -353,6 +390,8 @@ def main(argv=None):
     parser.add_argument("--install-dir", help="the claude-lumo install (default: ~/.claude/lumo)")
     parser.add_argument("--start", choices=sorted(START_NAMES),
                         help="only start this service, detached (the launcher's path on Windows)")
+    parser.add_argument("--spawn-watchdog", action="store_true",
+                        help="start scripts/watchdog.sh detached (the launcher's path on Windows)")
     args = parser.parse_args(argv)
     install = args.install_dir or install_dir()
     if not os.path.isfile(os.path.join(install, "proxy", "proxy.mjs")):
@@ -360,6 +399,8 @@ def main(argv=None):
         return 1
     if args.start:
         return 0 if start_service(args.start, install=install) else 1
+    if args.spawn_watchdog:
+        return 0 if spawn_watchdog(install) else 1
     print("Restarting the proxy and LiteLLM:" if not args.dry_run else "Plan for the proxy and LiteLLM:")
     return 0 if restart_services(install=install, dry_run=args.dry_run) or args.dry_run else 1
 
