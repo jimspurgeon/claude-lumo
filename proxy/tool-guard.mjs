@@ -37,15 +37,41 @@ const repairTags = (s) => {
   return n ? out : null;
 };
 
+// GLM intermittently emits stray CR characters inside tool-call argument strings (issue #176).
+// \r is legal JSON, so the arguments parse fine and used to be forwarded unchanged; Claude Code
+// then rendered the raw CRs as replacement characters. \r\n becomes \n, a lone \r is dropped
+// (multiline content uses \n). Walks the parsed value in place; returns true if anything changed.
+const deCR = (v) => {
+  let changed = false;
+  const walk = (x) => {
+    if (typeof x === "string") {
+      if (!x.includes("\r")) return x;
+      changed = true;
+      return x.replace(/\r\n/g, "\n").replace(/\r/g, "");
+    }
+    if (Array.isArray(x)) return x.map(walk);
+    if (x && typeof x === "object") for (const k of Object.keys(x)) x[k] = walk(x[k]);
+    return x;
+  };
+  walk(v);
+  return changed;
+};
+
 // Returns { args, repaired } for a usable call, or null.
 export function checkCall(call) {
   if (!call.id || !call.name) return null;
   try {
     const p = JSON.parse(call.args);
-    if (p && typeof p === "object" && !Array.isArray(p)) return { args: call.args, repaired: false };
+    if (p && typeof p === "object" && !Array.isArray(p)) {
+      // Nothing changed: keep the original string, so clean arguments stay byte-identical.
+      if (!deCR(p)) return { args: call.args, repaired: false };
+      return { args: JSON.stringify(p), repaired: true };
+    }
   } catch {}
   const fixed = repairTags(call.args || "");
-  return fixed ? { args: JSON.stringify(fixed), repaired: true } : null;
+  if (!fixed) return null;
+  deCR(fixed); // tag-harvested values can carry CRs too
+  return { args: JSON.stringify(fixed), repaired: true };
 }
 
 // Collects the tool calls of a complete SSE body (used for the retry).
