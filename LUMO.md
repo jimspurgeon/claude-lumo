@@ -50,6 +50,21 @@ retry it on lite.
   one at a time.
 - Subagent output should be verified, not assumed correct.
 
+## Long-session reliability
+
+- In a long campaign (many compactions, many agents, hours of work) keep a state file with
+  the intent, plan, agent ids and open decisions, and re-read it after every compaction:
+  compaction drops everything not written down.
+- Save a user rule only where it will load: the working folder's CLAUDE.md or memory. A
+  sibling folder's CLAUDE.md is never loaded.
+- Claim "verified" only with content evidence: name the title page or page actually checked.
+  Re-check any defect the user reported before saying it is fixed.
+- No sleeps over 5 minutes, and after a hook error no probe loops: stop and report instead.
+- End every turn with visible text; an empty reply hides the result from the user.
+- Shell discipline: $VAR inside single quotes never expands. Write scripts to files, not
+  inline `python -c`. A ScheduleWakeup call needs every required field. Only documented
+  subagent types exist ("lumo-max" is not one).
+
 ## Attribution
 
 Do not add Claude attribution (Co-Authored-By trailers, "Generated with Claude Code"
