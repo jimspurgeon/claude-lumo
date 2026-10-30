@@ -91,3 +91,62 @@ test("the end-of-stream marker inside text or tool arguments is escaped, the ter
   assert.equal(text(events), `says ${MARK}`);
   assert.equal(toolCalls(events)[0].function.arguments, args);
 });
+
+// Issue #176: GLM intermittently emits stray CR characters inside argument strings.
+// CR constant below keeps the fixtures readable without littering raw \r bytes.
+const CR = "\r";
+
+test("clean arguments pass through byte-identical, no repair counted", async () => {
+  const args = JSON.stringify({ file_path: "a.mjs", limit: 10, note: "two\nlines" });
+  const { g, events } = await run([chunk({ tool_calls: [call(0, "t1", "Read", args)] }, "tool_calls")]);
+  assert.equal(toolCalls(events)[0].function.arguments, args);
+  assert.deepEqual(g.stats, { dropped: 0, repaired: 0, retry: 0 });
+});
+
+test("stray CRs in nested AskUserQuestion labels are stripped and counted as repaired", async () => {
+  // GLM emits the CR as a JSON \\r escape, so the text parses and the parsed values hold real CRs.
+  const dirty = JSON.stringify({ questions: [{ question: `Proceed${CR}?`, options: [
+    { label: `Yes${CR},${CR} merge${CR} ${CR}(Recommended${CR})`, description: `Merge${CR} #172${CR}` },
+    { label: "No", description: "Wait" } ] }] });
+  const { g, events } = await run([chunk({ tool_calls: [call(0, "t1", "AskUserQuestion", dirty)] }, "tool_calls")]);
+  const parsed = JSON.parse(toolCalls(events)[0].function.arguments);
+  assert.deepEqual(parsed.questions[0].options[0], {
+    label: "Yes, merge (Recommended)",
+    description: "Merge #172",
+  });
+  assert.equal(parsed.questions[0].question, "Proceed?");
+  assert.equal(parsed.questions[0].options[1].label, "No");
+  assert.ok(!toolCalls(events)[0].function.arguments.includes(CR));
+  assert.equal(g.stats.repaired, 1);
+  assert.equal(g.stats.dropped, 0);
+});
+
+test("CRLF sequences become LF, lone CRs vanish", async () => {
+  const dirty = JSON.stringify({ content: `line one${CR}\nline two${CR}more` });
+  const { events } = await run([chunk({ tool_calls: [call(0, "t1", "Write", dirty)] }, "tool_calls")]);
+  assert.equal(JSON.parse(toolCalls(events)[0].function.arguments).content, "line one\nline twomore");
+});
+
+test("an emission mixing CRLF and lone CR in different values is fully normalized", async () => {
+  const dirty = JSON.stringify({ items: [`first${CR}\nsecond`, `third${CR}fourth`], nested: { text: `x${CR}\ny${CR}z` } });
+  const { g, events } = await run([chunk({ tool_calls: [call(0, "t1", "Bash", dirty)] }, "tool_calls")]);
+  assert.deepEqual(JSON.parse(toolCalls(events)[0].function.arguments), {
+    items: ["first\nsecond", "thirdfourth"],
+    nested: { text: "x\nyz" },
+  });
+  assert.equal(g.stats.repaired, 1);
+});
+
+test("an object with no string values is unaffected and not repaired", async () => {
+  const args = JSON.stringify({ count: 3, ok: true, ratio: null, list: [1, 2, 3] });
+  const { g, events } = await run([chunk({ tool_calls: [call(0, "t1", "Bash", args)] }, "tool_calls")]);
+  assert.equal(toolCalls(events)[0].function.arguments, args);
+  assert.deepEqual(g.stats, { dropped: 0, repaired: 0, retry: 0 });
+});
+
+test("tag-leaked values carrying CRs are normalized too", async () => {
+  const leaked = `<arg_key>content</arg_key><arg_value>note:${CR}\nnext${CR}end</arg_value>`;
+  const { g, events } = await run([chunk({ tool_calls: [call(0, "t1", "Write", leaked)] }, "tool_calls")]);
+  assert.deepEqual(JSON.parse(toolCalls(events)[0].function.arguments), { content: "note:\nnextend" });
+  assert.equal(g.stats.repaired, 1);
+});
