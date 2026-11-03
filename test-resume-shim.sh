@@ -45,8 +45,33 @@ out="$(run_sh -p "say hi" --flags "kept intact")";                       check "
 run_sh --boom >/dev/null 2>&1;                                           check "bash: exit code preserved (7)" "$([ $? = 7 ]; echo $?)"
 out="$(CLAUDE_CONFIG_DIR= PATH="$TMP/bin:$PATH" bash -c '. scripts/resume-shim.sh; claude --resume "$1"' _ "$LUMO_ID")"; check "bash: id not in any store -> real claude" "$([ "${out#STUB claude --resume $LUMO_ID}" != "$out" ]; echo $?)"
 
+# --- Bare `claude -r` (no id): resume-picker helper (bash) ---
+# The Bash shim runs "bash <repo>/scripts/resume-picker.sh" from the real repo checkout, and the
+# picker finds stubs through PATH + CLAUDE_CONFIG_DIR. Feed choices via redirected stdin; the
+# menu is forced on so the interactive path runs even though stdin is a pipe here.
+# Deterministic mtimes: plain transcript is newer, so row 1 = plain, row 2 = lumo in both twins.
+touch -d '2026-11-03 10:00' "$TMP/config/projects/test/$LUMO_ID.jsonl"
+touch -d '2026-11-03 11:00' "$TMP/config/projects/test/$REG_ID.jsonl"
+mkdir -p "$TMP/home"
+
+pick_sh() { # pick_sh <menu-input> <args...>: run `claude <args>` with the shim, feeding input
+  local input="$1"; shift
+  PATH="$TMP/bin:$PATH" CLAUDE_CONFIG_DIR="$TMP/config" HOME="$TMP/home" \
+    RESUME_PICKER_FORCE_MENU=1 bash -c '. scripts/resume-shim.sh; claude "$@"' _ "$@" <<< "$input"
+}
+out="$(pick_sh 2 -r --strict)";                                            check "bash: bare -r picks lumo row -> claude-lumo --resume id, args kept" "$([ "${out#*STUB claude-lumo --resume $LUMO_ID --strict}" != "$out" ]; echo $?)"
+out="$(pick_sh 2 --resume --strict)";                                       check "bash: bare --resume picks lumo row -> claude-lumo --resume id, args kept" "$([ "${out#*STUB claude-lumo --resume $LUMO_ID --strict}" != "$out" ]; echo $?)"
+out="$(pick_sh 1 -r --strict)";                                             check "bash: bare -r picks plain row -> real claude --resume id, args kept" "$([ "${out#*STUB claude --resume $REG_ID --strict}" != "$out" ]; echo $?)"
+out="$(pick_sh p -r --extra arg)";                                          check "bash: bare -r input p -> real claude, original args unchanged" "$([ "${out#*STUB claude -r --extra arg}" != "$out" ]; echo $?)"
+out="$(pick_sh "" -r --extra arg)";                                         check "bash: bare -r empty input -> real claude, original args unchanged" "$([ "${out#*STUB claude -r --extra arg}" != "$out" ]; echo $?)"
+out="$(pick_sh zz9 -r)";                                                   check "bash: bare -r invalid input -> real claude, original args unchanged" "$([ "${out#*STUB claude -r}" != "$out" ]; echo $?)"
+out="$(pick_sh 99 -r)";                                                     check "bash: bare -r out-of-range number -> real claude, original args unchanged" "$([ "${out#*STUB claude -r}" != "$out" ]; echo $?)"
+out="$(PATH="$TMP/bin:$PATH" CLAUDE_CONFIG_DIR="$TMP/config" HOME="$TMP/home" bash -c '. scripts/resume-shim.sh; claude -r --extra arg' </dev/null)"; check "bash: bare -r non-tty -> real claude, original args unchanged" "$([ "$out" = "STUB claude -r --extra arg" ]; echo $?)"
+out="$(PATH="$TMP/bin:$PATH" CLAUDE_CONFIG_DIR="$TMP/nonexistent" HOME="$TMP/home" RESUME_PICKER_FORCE_MENU=1 bash -c '. scripts/resume-shim.sh; claude -r' <<< "")"; check "bash: bare -r no transcripts anywhere -> real claude, original args unchanged" "$([ "$out" = "STUB claude -r" ]; echo $?)"
+
 # --- Setup script: install twice, uninstall, profiles restored byte-identically ---
 PROF="$TMP/home/.bashrc"
+mkdir -p "$TMP/home"
 echo "# my profile" > "$PROF"
 cp "$PROF" "$PROF.orig"
 HOME="$TMP/home" bash scripts/resume-shim-setup.sh install >/dev/null
@@ -75,6 +100,24 @@ if [ -n "$PS_BIN" ]; then
   out="$(ps_call --resume "$REG_ID")";                                   check "powershell: regular transcript -> real claude" "$([ "${out#*STUB claude-cmd --resume $REG_ID}" != "$out" ]; echo $?)"
   out="$(ps_call --version)";                                             check "powershell: --version -> real claude" "$([ "${out#*STUB claude-cmd --version}" != "$out" ]; echo $?)"
   out="$(ps_call --resume deadbeef-1234-5678-9abc-def012345678)";          check "powershell: unknown id -> real claude" "$([ "${out#*STUB claude-cmd --resume deadbeef}" != "$out" ]; echo $?)"
+  # --- Bare `claude -r` (no id): resume-picker helper (PowerShell) ---
+  # The PS shim invokes the helper via "powershell -NoProfile -File", which also gets the
+  # stubs on PATH; choices are fed through a piped here-string (menu forced on).
+  ps_pick() { # ps_pick <menu-input> <args...>: run the picker helper with stdin from input
+    local input="$1"; shift
+    local quoted="" a
+    for a in "$@"; do quoted="$quoted '$a'"; done
+    printf '%s\n' "$input" | "$PS_BIN" -NoProfile -Command "\$env:PATH='$(cygpath -w "$TMP/bin" 2>/dev/null || echo "$TMP/bin")'+';'+\$env:PATH; \$env:CLAUDE_CONFIG_DIR='$(cygpath -w "$TMP/config" 2>/dev/null || echo "$TMP/config")'; \$env:HOME='$(cygpath -w "$TMP/home" 2>/dev/null || echo "$TMP/home")'; \$env:RESUME_PICKER_FORCE_MENU='1'; . ./scripts/resume-shim.ps1; claude$quoted"
+  }
+  # Row order matches the bash block: plain (newest) then lumo.
+  out="$(ps_pick 2 -r --strict)";                                           check "powershell: bare -r picks lumo row -> claude-lumo --resume id, args kept" "$([ "${out#*STUB claude-lumo-cmd --resume $LUMO_ID --strict}" != "$out" ]; echo $?)"
+  out="$(ps_pick 1 -r --strict)";                                           check "powershell: bare -r picks plain row -> real claude --resume id, args kept" "$([ "${out#*STUB claude-cmd --resume $REG_ID --strict}" != "$out" ]; echo $?)"
+  out="$(ps_pick p -r --extra arg)";                                        check "powershell: bare -r input p -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r --extra arg}" != "$out" ]; echo $?)"
+  out="$(ps_pick "" -r --extra arg)";                                       check "powershell: bare -r empty input -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r --extra arg}" != "$out" ]; echo $?)"
+  out="$(ps_pick zz9 -r)";                                                  check "powershell: bare -r invalid input -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r}" != "$out" ]; echo $?)"
+  out="$(ps_pick 99 -r)";                                                   check "powershell: bare -r out-of-range number -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r}" != "$out" ]; echo $?)"
+  # Non-tty stdin (redirected, menu NOT forced): old shim behavior, original args.
+  out="$(: | "$PS_BIN" -NoProfile -Command "\$env:PATH='$(cygpath -w "$TMP/bin" 2>/dev/null || echo "$TMP/bin")'+';'+\$env:PATH; \$env:CLAUDE_CONFIG_DIR='$(cygpath -w "$TMP/config" 2>/dev/null || echo "$TMP/config")'; \$env:HOME='$(cygpath -w "$TMP/home" 2>/dev/null || echo "$TMP/home")'; . ./scripts/resume-shim.ps1; claude -r --extra arg")"; check "powershell: bare -r non-tty -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r --extra arg}" != "$out" ]; echo $?)"
 else
   echo "SKIP: powershell not found; PowerShell shim not tested"
 fi
