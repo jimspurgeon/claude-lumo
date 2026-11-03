@@ -105,8 +105,13 @@ if (-not $picked) {
 $fullId = [IO.Path]::GetFileNameWithoutExtension($picked.Path)
 
 # Rebuild the arguments: same order minus the bare -r/--resume token.
+# Tokens after "--" are end-of-options: a literal -r/--resume there is a
+# positional argument and must be kept (same end-of-options logic as the shim).
 $newArgs = @()
+$endOpts = $false
 foreach ($a in $origArgs) {
+    if ($endOpts) { $newArgs += [string]$a; continue }
+    if ($a -eq '--') { $endOpts = $true; $newArgs += '--'; continue }
     if ($a -ne '-r' -and $a -ne '--resume') { $newArgs += [string]$a }
 }
 

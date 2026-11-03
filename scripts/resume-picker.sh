@@ -114,14 +114,22 @@ fi
 full_id="$(basename "$found" .jsonl)"
 
 # Rebuild "$@": same arguments in order minus the bare -r/--resume token.
+# Tokens after "--" are end-of-options: a literal -r/--resume there is a
+# positional argument and must be kept (same end-of-options logic as the shim).
 n=$#
+_strip_end=0
 while [ "$n" -gt 0 ]; do
     a="$1"
     shift
-    case "$a" in
-        -r|--resume) ;;
-        *) set -- "$@" "$a" ;;
-    esac
+    if [ "$_strip_end" = "1" ]; then
+        set -- "$@" "$a"
+    else
+        case "$a" in
+            --) _strip_end=1; set -- "$@" "$a" ;;
+            -r|--resume) ;;
+            *) set -- "$@" "$a" ;;
+        esac
+    fi
     n=$((n - 1))
 done
 

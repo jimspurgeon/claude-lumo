@@ -18,7 +18,16 @@
 
 # Resolve the picker helper next to this shim (~/.claude/lumo is a junction to the repo, so
 # sourcing ~/.claude/lumo/scripts/resume-shim.sh finds the repo's picker after updates).
-_resume_picker_sh="$(dirname "${BASH_SOURCE[0]}")/resume-picker.sh"
+# Each arm uses its own shell's script-self expansion; the $ZSH_VERSION guard makes each
+# expansion valid (but unevaluated) in the other shell, so this parses in bash AND zsh.
+# ${(%):-%x} is zsh's way to get the sourced file at sourcing time; zsh does not set
+# BASH_SOURCE, and bash cannot express %x.
+_resume_self=""
+case $ZSH_VERSION in
+    '') _resume_self="${BASH_SOURCE[0]}" ;;
+    *) _resume_self="${(%):-%x}" ;;
+esac
+_resume_picker_sh="$(dirname "$_resume_self")/resume-picker.sh"
 
 claude() {
     local id="" bare=0 t d

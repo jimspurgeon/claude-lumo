@@ -66,6 +66,9 @@ out="$(pick_sh p -r --extra arg)";                                          chec
 out="$(pick_sh "" -r --extra arg)";                                         check "bash: bare -r empty input -> real claude, original args unchanged" "$([ "${out#*STUB claude -r --extra arg}" != "$out" ]; echo $?)"
 out="$(pick_sh zz9 -r)";                                                   check "bash: bare -r invalid input -> real claude, original args unchanged" "$([ "${out#*STUB claude -r}" != "$out" ]; echo $?)"
 out="$(pick_sh 99 -r)";                                                     check "bash: bare -r out-of-range number -> real claude, original args unchanged" "$([ "${out#*STUB claude -r}" != "$out" ]; echo $?)"
+# `claude -r -- -r`: the bare flag before "--" triggers the picker, and the strip of the
+# resume flag honors end-of-options, so the literal -r AFTER "--" is kept in the rebuild.
+out="$(pick_sh 2 -r -- -r)";                                                check "bash: bare -r with literal -r after -- -> claude-lumo --resume id, trailing -r kept" "$([ "${out#*STUB claude-lumo --resume $LUMO_ID -- -r}" != "$out" ]; echo $?)"
 out="$(PATH="$TMP/bin:$PATH" CLAUDE_CONFIG_DIR="$TMP/config" HOME="$TMP/home" bash -c '. scripts/resume-shim.sh; claude -r --extra arg' </dev/null)"; check "bash: bare -r non-tty -> real claude, original args unchanged" "$([ "$out" = "STUB claude -r --extra arg" ]; echo $?)"
 out="$(PATH="$TMP/bin:$PATH" CLAUDE_CONFIG_DIR="$TMP/nonexistent" HOME="$TMP/home" RESUME_PICKER_FORCE_MENU=1 bash -c '. scripts/resume-shim.sh; claude -r' <<< "")"; check "bash: bare -r no transcripts anywhere -> real claude, original args unchanged" "$([ "$out" = "STUB claude -r" ]; echo $?)"
 # A literal -r after the "--" end-of-options separator is a positional argument, not a
@@ -127,6 +130,8 @@ if [ -n "$PS_BIN" ]; then
   out="$(ps_pick "" -r --extra arg)";                                       check "powershell: bare -r empty input -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r --extra arg}" != "$out" ]; echo $?)"
   out="$(ps_pick zz9 -r)";                                                  check "powershell: bare -r invalid input -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r}" != "$out" ]; echo $?)"
   out="$(ps_pick 99 -r)";                                                   check "powershell: bare -r out-of-range number -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r}" != "$out" ]; echo $?)"
+  # `claude -r -- -r`: the strip honors end-of-options, so the literal -r AFTER "--" is kept.
+  out="$(ps_pick 2 -r -- -r)";                                              check "powershell: bare -r with literal -r after -- -> claude-lumo --resume id, trailing -r kept" "$([ "${out#*STUB claude-lumo-cmd --resume $LUMO_ID -- -r}" != "$out" ]; echo $?)"
   # Literal -r after the "--" end-of-options separator: positional argument, no picker.
   out="$(ps_pick 1 -- -r)";                                                 check "powershell: literal -r after -- -> real claude, no picker" "$([ "${out#*STUB claude-cmd -- -r}" != "$out" ]; echo $?)"
   # Non-tty stdin (redirected, menu NOT forced): old shim behavior, original args.
