@@ -52,7 +52,11 @@ dirs=()
 [ -n "${CLAUDE_CONFIG_DIR:-}" ] && dirs+=("$CLAUDE_CONFIG_DIR")
 dirs+=("$HOME/.claude" "$HOME/.claude-lumo/config")
 rows=""
+_nl=$'\n'
+_seen=$_nl
 for d in "${dirs[@]}"; do
+    case "$_seen" in *"$_nl$d$_nl"*) continue;; esac   # dir dedupe (e.g. CLAUDE_CONFIG_DIR=~/.claude)
+    _seen="$_seen$d$_nl"
     for t in "$d"/projects/*/*.jsonl; do
         [ -f "$t" ] || continue
         eng="claude"

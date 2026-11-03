@@ -20,20 +20,34 @@ $resumePickerPs1 = Join-Path $PSScriptRoot 'resume-picker.ps1'
 function claude {
     $id = $null
     $bare = $false
-    for ($i = 0; $i -lt $args.Count; $i++) {
-        $a = [string]$args[$i]
-        if ($a -like '--resume=*') { $id = $a.Substring(9) }
-        elseif ($a -eq '--resume' -or $a -eq '-r') {
-            # Lookahead: a following non-flag token is the session id; another
-            # flag or nothing after it means the flag is bare (no id given).
-            if ($i + 1 -lt $args.Count -and -not ([string]$args[$i + 1]).StartsWith('-')) {
-                $id = [string]$args[$i + 1]
-                $i++
-            } else {
-                $bare = $true
-            }
+    $prevResume = $false
+    $endOpts = $false
+    foreach ($a in $args) {
+        $a = [string]$a
+        if ($endOpts) { $prevResume = $false; continue }
+        if ($a -eq '--') {
+            # Once the end-of-options separator is seen, stop flag detection.
+            $endOpts = $true
+            if ($prevResume) { $bare = $true }
+            $prevResume = $false
+        } elseif ($a -eq '-r' -or $a -eq '--resume') {
+            if ($prevResume) { $bare = $true }
+            $prevResume = $true
+        } elseif ($a -like '--resume=*') {
+            $id = $a.Substring(9)
+            $prevResume = $false
+        } elseif ($a.StartsWith('-')) {
+            if ($prevResume) { $bare = $true }
+            $prevResume = $false
+        } else {
+            # Lookahead: a non-flag token right after a bare -r/--resume is the
+            # session id; any other token clears the pending-flag state.
+            if ($prevResume) { $id = $a }
+            $prevResume = $false
         }
     }
+    # A bare -r/--resume still pending at end-of-args means no id was given either.
+    if ($prevResume) { $bare = $true }
     if ($bare -and -not $id) {
         # Bare resume flag with no session id: pick the session (and engine) interactively.
         $passArgs = @()

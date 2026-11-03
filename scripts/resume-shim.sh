@@ -21,28 +21,36 @@
 _resume_picker_sh="$(dirname "${BASH_SOURCE[0]}")/resume-picker.sh"
 
 claude() {
-    local id="" bare="" a t d i n
-    local argv=("$@")
-    n=${#argv[@]}
-    for ((i = 0; i < n; i++)); do
-        a="${argv[$i]}"
+    local id="" bare=0 t d
+    # Walk over "$@" positionally (no array subscripts: zsh arrays are 1-based and
+    # zsh's `argv` is special, so subscripted bash arrays are not portable across
+    # both shells). After "--" the remaining tokens are positional arguments, not
+    # options, so a later literal -r/--resume must not trigger the picker.
+    local prev_resume=0 endopts=0 a
+    for a in "$@"; do
+        if [ "$endopts" = "1" ]; then
+            prev_resume=0
+            continue
+        fi
         case "$a" in
-            --resume=*) id="${a#--resume=}";;
+            --) endopts=1; [ "$prev_resume" = "1" ] && bare=1; prev_resume=0;;
             -r|--resume)
-                # Lookahead: a following non-flag token is the session id; another
-                # flag or nothing after it means the flag is bare (no id given).
-                if [ $((i + 1)) -lt "$n" ]; then
-                    case "${argv[$((i + 1))]}" in
-                        -*) bare=1;;
-                        *)  id="${argv[$((i + 1))]}"; i=$((i + 1));;
-                    esac
-                else
-                    bare=1
-                fi
+                [ "$prev_resume" = "1" ] && bare=1
+                prev_resume=1
+                ;;
+            --resume=*) id="${a#--resume=}"; prev_resume=0;;
+            -*) [ "$prev_resume" = "1" ] && bare=1; prev_resume=0;;
+            *)
+                # Lookahead: a non-flag token right after a bare -r/--resume is
+                # the session id; any other token clears the pending-flag state.
+                [ "$prev_resume" = "1" ] && id="$a"
+                prev_resume=0
                 ;;
         esac
     done
-    if [ -n "$bare" ] && [ -z "$id" ]; then
+    # A bare -r/--resume still pending at end-of-args means no id was given either.
+    [ "$prev_resume" = "1" ] && bare=1
+    if [ "$bare" = "1" ] && [ -z "$id" ]; then
         # Bare resume flag with no session id: pick the session (and engine) interactively.
         bash "$_resume_picker_sh" "$@"
         return $?

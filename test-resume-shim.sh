@@ -68,6 +68,17 @@ out="$(pick_sh zz9 -r)";                                                   check
 out="$(pick_sh 99 -r)";                                                     check "bash: bare -r out-of-range number -> real claude, original args unchanged" "$([ "${out#*STUB claude -r}" != "$out" ]; echo $?)"
 out="$(PATH="$TMP/bin:$PATH" CLAUDE_CONFIG_DIR="$TMP/config" HOME="$TMP/home" bash -c '. scripts/resume-shim.sh; claude -r --extra arg' </dev/null)"; check "bash: bare -r non-tty -> real claude, original args unchanged" "$([ "$out" = "STUB claude -r --extra arg" ]; echo $?)"
 out="$(PATH="$TMP/bin:$PATH" CLAUDE_CONFIG_DIR="$TMP/nonexistent" HOME="$TMP/home" RESUME_PICKER_FORCE_MENU=1 bash -c '. scripts/resume-shim.sh; claude -r' <<< "")"; check "bash: bare -r no transcripts anywhere -> real claude, original args unchanged" "$([ "$out" = "STUB claude -r" ]; echo $?)"
+# A literal -r after the "--" end-of-options separator is a positional argument, not a
+# resume flag: no picker (choice 1 would have resumed a session had the menu appeared).
+out="$(pick_sh 1 -- -r)";                                              check "bash: literal -r after -- -> real claude, no picker" "$([ "$out" = "STUB claude -- -r" ]; echo $?)"
+# Transcript-dir dedupe (parity with picker.ps1): with CLAUDE_CONFIG_DIR equal to ~/.claude
+# the store must be scanned once, so the menu holds one row and choice 2 falls through to
+# plain claude with the original args (without the dedupe the duplicate row 2 would resume
+# the session). Separate HOME so no other test's store picks up these transcripts.
+mkdir -p "$TMP/home2/.claude/projects/test"
+cp "$TMP/config/projects/test/$REG_ID.jsonl" "$TMP/home2/.claude/projects/test/$REG_ID.jsonl"
+touch -d '2026-11-03 12:00' "$TMP/home2/.claude/projects/test/$REG_ID.jsonl"
+out="$(PATH="$TMP/bin:$PATH" CLAUDE_CONFIG_DIR="$TMP/home2/.claude" HOME="$TMP/home2" RESUME_PICKER_FORCE_MENU=1 bash -c '. scripts/resume-shim.sh; claude -r' <<< "2")"; check "bash: picker dedupes transcript dirs (CLAUDE_CONFIG_DIR=~/.claude listed once)" "$([ "${out#*STUB claude --resume $REG_ID}" = "$out" ]; echo $?)"
 
 # --- Setup script: install twice, uninstall, profiles restored byte-identically ---
 PROF="$TMP/home/.bashrc"
@@ -116,6 +127,8 @@ if [ -n "$PS_BIN" ]; then
   out="$(ps_pick "" -r --extra arg)";                                       check "powershell: bare -r empty input -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r --extra arg}" != "$out" ]; echo $?)"
   out="$(ps_pick zz9 -r)";                                                  check "powershell: bare -r invalid input -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r}" != "$out" ]; echo $?)"
   out="$(ps_pick 99 -r)";                                                   check "powershell: bare -r out-of-range number -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r}" != "$out" ]; echo $?)"
+  # Literal -r after the "--" end-of-options separator: positional argument, no picker.
+  out="$(ps_pick 1 -- -r)";                                                 check "powershell: literal -r after -- -> real claude, no picker" "$([ "${out#*STUB claude-cmd -- -r}" != "$out" ]; echo $?)"
   # Non-tty stdin (redirected, menu NOT forced): old shim behavior, original args.
   out="$(: | "$PS_BIN" -NoProfile -Command "\$env:PATH='$(cygpath -w "$TMP/bin" 2>/dev/null || echo "$TMP/bin")'+';'+\$env:PATH; \$env:CLAUDE_CONFIG_DIR='$(cygpath -w "$TMP/config" 2>/dev/null || echo "$TMP/config")'; \$env:HOME='$(cygpath -w "$TMP/home" 2>/dev/null || echo "$TMP/home")'; . ./scripts/resume-shim.ps1; claude -r --extra arg")"; check "powershell: bare -r non-tty -> real claude, original args unchanged" "$([ "${out#*STUB claude-cmd -r --extra arg}" != "$out" ]; echo $?)"
 else
