@@ -44,11 +44,13 @@ another harness can connect at any time without starting anything itself. One
 credential caveat: the services run as the LocalSystem account, which cannot read
 Chromium cookie stores, so Chrome users must fall back to the `login.json` file
 described in the
-[README](../README.md#step-2-log-in-to-lumo-in-a-browser) (Firefox users need nothing extra). To set them
+[README](../README.md) (Firefox users need nothing extra). To set them
 up, run `powershell -File gateway/install-supervisor.ps1 -Install` from a checkout of
 this repo and sign out and back in once if asked; to tear them down again, run
 `uninstall.sh` (or pass `-Uninstall` to the same script), which stops and removes both
-services. Linux and macOS have no equivalent yet.
+services. Linux and macOS have no installer, but the same two services can be set up
+by hand from the recipes below: [systemd](#always-on-on-linux-systemd) on Linux,
+[launchd](#always-on-on-macos-launchd) on macOS.
 
 The claude-lumo launcher remains as a fallback: if it finds the services already
 answering on :4000 and :8790 it just uses them; otherwise it starts the gateway itself
@@ -62,6 +64,14 @@ Claude Code can use the gateway without the claude-lumo wrapper. Put this in you
 user-scope settings (`~/.claude/settings.json`), replacing `YOU` with your username and
 `python` with `python3` on macOS and Linux. Paths must be absolute; the `{{PLACEHOLDER}}`
 tokens used inside claude-lumo's own settings do not work in a plain settings file.
+
+On macOS and Linux the path root changes as well as the username: there is no `C:/`.
+Write the paths as `/Users/YOU/...` on macOS or `/home/YOU/...` on Linux. Claude Code
+runs the `apiKeyHelper` command through the system shell (`/bin/sh` on macOS and
+Linux, `cmd` on Windows), so on those systems the tilde form also works:
+`python3 ~/.claude/lumo/gateway/api-key.py ~/.claude-lumo`. The snippet shows the
+absolute form because one shape has to serve every platform, and the Windows shell
+does not expand `~`.
 
 ```json
 {
@@ -105,6 +115,152 @@ environment variables set before the app starts instead of a settings file. The 
 storing it), exports `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and the model aliases,
 then starts the app. Use it as the template for any app that spawns `claude` and cannot
 read a settings file. It lives outside the repo; copy the pattern, not the path.
+
+## Always-on on Linux (systemd)
+
+The Windows services are the primary path, but the two processes themselves are plain
+Node and Python and run anywhere. This recipe mirrors, as user units, exactly what
+`gateway/install-supervisor.ps1` wraps on Windows: the venv `litellm` with
+`--config ... --host 127.0.0.1 --port 4000` (working directory the state dir), and
+`node --no-warnings proxy.mjs` (working directory the `gateway/` directory of your
+claude-lumo checkout). Written from that Windows implementation; not tested on this
+machine (no Linux here), so corrections from Linux users are welcome.
+
+First create an environment file for the master key, so the key is read from
+`master.key` once and never pasted into a unit file:
+
+```sh
+mkdir -p ~/.config/lumo-gateway
+printf 'LITELLM_MASTER_KEY=%s\n' "$(cat ~/.claude-lumo/master.key)" \
+  > ~/.config/lumo-gateway/litellm.env
+chmod 600 ~/.config/lumo-gateway/litellm.env
+```
+
+Then two files in `~/.config/systemd/user/`:
+
+```ini
+# ~/.config/systemd/user/lumo-gateway-litellm.service
+[Unit]
+Description=Lumo LiteLLM gateway (127.0.0.1:4000)
+
+[Service]
+WorkingDirectory=%h/.claude-lumo
+ExecStart=%h/.claude-lumo/litellm-venv/bin/litellm \
+  --config %h/.claude/lumo/gateway/litellm.yaml --host 127.0.0.1 --port 4000
+EnvironmentFile=%h/.config/lumo-gateway/litellm.env
+Environment=PYTHONIOENCODING=utf-8
+Environment=CLAUDE_LUMO_STATE_DIR=%h/.claude-lumo
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```ini
+# ~/.config/systemd/user/lumo-gateway-proxy.service
+[Unit]
+Description=Lumo proxy (127.0.0.1:8790)
+
+[Service]
+WorkingDirectory=%h/.claude/lumo/gateway
+ExecStart=node --no-warnings proxy.mjs
+Environment=CLAUDE_LUMO_STATE_DIR=%h/.claude-lumo
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+`%h` is systemd's specifier for your home directory. If the manager's PATH does not
+include `node`, spell out its absolute path from `command -v node` in `ExecStart`.
+Then:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now lumo-gateway-litellm.service lumo-gateway-proxy.service
+```
+
+User units stop when your last session logs out unless lingering is enabled, so run
+`sudo loginctl enable-linger "$USER"` once for a truly always-on machine.
+
+## Always-on on macOS (launchd)
+
+The same two command lines as LaunchAgents. launchd has no environment-file
+indirection, so the master key must be inside the plist's `EnvironmentVariables`
+dict: paste it there once at install time, from `cat ~/.claude-lumo/master.key`, then
+`chmod 600` the plist so it is exactly as protected as `master.key` itself. Never
+commit or share the edited file. Also written from the Windows implementation; not
+tested on this machine (no macOS here), so corrections from macOS users are welcome.
+launchd does not expand `~`, so every path is spelled out; replace `YOU` with your
+username.
+
+Two files in `~/Library/LaunchAgents/`:
+
+```xml
+<!-- ~/Library/LaunchAgents/ai.lumo.litellm.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.lumo.litellm</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/.claude-lumo/litellm-venv/bin/litellm</string>
+    <string>--config</string>
+    <string>/Users/YOU/.claude/lumo/gateway/litellm.yaml</string>
+    <string>--host</string><string>127.0.0.1</string>
+    <string>--port</string><string>4000</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/YOU/.claude-lumo</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LITELLM_MASTER_KEY</key><string>PASTE THE KEY FROM master.key HERE</string>
+    <key>PYTHONIOENCODING</key><string>utf-8</string>
+    <key>CLAUDE_LUMO_STATE_DIR</key><string>/Users/YOU/.claude-lumo</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+```
+
+```xml
+<!-- ~/Library/LaunchAgents/ai.lumo.proxy.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.lumo.proxy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>--no-warnings</string>
+    <string>proxy.mjs</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/YOU/.claude/lumo/gateway</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CLAUDE_LUMO_STATE_DIR</key><string>/Users/YOU/.claude-lumo</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+```
+
+Find your node with `command -v node` and use that path; Homebrew on Apple silicon puts
+it at `/opt/homebrew/bin/node`. Then load both agents (and again after any edit):
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.lumo.litellm.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.lumo.proxy.plist
+```
+
+To unload them again, replace `bootstrap` with `bootout` in each line.
 
 ## Adding a new harness
 
