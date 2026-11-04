@@ -176,9 +176,11 @@ class Behaviour(unittest.TestCase):
             return f.read()
 
     def start(self, **env_extra):
+        # WATCHDOG_WINSW_ROOT pins the WinSW auto-detection at the temp state
+        # dir: results must not depend on the machine's real ~/.lumoservices.
         env = dict(os.environ, CLAUDE_LUMO_STATE_DIR=self.state,
                    CLAUDE_LUMO_WATCHDOG_INTERVAL="2", WATCHDOG_DRYRUN="1",
-                   WATCHDOG_GRACE="1",
+                   WATCHDOG_GRACE="1", WATCHDOG_WINSW_ROOT=self.state,
                    WATCHDOG_PROXY_URL=self.service.url,
                    WATCHDOG_LITELLM_URL=self.service.url)
         env.update(env_extra)
@@ -216,6 +218,42 @@ class Behaviour(unittest.TestCase):
         text = self.log_text()
         self.assertNotIn("down", text, text)
         self.assertNotIn("relaunching", text, text)
+
+    def test_a_winSW_service_is_reported_not_relaunched(self):
+        """#183: with the service's WinSW dir present, Windows owns the restart
+        and the watchdog only reports the failure."""
+        # Both services are WinSW-managed: neither may be relaunched.
+        for svc in ("LumoGatewayLiteLLM", "LumoGatewayProxy"):
+            os.makedirs(os.path.join(self.state, svc), exist_ok=True)
+        self.start()
+        pidfile = os.path.join(self.state, "watchdog.pid")
+        self.assertTrue(self.wait_for(lambda: os.path.exists(pidfile)))
+        self.service.stop()
+        self.assertTrue(self.wait_for(lambda: "LiteLLM down" in self.log_text()),
+                        self.log_text())
+        text = self.log_text()
+        self.assertIn("WinSW service owns restarts, not relaunching (#183)", text)
+        self.assertNotIn("; relaunching", text)
+
+    def test_respawn_override_zero_disables_relaunching(self):
+        os.makedirs(os.path.join(self.state, "LumoGatewayLiteLLM"), exist_ok=True)
+        self.start(CLAUDE_LUMO_WATCHDOG_RESPAWN="0")
+        pidfile = os.path.join(self.state, "watchdog.pid")
+        self.assertTrue(self.wait_for(lambda: os.path.exists(pidfile)))
+        self.service.stop()
+        self.assertTrue(self.wait_for(lambda: "LiteLLM down" in self.log_text()),
+                        self.log_text())
+        self.assertNotIn("relaunching\n", self.log_text())
+
+    def test_respawn_override_one_forces_relaunch_despite_winsw(self):
+        os.makedirs(os.path.join(self.state, "LumoGatewayLiteLLM"), exist_ok=True)
+        self.start(CLAUDE_LUMO_WATCHDOG_RESPAWN="1")
+        pidfile = os.path.join(self.state, "watchdog.pid")
+        self.assertTrue(self.wait_for(lambda: os.path.exists(pidfile)))
+        self.service.stop()
+        self.assertTrue(self.wait_for(lambda: "relaunching" in self.log_text()),
+                        self.log_text())
+        self.assertNotIn("not relaunching", self.log_text())
 
     def test_recovery_resets_the_backoff(self):
         self.start()
@@ -338,6 +376,20 @@ class WatchdogWiring(unittest.TestCase):
 
     def test_rotation_failure_is_logged_not_swallowed(self):
         self.assertIn("could not rotate", self.src)
+
+    def test_winsw_services_are_not_relaunched(self):
+        """#183: WinSW owns restarts; the watchdog only reports, per service."""
+        self.assertIn("may_respawn()", self.src)
+        self.assertIn("[ ! -d \"$WINSW_ROOT/$1\" ]", self.src)
+        self.assertIn("if may_respawn LumoGatewayProxy; then", self.src)
+        self.assertIn("if may_respawn LumoGatewayLiteLLM; then", self.src)
+        self.assertIn("WinSW service owns restarts, not relaunching (#183)", self.src)
+        # Cookie-expiry (401) handling is unchanged and stays in upstream.mjs.
+        self.assertIn("lives in gateway/upstream.mjs", self.src)
+
+    def test_respawn_decision_has_explicit_overrides(self):
+        self.assertIn("CLAUDE_LUMO_WATCHDOG_RESPAWN", self.src)
+        self.assertIn("WATCHDOG_WINSW_ROOT", self.src)
 
 
 if __name__ == "__main__":

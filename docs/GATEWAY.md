@@ -36,11 +36,25 @@ the model string, pick `lumo-max`.
 **Streaming:** both `/v1/messages` and `/v1/chat/completions` accept `"stream": true`
 and answer with SSE.
 
-**The gateway must be running.** Today it starts when you launch claude-lumo, and the
-watchdog keeps it alive afterwards (see [How it works](../README.md#how-it-works)). A
-standalone, always-on startup arrives in a later change; until then, run
-`claude-lumo -p "reply with pong"` once after boot or after a reboot if a non-Claude
-harness refuses to connect.
+**The gateway must be running.** The primary startup path is the pair of always-on
+Windows services, LumoGatewayLiteLLM and LumoGatewayProxy, that
+[`gateway/install-supervisor.ps1`](../gateway/install-supervisor.ps1) installs with
+WinSW. They start at boot and restart themselves if the underlying process dies, so
+another harness can connect at any time without starting anything itself. One
+credential caveat: the services run as the LocalSystem account, which cannot read
+Chromium cookie stores, so Chrome users must fall back to the `login.json` file
+described in the
+[README](../README.md#step-2-log-in-to-lumo-in-a-browser) (Firefox users need nothing extra). To set them
+up, run `powershell -File gateway/install-supervisor.ps1 -Install` from a checkout of
+this repo and sign out and back in once if asked; to tear them down again, run
+`uninstall.sh` (or pass `-Uninstall` to the same script), which stops and removes both
+services. Linux and macOS have no equivalent yet.
+
+The claude-lumo launcher remains as a fallback: if it finds the services already
+answering on :4000 and :8790 it just uses them; otherwise it starts the gateway itself
+the old way, so a machine without the services still works (see
+[How it works](../README.md#how-it-works)). When the services are present, the watchdog
+stops relaunching processes and only reports problems in its log.
 
 ## Plain Claude Code
 
