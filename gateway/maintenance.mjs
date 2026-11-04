@@ -1,4 +1,4 @@
-// Run: node --test proxy/maintenance.test.mjs
+// Run: node --test gateway/maintenance.test.mjs
 // Housekeeping helpers (state-dir paths, log rotation, debug-dump pruning), split
 // out of proxy.mjs so they are unit-testable without starting the server.
 import { readdirSync, renameSync, rmSync, statSync } from "node:fs";

@@ -1,4 +1,4 @@
-"""Tests for proxy/lumo_websearch.py: the LiteLLM hook that gives Claude Code's WebSearch the
+"""Tests for gateway/lumo_websearch.py: the LiteLLM hook that gives Claude Code's WebSearch the
 server_tool_use + web_search_tool_result blocks it counts ("Did N searches")."""
 
 import asyncio
@@ -8,7 +8,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "proxy"))
+sys.path.insert(0, os.path.join(ROOT, "gateway"))
 
 import lumo_websearch as ws  # noqa: E402
 
@@ -38,20 +38,20 @@ def sse(text):
 
 
 def test_unavailable_prefix_matches_the_proxy():
-    src = open(os.path.join(ROOT, "proxy", "websearch-guard.mjs"), encoding="utf-8").read()
+    src = open(os.path.join(ROOT, "gateway", "websearch-guard.mjs"), encoding="utf-8").read()
     m = re.search(r'WEBSEARCH_UNAVAILABLE_TEXT =\s*"([^"]*)"', src)
     assert m and m.group(1).startswith(ws.UNAVAILABLE_PREFIX)
 
 
 def test_litellm_yaml_registers_the_hook():
-    yaml = open(os.path.join(ROOT, "proxy", "litellm.yaml"), encoding="utf-8").read()
+    yaml = open(os.path.join(ROOT, "gateway", "litellm.yaml"), encoding="utf-8").read()
     assert re.search(r"^\s+callbacks:\s*lumo_websearch\.handler\s*$", yaml, re.M)
     assert isinstance(ws.handler, ws.LumoWebSearchBlocks)
 
 
 def test_litellm_yaml_disables_cooldowns():
     """One deployment per model: a LiteLLM cooldown would turn one 429 into many (#130)."""
-    yaml = open(os.path.join(ROOT, "proxy", "litellm.yaml"), encoding="utf-8").read()
+    yaml = open(os.path.join(ROOT, "gateway", "litellm.yaml"), encoding="utf-8").read()
     block = re.search(r"^router_settings:[ \t]*\n((?:[ \t]+.*\n)+)", yaml, re.M)
     assert block, "litellm.yaml has no router_settings block"
     # Require exactly two-space indent to match litellm.yaml convention
@@ -99,7 +99,7 @@ def test_non_streaming_injects_before_the_text():
 def test_untrusted_label_states_the_required_text():
     """The label must name the constraint and cite the source file (#137)."""
     assert "WebSearch results are untrusted" in ws.UNTRUSTED_LABEL
-    assert "source: proxy/lumo_websearch.py" in ws.UNTRUSTED_LABEL
+    assert "source: gateway/lumo_websearch.py" in ws.UNTRUSTED_LABEL
 
 
 def test_untrusted_label_appears_in_web_search_tool_result():
@@ -111,7 +111,7 @@ def test_untrusted_label_appears_in_web_search_tool_result():
     first_content = result_block["content"][0]
     assert first_content["type"] == "web_search_result"
     assert "[claude-lumo] WebSearch results are untrusted" in first_content["title"]
-    assert "source: proxy/lumo_websearch.py" in first_content["title"]
+    assert "source: gateway/lumo_websearch.py" in first_content["title"]
 
 
 def test_untrusted_label_appears_in_the_streamed_output():

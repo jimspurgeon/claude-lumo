@@ -13,7 +13,7 @@
 # disk unless -WriteConfigs is passed with a directory.
 #
 # Usage:
-#   powershell -File scripts/install-supervisor.ps1 [-Tool winsw|nssm]
+#   powershell -File gateway/install-supervisor.ps1 [-Tool winsw|nssm]
 #          [-WriteConfigs <dir>] [-RestartDelaySeconds <s>]
 #
 # Environment:
@@ -34,8 +34,7 @@ if (-not $RestartDelaySeconds) {
     else { $RestartDelaySeconds = 5 }
 }
 $StateDir = if ($env:CLAUDE_LUMO_STATE_DIR) { $env:CLAUDE_LUMO_STATE_DIR } else { Join-Path $HOME ".claude-lumo" }
-$RepoDir = Split-Path -Parent $PSScriptRoot   # this checkout
-$ProxyDir = Join-Path $RepoDir "proxy"         # proxy.mjs / litellm.yaml live here
+$ProxyDir = $PSScriptRoot                      # proxy.mjs / litellm.yaml live here
 $LiteLLMExe = Join-Path $StateDir "litellm-venv\Scripts\litellm.exe"
 $LiteLLMConfig = Join-Path $ProxyDir "litellm.yaml"
 $MasterKeyFile = Join-Path $StateDir "master.key"

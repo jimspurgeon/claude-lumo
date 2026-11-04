@@ -1,4 +1,4 @@
-// Run: node --test proxy/sniffer.test.mjs
+// Run: node --test gateway/sniffer.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { errorMetaFrom, upstreamChat, retryText } from "./sniffer.mjs";

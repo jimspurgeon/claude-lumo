@@ -1,4 +1,4 @@
-// Run: node --test proxy/edit-hints.test.mjs
+// Run: node --test gateway/edit-hints.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";

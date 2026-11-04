@@ -1,4 +1,4 @@
-// Run: node --test proxy/proxy-errors.test.mjs
+// Run: node --test gateway/proxy-errors.test.mjs
 // Test proxy uncaughtException/unhandledRejection handlers (#132).
 // We spawn child node processes to avoid binding port 8790 and importing proxy.mjs into the runner.
 import test from "node:test";

@@ -1,4 +1,4 @@
-// Run: node --test proxy/upstream.test.mjs
+// Run: node --test gateway/upstream.test.mjs
 // Tests createUpstream() with fake fetch/credentials: retry policy, 401 token
 // refresh, and that no token value ever reaches errors or log lines.
 import test from "node:test";

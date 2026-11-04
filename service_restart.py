@@ -53,7 +53,7 @@ def platform_name():
 
 def services(install, state, plat):
     """The two services as claude-lumo.sh starts them, proxy first."""
-    proxy_dir = os.path.join(install, "proxy")
+    proxy_dir = os.path.join(install, "gateway")
     venv = os.path.join(state, "litellm-venv")
     litellm = (os.path.join(venv, "Scripts", "litellm.exe") if plat == "windows"
                else os.path.join(venv, "bin", "litellm"))
@@ -239,8 +239,8 @@ def restart_services(install=None, state=None, plat=None, run=run_command, spawn
                      dry_run=False):
     """Restart the proxy, then LiteLLM. True when both answer their health checks again."""
     install, state, plat = install or install_dir(), state or state_dir(), plat or platform_name()
-    if not os.path.isfile(os.path.join(install, "proxy", "proxy.mjs")):
-        out(f"  No claude-lumo install at {install} (no proxy/proxy.mjs), so the proxy and LiteLLM "
+    if not os.path.isfile(os.path.join(install, "gateway", "proxy.mjs")):
+        out(f"  No claude-lumo install at {install} (no gateway/proxy.mjs), so the proxy and LiteLLM "
             f"were left as they are; run service_restart.py --install-dir <install>.")
         return False
     all_ok = True
@@ -394,8 +394,8 @@ def main(argv=None):
                         help="start scripts/watchdog.sh detached (the launcher's path on Windows)")
     args = parser.parse_args(argv)
     install = args.install_dir or install_dir()
-    if not os.path.isfile(os.path.join(install, "proxy", "proxy.mjs")):
-        print(f"No claude-lumo install at {install} (no proxy/proxy.mjs); pass --install-dir.")
+    if not os.path.isfile(os.path.join(install, "gateway", "proxy.mjs")):
+        print(f"No claude-lumo install at {install} (no gateway/proxy.mjs); pass --install-dir.")
         return 1
     if args.start:
         return 0 if start_service(args.start, install=install) else 1

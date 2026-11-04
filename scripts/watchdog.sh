@@ -16,7 +16,7 @@
 # CLAUDE_LUMO_WATCHDOG_INTERVAL overrides the base interval.
 
 D="$HOME/.claude/lumo"
-PROXY="$D/proxy"
+PROXY="$D/gateway"
 S="${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}"
 VENV="$S/litellm-venv"
 LOG_DIR="$S/logs"
@@ -39,7 +39,7 @@ LITELLM_URL="${WATCHDOG_LITELLM_URL:-http://127.0.0.1:4000/health/liveliness}"
 # --- pure helpers, unit-tested through --selftest ---------------------------------------
 
 # rotate_log <path> [max_bytes]: rename to <path>.1 when the file exceeds max_bytes, one
-# generation, overwriting an older .1. Same policy as rotateLog in proxy/maintenance.mjs.
+# generation, overwriting an older .1. Same policy as rotateLog in gateway/maintenance.mjs.
 # A failure is logged (it usually means the file is locked, and staying silent hides why
 # crash evidence is not being rotated) but never fatal.
 rotate_log() {

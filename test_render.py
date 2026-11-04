@@ -115,7 +115,7 @@ class RehostedSessions(unittest.TestCase):
         s = self.settings()
         self.assertEqual(s["env"]["CLAUDE_LUMO"], "1")
         self.assertEqual(s["env"]["CLAUDE_LUMO_LOCAL"], self.personal)
-        self.assertIn(f"scripts/api-key.py {self.state}", s["apiKeyHelper"])
+        self.assertIn(f"gateway/api-key.py {self.state}", s["apiKeyHelper"])
         self.assertTrue(s["statusLine"]["command"].endswith("statusline.py --lumo"))
         self.assertNotIn("CLAUDE_CONFIG_DIR", s["env"])
 
@@ -241,7 +241,7 @@ class RehostedSessions(unittest.TestCase):
                      "Read(~/.claude/.credentials.json)", "Read(~/.claude.json)",
                      "Read(//**/.env)", "Read(//**/.env.*)"):
             self.assertIn(rule, deny)
-        # Browser cookie stores hold the AUTH-<uid> Lumo login the proxy reads (proxy/creds.mjs),
+        # Browser cookie stores hold the AUTH-<uid> Lumo login the proxy reads (gateway/creds.mjs),
         # so they are denied too, on every OS. Windows paths are matched in POSIX form (//c/...).
         for rule in ("Read(//c/Users/*/AppData/**/Cookies)",
                      "Read(//c/Users/*/AppData/**/cookies.sqlite)",
@@ -256,7 +256,7 @@ class RehostedSessions(unittest.TestCase):
         os.makedirs(self.state)
         with open(os.path.join(self.state, "master.key"), "w") as f:
             f.write("sk-lumo-test\n")
-        self.assertEqual(run_script("scripts/api-key.py", [self.state]).stdout, "sk-lumo-test\n")
+        self.assertEqual(run_script("gateway/api-key.py", [self.state]).stdout, "sk-lumo-test\n")
 
     def test_statusline_flag_shows_lumo_without_the_env(self):
         env = {"CLAUDE_LUMO_STATE_DIR": self.state, "CLAUDE_LUMO_LOCAL": self.personal,

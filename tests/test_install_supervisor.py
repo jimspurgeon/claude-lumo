@@ -13,7 +13,7 @@ import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPT = os.path.join(ROOT, "scripts", "install-supervisor.ps1")
+SCRIPT = os.path.join(ROOT, "gateway", "install-supervisor.ps1")
 
 
 class TestSourceSyntax(unittest.TestCase):
@@ -122,7 +122,7 @@ class TestPastedArguments(unittest.TestCase):
             # The whole LiteLLM argument must arrive as ONE argument with the
             # inner double quotes preserved.
             expected_arg = '--config "%s" --host 127.0.0.1 --port 4000' % (
-                os.path.join(ROOT, "proxy", "litellm.yaml"))
+                os.path.join(ROOT, "gateway", "litellm.yaml"))
             self.assertEqual(args[3], expected_arg)
 
             proxy_line = self._extract(stdout, "nssm install LumoProxy")

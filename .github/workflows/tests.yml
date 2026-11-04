@@ -44,4 +44,4 @@ jobs:
       - name: Python tests
         run: python -m pytest -q
       - name: Proxy tests
-        run: node --test proxy/*.test.mjs
+        run: node --test gateway/*.test.mjs

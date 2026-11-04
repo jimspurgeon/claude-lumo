@@ -192,10 +192,10 @@ def write(path, text):
 
 
 def context_tokens(lumo):
-    """The proxy's token window (CONTEXT_TOKENS in proxy/context-fit.mjs), the one value Claude
+    """The proxy's token window (CONTEXT_TOKENS in gateway/context-fit.mjs), the one value Claude
     Code's compaction window must stay below. Falls back to 131072 with a warning when the file
     or the constant cannot be found (renamed or restructured without this renderer catching up)."""
-    path = os.path.join(lumo, "proxy", "context-fit.mjs")
+    path = os.path.join(lumo, "gateway", "context-fit.mjs")
     try:
         with open(path, encoding="utf-8") as f:
             m = re.search(r"\bCONTEXT_TOKENS\s*=\s*(\d+)", f.read())

@@ -1,4 +1,4 @@
-// Run: node --test proxy/maintenance.test.mjs
+// Run: node --test gateway/maintenance.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { appendFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, statSync, utimesSync } from "node:fs";

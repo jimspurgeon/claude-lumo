@@ -789,10 +789,11 @@ class TestStaleLumoLogs:
 
 class TestStaleDebugDumps:
     """Tests for stale_debug_dumps: <state>/debug/ (since #134) plus the old
-    repo-relative proxy/debug/ spill for proxies not yet restarted."""
+    repo-relative proxy/debug/ and gateway/debug/ spills for installs not
+    yet restarted."""
 
     def test_stale_dump_files_and_folders(self, tmp_path):
-        debug_dir = tmp_path / "proxy" / "debug"
+        debug_dir = tmp_path / "gateway" / "debug"
         debug_dir.mkdir(parents=True)
         old_time = time.time() - 40 * 86400
         now = time.time()
@@ -841,17 +842,21 @@ class TestStaleDebugDumps:
         """Old repo spill and new state-dir dumps are both listed."""
         state_debug = tmp_path / "state" / "debug"
         state_debug.mkdir(parents=True)
-        repo_debug = tmp_path / "repo" / "proxy" / "debug"
-        repo_debug.mkdir(parents=True)
+        repo_proxy_debug = tmp_path / "repo" / "proxy" / "debug"
+        repo_proxy_debug.mkdir(parents=True)
+        repo_gateway_debug = tmp_path / "repo" / "gateway" / "debug"
+        repo_gateway_debug.mkdir(parents=True)
         old_time = time.time() - 40 * 86400
-        for f in state_debug / "cap-new.txt", repo_debug / "cap-old.txt":
+        for f in (state_debug / "cap-new.txt", repo_proxy_debug / "cap-old.txt",
+                  repo_gateway_debug / "cap-gw.txt"):
             f.write_text("x")
             os.utime(str(f), (old_time, old_time))
 
         monkeypatch.setenv("CLAUDE_LUMO_STATE_DIR", str(tmp_path / "state"))
         result = stale_debug_dumps(30, repo_root=str(tmp_path / "repo"))
         assert sorted(r[1] for r in result) == sorted(
-            [str(state_debug / "cap-new.txt"), str(repo_debug / "cap-old.txt")])
+            [str(state_debug / "cap-new.txt"), str(repo_proxy_debug / "cap-old.txt"),
+             str(repo_gateway_debug / "cap-gw.txt")])
 
 
 class TestStaleConfigStores:

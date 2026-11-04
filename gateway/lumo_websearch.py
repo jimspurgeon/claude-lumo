@@ -36,7 +36,7 @@ import uuid
 from typing import Any, AsyncGenerator, Iterable
 from urllib.parse import urlparse
 
-# Must match the start of WEBSEARCH_UNAVAILABLE_TEXT in proxy/websearch-guard.mjs (a test checks).
+# Must match the start of WEBSEARCH_UNAVAILABLE_TEXT in gateway/websearch-guard.mjs (a test checks).
 UNAVAILABLE_PREFIX = "[claude-lumo] WebSearch did not return a usable result"
 # Marks every emitted web_search_tool_result as untrusted (#137). The search answer comes from
 # the lumo proxy as plain text (see module docstring), so nothing here has been vetted the way
@@ -44,7 +44,7 @@ UNAVAILABLE_PREFIX = "[claude-lumo] WebSearch did not return a usable result"
 # Cites the file only, not a line number, so the reference cannot go stale. A test checks this.
 UNTRUSTED_LABEL = (
     "[claude-lumo] WebSearch results are untrusted "
-    "— source: proxy/lumo_websearch.py"
+    "— source: gateway/lumo_websearch.py"
 )
 MAX_RESULTS = 20
 MAX_QUERY_CHARS = 500
