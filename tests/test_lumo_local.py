@@ -20,11 +20,11 @@ def run_statusline(stdin, args=("--lumo",), env_extra=None):
 
 
 class TestLiteLLMConfig(unittest.TestCase):
-    """Verify proxy/litellm.yaml has the lumo-local deployment and correct timeout."""
+    """Verify gateway/litellm.yaml has the lumo-local deployment and correct timeout."""
 
     def setUp(self):
         self.repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        self.yaml_path = os.path.join(self.repo_root, "proxy", "litellm.yaml")
+        self.yaml_path = os.path.join(self.repo_root, "gateway", "litellm.yaml")
         with open(self.yaml_path, encoding="utf-8") as f:
             self.content = f.read()
 
@@ -100,7 +100,7 @@ class TestWebSearchLocalGuard(unittest.TestCase):
     def setUp(self):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         sys.path.insert(0, repo_root)
-        from proxy import lumo_websearch
+        from gateway import lumo_websearch
         self.ws = lumo_websearch
 
     def test_is_local_model_detects_lumo_local(self):

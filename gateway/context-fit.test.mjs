@@ -1,4 +1,4 @@
-// Run: node --test proxy/context-fit.test.mjs
+// Run: node --test gateway/context-fit.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CONTEXT_TOKENS, createContextFit, DEFAULT_BYTES_PER_TOKEN, MIN_OUTPUT_TOKENS } from "./context-fit.mjs";

@@ -12,7 +12,7 @@ a done marker exists, or (allowlist mode) the project is outside the allowlist f
 Stores enumerated: projects/<project>/<session>.jsonl and folders, session-env/, file-history/,
 tasks/, history.jsonl (matching lines only), Lumo state logs, temp scratch (claude-* under
 CLAUDE_CODE_TMPDIR or TEMP), stale proxy debug dumps (moved to <state>/debug/ in #134, old
-repo-relative proxy/debug/ still collected). Settings,
+repo-relative proxy/debug/ and gateway/debug/ still collected). Settings,
 credentials, memory and config are never touched:
 a project wipe keeps projects/<project>/memory/ and deletes the rest of that project folder.
 Orca data is report-only: the wipe output lists what Orca keeps and how to clear it by hand.
@@ -592,8 +592,8 @@ def stale_lumo_logs(days):
 
 
 def stale_debug_dumps(days, repo_root=None):
-    """Entries in the proxy's debug conversation dumps older than the cutoff.
-    #134 moved the dumps from the repo's proxy/debug/ into the Lumo state dir
+    """Entries in the gateway's debug conversation dumps older than the cutoff.
+    #134 moved the dumps from the repo's proxy/debug/ (now gateway/debug/) into the Lumo state dir
     (<state>/debug/); the old repo-relative spill is still collected for
     machines that have not restarted the proxy yet."""
     roots = []
@@ -601,9 +601,10 @@ def stale_debug_dumps(days, repo_root=None):
     if os.path.isdir(state_debug) and not is_any_link(state_debug):
         roots.append(state_debug)
     root = repo_root or os.path.dirname(os.path.abspath(__file__))
-    debug_dir = os.path.join(root, "proxy", "debug")
-    if os.path.isdir(debug_dir) and not is_any_link(debug_dir):
-        roots.append(debug_dir)
+    for legacy in ("proxy", "gateway"):
+        debug_dir = os.path.join(root, legacy, "debug")
+        if os.path.isdir(debug_dir) and not is_any_link(debug_dir):
+            roots.append(debug_dir)
     cutoff = time.time() - days * 86400
     out = []
     for debug_dir in roots:

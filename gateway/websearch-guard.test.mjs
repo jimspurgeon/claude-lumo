@@ -1,4 +1,4 @@
-// Run: node --test proxy/websearch-guard.test.mjs
+// Run: node --test gateway/websearch-guard.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { isWebSearchRequest, webSearchUnavailable, WEBSEARCH_UNAVAILABLE_TEXT } from "./websearch-guard.mjs";

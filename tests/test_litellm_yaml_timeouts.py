@@ -1,4 +1,4 @@
-"""Tests for proxy/litellm.yaml per-deployment timeout/retry settings (#133).
+"""Tests for gateway/litellm.yaml per-deployment timeout/retry settings (#133).
 
 Two layers:
 - Pure YAML checks (run everywhere, including CI, which installs pytest and pyyaml but
@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-YAML_PATH = os.path.join(ROOT, "proxy", "litellm.yaml")
+YAML_PATH = os.path.join(ROOT, "gateway", "litellm.yaml")
 
 EXPECTED_DEPLOYMENTS = 5  # lumo-lite, *haiku*, lumo-max, lumo-local, *
 SPEC_RANGES = {

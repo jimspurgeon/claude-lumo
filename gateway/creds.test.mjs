@@ -1,4 +1,4 @@
-// Run: node --test proxy/creds.test.mjs
+// Run: node --test gateway/creds.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";

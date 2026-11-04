@@ -1,4 +1,4 @@
-// Run: node --test proxy/tool-guard.test.mjs
+// Run: node --test gateway/tool-guard.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createToolGuard, escapeDone } from "./tool-guard.mjs";

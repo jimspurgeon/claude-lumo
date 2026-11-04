@@ -37,7 +37,7 @@ const log = (m) => { try { appendFileSync(LOG, `${new Date().toISOString()} ${m}
 
 // Fatal-exit handlers (#132): after an uncaughtException/unhandledRejection it is not safe
 // to keep serving (Node docs), so log synchronously and exit non-zero so a supervisor
-// (scripts/install-supervisor.ps1) can restart us. writeFileSync with flag "a" appends without
+// (gateway/install-supervisor.ps1) can restart us. writeFileSync with flag "a" appends without
 // buffering; the try/catch guarantees exit(1) even when the log write itself fails.
 const fatal = (kind, err) => {
   try {

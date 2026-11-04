@@ -9,6 +9,7 @@ set -e
 
 echo "Stopping claude-lumo background processes (proxy, LiteLLM)..."
 pkill -f "claude.lumo/proxy/proxy.mjs" 2>/dev/null || true
+pkill -f "claude.lumo/gateway/proxy.mjs" 2>/dev/null || true
 pkill -f "claude-lumo/litellm-venv" 2>/dev/null || true
 
 # Remove the resume shim profile lines first (before deleting ~/.claude/lumo).

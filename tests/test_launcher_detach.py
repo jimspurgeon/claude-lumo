@@ -30,8 +30,8 @@ esac
 @pytest.mark.skipif(sys.platform != "win32", reason="the detached start is the Windows path")
 def test_windows_launcher_starts_services_detached(tmp_path):
     lumo = tmp_path / ".claude" / "lumo"
-    (lumo / "proxy").mkdir(parents=True)
-    (lumo / "proxy" / "proxy.mjs").write_text("", encoding="utf-8")
+    (lumo / "gateway").mkdir(parents=True)
+    (lumo / "gateway" / "proxy.mjs").write_text("", encoding="utf-8")
     (lumo / "service_restart.py").write_text(FAKE_RESTART, encoding="utf-8")
     (lumo / "render.py").write_text("import sys; sys.exit(1)\n", encoding="utf-8")
     state = tmp_path / "state"
@@ -52,7 +52,7 @@ def test_windows_launcher_starts_services_detached(tmp_path):
 @pytest.mark.skipif(sys.platform != "win32", reason="the detached start is the Windows path")
 def test_windows_launcher_leaves_healthy_services_alone(tmp_path):
     lumo = tmp_path / ".claude" / "lumo"
-    (lumo / "proxy").mkdir(parents=True)
+    (lumo / "gateway").mkdir(parents=True)
     (lumo / "service_restart.py").write_text(FAKE_RESTART, encoding="utf-8")
     (lumo / "render.py").write_text("import sys; sys.exit(1)\n", encoding="utf-8")
     state = tmp_path / "state"

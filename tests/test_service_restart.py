@@ -99,10 +99,10 @@ class Parsing(unittest.TestCase):
         self.assertEqual([s["port"] for s in svcs], [8790, 4000])  # proxy first
         proxy, litellm = svcs
         self.assertEqual(proxy["argv"], ["node", "--no-warnings", "proxy.mjs"])
-        self.assertEqual(proxy["cwd"], os.path.join("/inst", "proxy"))
+        self.assertEqual(proxy["cwd"], os.path.join("/inst", "gateway"))
         self.assertEqual(proxy["health"], "http://127.0.0.1:8790/v1/health")
         self.assertEqual(litellm["argv"][0], os.path.join("/state", "litellm-venv", "Scripts", "litellm.exe"))
-        self.assertEqual(litellm["argv"][1:], ["--config", os.path.join("/inst", "proxy", "litellm.yaml"),
+        self.assertEqual(litellm["argv"][1:], ["--config", os.path.join("/inst", "gateway", "litellm.yaml"),
                                                "--host", "127.0.0.1", "--port", "4000"])
         self.assertEqual(litellm["log"], os.path.join("/state", "litellm.log"))
         self.assertEqual(litellm["cwd"], "/state")  # never the caller's folder
@@ -182,8 +182,8 @@ class RestartServices(unittest.TestCase):
         with open(os.path.join(self.state, "master.key"), "w", encoding="utf-8") as f:
             f.write("sk-test\n")
         self.install = os.path.join(self.tmp.name, "lumo")
-        os.makedirs(os.path.join(self.install, "proxy"))
-        open(os.path.join(self.install, "proxy", "proxy.mjs"), "w").close()
+        os.makedirs(os.path.join(self.install, "gateway"))
+        open(os.path.join(self.install, "gateway", "proxy.mjs"), "w").close()
 
     def world(self, **kw):
         return World(install=self.install, **kw)
@@ -197,7 +197,7 @@ class RestartServices(unittest.TestCase):
         self.assertEqual(self.kinds(w), [("stop", 111), ("start", 8790), ("stop", 222), ("start", 4000)])
         proxy, litellm = [e for e in w.events if e[0] == "start"]
         self.assertEqual(proxy[2], ("node", "--no-warnings", "proxy.mjs"))
-        self.assertEqual(proxy[3], os.path.join(self.install, "proxy"))
+        self.assertEqual(proxy[3], os.path.join(self.install, "gateway"))
         self.assertEqual(litellm[3], self.state)
         self.assertEqual(litellm[4], "sk-test")  # LITELLM_MASTER_KEY from <state>/master.key
         self.assertEqual(litellm[5], os.path.join(self.state, "litellm.log"))
@@ -426,8 +426,8 @@ class StartService(unittest.TestCase):
         with open(os.path.join(self.state, "master.key"), "w", encoding="utf-8") as f:
             f.write("sk-test\n")
         self.install = os.path.join(self.tmp.name, "lumo")
-        os.makedirs(os.path.join(self.install, "proxy"))
-        open(os.path.join(self.install, "proxy", "proxy.mjs"), "w").close()
+        os.makedirs(os.path.join(self.install, "gateway"))
+        open(os.path.join(self.install, "gateway", "proxy.mjs"), "w").close()
         self.calls, self.out = [], []
 
     def spawn(self, argv, cwd=None, env=None, log=None):
@@ -440,7 +440,7 @@ class StartService(unittest.TestCase):
     def test_proxy_starts_like_the_launcher(self):
         self.assertTrue(self.start("proxy"))
         self.assertEqual(self.calls, [(("node", "--no-warnings", "proxy.mjs"),
-                                       os.path.join(self.install, "proxy"), None, None)])
+                                       os.path.join(self.install, "gateway"), None, None)])
 
     def test_litellm_gets_key_log_and_state_folder(self):
         self.assertTrue(self.start("litellm"))
@@ -499,8 +499,8 @@ class SpawnWatchdog(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.state = self.tmp.name
         self.install = os.path.join(self.tmp.name, "lumo")
-        os.makedirs(os.path.join(self.install, "proxy"))
-        open(os.path.join(self.install, "proxy", "proxy.mjs"), "w").close()
+        os.makedirs(os.path.join(self.install, "gateway"))
+        open(os.path.join(self.install, "gateway", "proxy.mjs"), "w").close()
         self.out = []
 
     def spawn(self, argv, cwd=None, env=None, log=None):
