@@ -18,7 +18,11 @@ STALE_DIR_REF = re.compile(r"\bproxy/[\w.-]+")
 
 # Files entirely exempt: historical text (release notes), the litellm[proxy]
 # pins (a package extra, not a directory) and the AGPL's "a proxy" clause.
-EXEMPT_FILE_PREFIXES = ("docs/release-notes", "requirements", "LICENSE")
+# This test's own file is exempt too: its own comments and whitelist literals
+# mention the very paths it guards against.
+EXEMPT_FILE_PREFIXES = (
+    "docs/release-notes", "requirements", "LICENSE", "tests/test_gateway_paths.py",
+)
 
 # Lines still allowed to mention proxy/<something>, per file, with the reason:
 #  - uninstall.sh: pkill the old-layout processes too (#183 keeps legacy).
@@ -29,7 +33,7 @@ EXEMPT_FILE_PREFIXES = ("docs/release-notes", "requirements", "LICENSE")
 ALLOWED_LINES = {
     "uninstall.sh": ('pkill -f "claude.lumo/proxy/proxy.mjs"',
                      "# Stops the local proxy/LiteLLM"),
-    "wipe.py": ("old", "repo-relative proxy/debug/",
+    "wipe.py": ("repo-relative proxy/debug/",
                 "repo's proxy/debug/"),
     "tests/test_wipe.py": ("proxy/debug/ and gateway/debug/",
                            'tmp_path / "repo" / "proxy" / "debug"'),
