@@ -1,10 +1,23 @@
 #!/bin/bash
-# watchdog.sh: keep the Lumo stack alive after launch (issue #171).
+# watchdog.sh: monitor the Lumo stack after launch (issues #171, #183).
 #
-# Probes the proxy (:8790) and LiteLLM (:4000) every $INTERVAL seconds and relaunches
-# whichever one died, the same way claude-lumo.sh does, with exponential backoff so a
-# crash-looping service cannot hammer the machine. It never kills or restarts a healthy
-# service, and it never touches a port other than those two.
+# Probes the proxy (:8790) and LiteLLM (:4000) every $INTERVAL seconds and
+# relaunches whichever one died, the same way claude-lumo.sh does, with
+# exponential backoff so a crash-looping service cannot hammer the machine.
+# It never kills or restarts a healthy service, and it never touches a port
+# other than those two.
+#
+# #183: when the gateway runs as the WinSW services (LumoGatewayLiteLLM,
+# LumoGatewayProxy; installed by gateway/install-supervisor.ps1), Windows
+# itself owns restarting them (onfailure/restart), so the watchdog stops
+# relaunching a service whose WinSW directory (~/.lumoservices/<id>) exists
+# and only reports the failure in this log. That keeps one supervisor per
+# service instead of two fighting over it. Cookie-expiry (401) handling is
+# unaffected: it lives in gateway/upstream.mjs, which re-reads credentials and
+# retries, exactly as before. Override the respawn decision with
+# CLAUDE_LUMO_WATCHDOG_RESPAWN: "1" forces the old relaunch-everything
+# behaviour, "0" disables relaunching entirely (report-only watchdog);
+# unset (the default) auto-detects per service as described above.
 #
 # Singleton: a pidfile in the state dir; a second invocation exits 0 immediately.
 # claude-lumo.sh starts this at launch unless CLAUDE_LUMO_WATCHDOG=0.
@@ -23,6 +36,7 @@ LOG_DIR="$S/logs"
 WATCHDOG_LOG="$LOG_DIR/watchdog.log"
 PIDFILE="$S/watchdog.pid"
 LITELLM_LOG="$S/litellm.log"
+WINSW_ROOT="${WATCHDOG_WINSW_ROOT:-$HOME/.lumoservices}"   # per-service WinSW dirs (#183); override for tests
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) LITELLM="$VENV/Scripts/litellm.exe"; PY=python; WIN=1; native() { cygpath -m "$1"; };;
@@ -84,6 +98,18 @@ log_event() {
 # Cheap liveness probe: HTTP 200 only, 2s timeout, same check the launcher uses.
 probe_ok() {
   [ "$(curl -s -o /dev/null -m 2 -w '%{http_code}' "$1" 2>/dev/null)" = "200" ]
+}
+
+# may_respawn <winsw-dir-name>: may this watchdog relaunch this service?
+# #183: a service whose WinSW dir exists is restarted by Windows itself
+# (onfailure/restart), so the watchdog only reports it. The explicit override
+# wins either way: 1 = always relaunch, 0 = never (report-only).
+may_respawn() {
+  case "${CLAUDE_LUMO_WATCHDOG_RESPAWN:-}" in
+    1) return 0;;
+    0) return 1;;
+  esac
+  [ ! -d "$WINSW_ROOT/$1" ]
 }
 
 start_proxy() {
@@ -153,9 +179,13 @@ main() {
       consec_proxy=0
     else
       consec_proxy=$((consec_proxy + 1))
-      log_event "proxy down at $PROXY_URL (consecutive failures: $consec_proxy); relaunching"
-      start_proxy
-      grace_proxy=$((now + GRACE))
+      if may_respawn LumoGatewayProxy; then
+        log_event "proxy down at $PROXY_URL (consecutive failures: $consec_proxy); relaunching"
+        start_proxy
+        grace_proxy=$((now + GRACE))
+      else
+        log_event "proxy down at $PROXY_URL (consecutive failures: $consec_proxy); WinSW service owns restarts, not relaunching (#183)"
+      fi
     fi
 
     # LiteLLM on :4000. Never /health, which bills tokens.
@@ -166,9 +196,13 @@ main() {
       consec_litellm=0
     else
       consec_litellm=$((consec_litellm + 1))
-      log_event "LiteLLM down at $LITELLM_URL (consecutive failures: $consec_litellm); relaunching"
-      start_litellm
-      grace_litellm=$((now + GRACE))
+      if may_respawn LumoGatewayLiteLLM; then
+        log_event "LiteLLM down at $LITELLM_URL (consecutive failures: $consec_litellm); relaunching"
+        start_litellm
+        grace_litellm=$((now + GRACE))
+      else
+        log_event "LiteLLM down at $LITELLM_URL (consecutive failures: $consec_litellm); WinSW service owns restarts, not relaunching (#183)"
+      fi
     fi
 
     if [ "$consec_proxy" -ge "$consec_litellm" ]; then

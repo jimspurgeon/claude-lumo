@@ -23,11 +23,11 @@ class TestSourceSyntax(unittest.TestCase):
         with open(SCRIPT, encoding="utf-8") as f:
             src = f.read()
         self.assertIn(
-            "nssm install LumoLiteLLM '$LiteLLMExeResolved' "
+            "nssm install LumoGatewayLiteLLM '$LiteLLMExeResolved' "
             "'--config \"$LiteLLMConfigResolved\" --host 127.0.0.1 --port 4000'",
             src,
         )
-        self.assertIn("nssm install LumoProxy 'node' '--no-warnings proxy.mjs'", src)
+        self.assertIn("nssm install LumoGatewayProxy 'node' '--no-warnings proxy.mjs'", src)
 
     def test_winsw_foreach_body_lines_use_single_quoted_write_output(self):
         """The WinSW foreach-body Write-Output lines use single quotes (#143)."""
@@ -94,7 +94,7 @@ class TestPastedArguments(unittest.TestCase):
         lines = stdout.splitlines()
         start = None
         for i, line in enumerate(lines):
-            if line.strip() == "foreach ($s in 'LumoLiteLLM','LumoProxy') {":
+            if line.strip() == "foreach ($s in 'LumoGatewayLiteLLM','LumoGatewayProxy') {":
                 start = i
                 break
         if start is None:
@@ -111,10 +111,10 @@ class TestPastedArguments(unittest.TestCase):
             state_dir = os.path.join(temp_dir, "lum o state")
             stdout = self._generate(state_dir, "nssm")
 
-            lite_line = self._extract(stdout, "nssm install LumoLiteLLM")
+            lite_line = self._extract(stdout, "nssm install LumoGatewayLiteLLM")
             args = self._paste_through_stub(temp_dir, lite_line)
             self.assertEqual(args[0], "install")
-            self.assertEqual(args[1], "LumoLiteLLM")
+            self.assertEqual(args[1], "LumoGatewayLiteLLM")
             # Exe path with spaces must arrive as ONE argument.
             self.assertEqual(args[2], os.path.join(state_dir,
                                                     "litellm-venv", "Scripts",
@@ -125,10 +125,10 @@ class TestPastedArguments(unittest.TestCase):
                 os.path.join(ROOT, "gateway", "litellm.yaml"))
             self.assertEqual(args[3], expected_arg)
 
-            proxy_line = self._extract(stdout, "nssm install LumoProxy")
+            proxy_line = self._extract(stdout, "nssm install LumoGatewayProxy")
             pargs = self._paste_through_stub(temp_dir, proxy_line)
             self.assertEqual(pargs[0], "install")
-            self.assertEqual(pargs[1], "LumoProxy")
+            self.assertEqual(pargs[1], "LumoGatewayProxy")
             self.assertEqual(pargs[2], "node")
             self.assertEqual(pargs[3], "--no-warnings proxy.mjs")
         finally:
@@ -186,7 +186,7 @@ class TestPastedArguments(unittest.TestCase):
 
             # New-Item receives: -ItemType Directory -Force <path>. The
             # space-containing logs path must arrive as ONE argument.
-            for svc, entry in zip(("LumoLiteLLM", "LumoProxy"), newitem):
+            for svc, entry in zip(("LumoGatewayLiteLLM", "LumoGatewayProxy"), newitem):
                 args = entry[len("NEWITEM:"):].split("|")
                 self.assertIn("-ItemType", args)
                 self.assertIn("Directory", args)
@@ -198,7 +198,7 @@ class TestPastedArguments(unittest.TestCase):
 
             # Invoke-WebRequest receives the URI and -OutFile <path>; the
             # space-containing exe path must arrive as ONE argument.
-            for svc, entry in zip(("LumoLiteLLM", "LumoProxy"), webreq):
+            for svc, entry in zip(("LumoGatewayLiteLLM", "LumoGatewayProxy"), webreq):
                 args = entry[len("WEBREQ:"):].split("|")
                 self.assertIn(
                     "https://github.com/winsw/winsw/releases/download/"
@@ -211,6 +211,92 @@ class TestPastedArguments(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
+class TestInstallMode(unittest.TestCase):
+    """-Install in offline test mode (LUMO_INSTALL_SUPERVISOR_TEST=1): the XMLs
+    land in LUMO_SERVICES_DIR with a placeholder key, and the script exits
+    before probing ports, downloading WinSW, or touching the service manager
+    (#183). Nothing here installs, starts or binds anything live."""
+
+    def _install_offline(self, services_dir, state_dir):
+        env = dict(os.environ, LUMO_INSTALL_SUPERVISOR_TEST="1",
+                   LUMO_SERVICES_DIR=services_dir,
+                   CLAUDE_LUMO_STATE_DIR=state_dir)
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", SCRIPT, "-Install"],
+            capture_output=True, text=True, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout
+
+    def test_offline_install_writes_both_service_xmls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            services = os.path.join(tmp, "services")
+            stdout = self._install_offline(services, os.path.join(tmp, "state"))
+            self.assertIn("stopping before download/install/start", stdout)
+            for svc in ("LumoGatewayLiteLLM", "LumoGatewayProxy"):
+                path = os.path.join(services, svc, svc + ".xml")
+                with open(path, encoding="utf-8-sig") as f:
+                    xml = f.read()
+                self.assertIn("<id>%s</id>" % svc, xml)
+                self.assertIn("<startmode>Automatic</startmode>", xml)
+                self.assertIn('<onfailure action="restart"', xml)
+                self.assertIn('<log mode="roll-by-size">', xml)
+                # No XML, no log line, may carry a real master key.
+                self.assertNotIn("PLACEHOLDER-TEST-KEY", stdout)
+            # The placeholder key goes into the LiteLLM XML only.
+            litellm_xml = os.path.join(services, "LumoGatewayLiteLLM",
+                                       "LumoGatewayLiteLLM.xml")
+            with open(litellm_xml, encoding="utf-8-sig") as f:
+                self.assertIn("PLACEHOLDER-TEST-KEY", f.read())
+            proxy_xml = os.path.join(services, "LumoGatewayProxy",
+                                     "LumoGatewayProxy.xml")
+            with open(proxy_xml, encoding="utf-8-sig") as f:
+                self.assertNotIn("LITELLM_MASTER_KEY", f.read())
+
+    def test_offline_install_redirects_profile_and_state_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            services = os.path.join(tmp, "services")
+            state = os.path.join(tmp, "state dir with spaces")
+            self._install_offline(services, state)
+            for svc in ("LumoGatewayLiteLLM", "LumoGatewayProxy"):
+                path = os.path.join(services, svc, svc + ".xml")
+                with open(path, encoding="utf-8-sig") as f:
+                    xml = f.read()
+                # LocalSystem services get the installing user's profile paths
+                # so cookie discovery and os.homedir() still resolve (#183).
+                self.assertIn('name="CLAUDE_LUMO_STATE_DIR" value="%s"' % state, xml)
+                self.assertIn('name="USERPROFILE"', xml)
+                self.assertIn('name="APPDATA"', xml)
+                self.assertIn('name="LOCALAPPDATA"', xml)
+
+    def test_offline_install_keeps_working_dirs_inside_the_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            services = os.path.join(tmp, "services")
+            self._install_offline(services, os.path.join(tmp, "state"))
+            proxy_xml = os.path.join(services, "LumoGatewayProxy",
+                                     "LumoGatewayProxy.xml")
+            with open(proxy_xml, encoding="utf-8-sig") as f:
+                xml = f.read()
+            # Derived from the script's own location ($PSScriptRoot = ROOT/gateway),
+            # so the service keeps running the checkout the script came from (#183).
+            expected = os.path.join(ROOT, "gateway")
+            self.assertIn("<workingdirectory>%s</workingdirectory>" % expected, xml)
+
+    def test_offline_install_downloads_and_installs_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            services = os.path.join(tmp, "services")
+            stdout = self._install_offline(services, os.path.join(tmp, "state"))
+            # Test mode exits before any download, install or start.
+            self.assertNotIn("Downloading WinSW", stdout)
+            self.assertNotIn("Installing service", stdout)
+            self.assertNotIn("Starting service", stdout)
+            # No WinSW exe was fetched or copied into the services tree.
+            for root, _dirs, files in os.walk(services):
+                self.assertNotIn("WinSW.exe", files)
 
 
 if __name__ == "__main__":

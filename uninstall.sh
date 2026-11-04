@@ -1,16 +1,46 @@
 #!/bin/bash
 # uninstall.sh: remove claude-lumo (macOS, Linux, and Windows via Git Bash).
-# Stops the local proxy/LiteLLM if running, then deletes everything claude-lumo
-# added: ~/.claude/lumo, ~/.claude-lumo, and the PATH shims. Plain `claude` is
-# untouched, as are Claude Code settings and login.
-# Not a deletion risk to anything else: it only removes the two claude-lumo
-# folders and the three shim files it created.
+# Stops the local proxy/LiteLLM if running, stops and removes the WinSW
+# services when installed (gateway/install-supervisor.ps1 -Install, #183),
+# then deletes everything claude-lumo added: ~/.claude/lumo, ~/.claude-lumo,
+# ~/.lumoservices, and the PATH shims. Plain `claude` is untouched, as are
+# Claude Code settings and login. Removing Windows services needs an
+# elevated shell; without one the service removal lines are skipped with a
+# warning and the rest of the uninstall still runs.
+# Not a deletion risk to anything else: it only removes the claude-lumo
+# folders and the shim files it created.
 set -e
 
 echo "Stopping claude-lumo background processes (proxy, LiteLLM)..."
 pkill -f "claude.lumo/proxy/proxy.mjs" 2>/dev/null || true
 pkill -f "claude.lumo/gateway/proxy.mjs" 2>/dev/null || true
 pkill -f "claude-lumo/litellm-venv" 2>/dev/null || true
+
+# Remove the WinSW services (gateway/install-supervisor.ps1 -Install, #183).
+# Preferred path: each service's own WinSW exe (stop + uninstall). Fallback
+# when the exes are gone but the services are still registered: sc.exe.
+# Both need an elevated shell on Windows; failures are reported, not fatal,
+# so the rest of the uninstall still runs.
+for id in LumoGatewayLiteLLM LumoGatewayProxy; do
+  exe="$HOME/.lumoservices/$id/WinSW.exe"
+  if [ -f "$exe" ]; then
+    echo "Stopping and removing service $id via its WinSW exe..."
+    "$exe" stop >/dev/null 2>&1 || true
+    "$exe" uninstall >/dev/null 2>&1 || true
+  elif command -v sc >/dev/null 2>&1 && sc query "$id" >/dev/null 2>&1; then
+    echo "Service $id registered but its WinSW exe is gone; trying sc.exe..."
+    sc stop "$id" >/dev/null 2>&1 || true
+    sc delete "$id" >/dev/null 2>&1 || true
+  fi
+done
+# If a service survived (usually no elevation), say so plainly.
+if command -v sc >/dev/null 2>&1; then
+  for id in LumoGatewayLiteLLM LumoGatewayProxy; do
+    sc query "$id" >/dev/null 2>&1 && \
+      echo "Warning: service $id is still registered. Rerun from an elevated shell (or run: sc delete $id)."
+  done
+fi
+rm -rf "$HOME/.lumoservices" 2>/dev/null || true
 
 # Remove the resume shim profile lines first (before deleting ~/.claude/lumo).
 if [ -f "$HOME/.claude/lumo/scripts/resume-shim-setup.sh" ]; then
