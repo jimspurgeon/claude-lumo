@@ -44,7 +44,7 @@ another harness can connect at any time without starting anything itself. One
 credential caveat: the services run as the LocalSystem account, which cannot read
 Chromium cookie stores, so Chrome users must fall back to the `login.json` file
 described in the
-[README](../README.md#step-2-log-in-to-lumo-in-a-browser) (Firefox users need nothing extra). To set them
+[README](../README.md) (Firefox users need nothing extra). To set them
 up, run `powershell -File gateway/install-supervisor.ps1 -Install` from a checkout of
 this repo and sign out and back in once if asked; to tear them down again, run
 `uninstall.sh` (or pass `-Uninstall` to the same script), which stops and removes both
@@ -65,7 +65,7 @@ user-scope settings (`~/.claude/settings.json`), replacing `YOU` with your usern
 `python` with `python3` on macOS and Linux. Paths must be absolute; the `{{PLACEHOLDER}}`
 tokens used inside claude-lumo's own settings do not work in a plain settings file.
 
-On macOS and Linux the path root changes too, not just the username: there is no `C:/`.
+On macOS and Linux the path root changes as well as the username: there is no `C:/`.
 Write the paths as `/Users/YOU/...` on macOS or `/home/YOU/...` on Linux. Claude Code
 runs the `apiKeyHelper` command through the system shell (`/bin/sh` on macOS and
 Linux, `cmd` on Windows), so on those systems the tilde form also works:
