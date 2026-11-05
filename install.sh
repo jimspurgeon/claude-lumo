@@ -293,6 +293,20 @@ if [ "$OS" = "windows" ]; then
   printf '@echo off\r\n"C:\\Program Files\\Git\\bin\\bash.exe" "%%USERPROFILE%%\\.claude\\lumo\\claude-lumo.sh" %%*\r\n' > "$BIN/claude-lumo.cmd"
 fi
 
+# Point at the always-on services: the gateway can run without the launcher
+# handling startup, and other harnesses can use it too.
+if [ "$OS" = "windows" ]; then
+  echo ""
+  echo "The gateway can also run as always-on Windows services, so any harness can"
+  echo "connect at any time. Install them from an elevated PowerShell with:"
+  echo "  powershell -File ~/.claude/lumo/gateway/install-supervisor.ps1 -Install"
+  echo "Details and the connection facts for other tools: docs/GATEWAY.md in this checkout."
+else
+  echo ""
+  echo "The gateway can also run as always-on services (recipes for Linux and macOS:"
+  echo "systemd, launchd): see docs/GATEWAY.md in this checkout."
+fi
+
 # Separate data (optional): --separate-data writes a marker and runs setup so the launcher
 # exports CLAUDE_CONFIG_DIR on next launch.
 if [ "${1:-}" = "--separate-data" ]; then
