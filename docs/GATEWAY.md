@@ -29,9 +29,13 @@ as a secret: never copy its contents into a settings file, a script, or a bug re
 | `lumo-local` | Local llama.cpp server on 127.0.0.1:8080 (LFM 2.5 24B) | Offline use. Can take minutes per reply, since it runs on the local GPU. |
 
 The full route table, including timeouts, lives in [`gateway/litellm.yaml`](../gateway/litellm.yaml).
-Send a model ID the gateway knows. Other names (including `claude-*` names a harness
-might default to) are not properly mapped yet and may fail; if your client lets you pick
-the model string, pick `lumo-max`.
+Send a model ID the gateway knows. Unknown names, including `claude-*` names a harness
+might default to, do not fail: they fall through to `lumo-max` via the `"*"` wildcard
+route, except names containing `haiku` (e.g. `claude-3-5-haiku-20241022`), which match
+the `"*haiku*"` route first and go to `lumo-lite`. Parameters the upstream does not
+understand (an Anthropic `thinking` block among them) are translated or dropped
+(`drop_params`). This is a fallback, so prefer sending an explicit ID;
+`gateway/interop.test.mjs` locks the behavior in.
 
 **Streaming:** both `/v1/messages` and `/v1/chat/completions` accept `"stream": true`
 and answer with SSE.
@@ -78,8 +82,11 @@ does not expand `~`.
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
     "ANTHROPIC_MODEL": "lumo-max",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "lumo-max",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "lumo-lite",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "lumo-lite",
     "ANTHROPIC_SMALL_FAST_MODEL": "lumo-lite",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "lumo-lite",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   },
   "apiKeyHelper": "python \"C:/Users/YOU/.claude/lumo/gateway/api-key.py\" \"C:/Users/YOU/.claude-lumo\"",
@@ -106,6 +113,12 @@ Two notes. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops non-essential calls 
 Anthropic's own endpoints, which have no business running when traffic goes to the
 gateway. And Claude Code logs a harmless `unrecognized_model` note for `lumo-max` on
 stderr, since the name is not in its built-in model registry; the request still works.
+
+The `DEFAULT_*` variables matter as much as `ANTHROPIC_MODEL`: without them a `/model
+opus` pick, or a subagent whose tier is not pinned, resolves to a built-in `claude-*`
+name and silently burns the max-tier route for a request you meant to be cheap. Map
+every tier explicitly, as above; the launcher's own settings
+(`settings-lumo.json`) use the same mapping.
 
 ## LearnHarness
 
@@ -262,6 +275,25 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.lumo.proxy.plist
 
 To unload them again, replace `bootstrap` with `bootout` in each line.
 
+## gg-coder
+
+gg-coder can use the gateway as-is: it speaks the Anthropic protocol, so it needs
+nothing but the three facts every client needs. Where its settings live depends on the
+install; the values are always these:
+
+- **Base URL:** `http://127.0.0.1:4000` (in gg-coder's provider/API settings)
+- **API key:** the contents of `~/.claude-lumo/master.key`, read at setup time (paste
+  it into gg-coder's key field, or point the key-setting command at the file)
+- **Model:** `lumo-max` (map the smaller tier to `lumo-lite` if gg-coder exposes a
+  separate fast/cheap model slot)
+
+If gg-coder is configured to send an Anthropic `thinking` block
+(`{type: "enabled", budget_tokens: N}`) or a `claude-*` model name, do not work around
+it client-side: both are accepted. The thinking block is translated to a reasoning
+effort for the upstream, and unknown model names fall through to `lumo-max` (or
+`lumo-lite` when the name contains `haiku`; see
+[The contract](#the-contract)).
+
 ## Adding a new harness
 
 Any client needs exactly three facts, all on this page:
@@ -270,8 +302,21 @@ Any client needs exactly three facts, all on this page:
 2. Key source: `~/.claude-lumo/master.key` (bearer credential).
 3. Model ID: one of `lumo-max`, `lumo-lite`, `lumo-local`.
 
-The constraint worth repeating: send a model ID the gateway knows. Some harnesses
-default to `claude-*` model names; those are not mapped yet and the request may fail.
-Set the client's model to `lumo-max` when in doubt. If the harness cannot be configured
-at all, its requests cannot be routed, and it needs the launcher treatment LearnHarness
-got.
+When a client's model slots have tier-like names, alias them like this (the same
+mapping claude-lumo's own launcher uses):
+
+| Client slot | Send | Falls back to |
+|-------------|------|---------------|
+| Main / full-strength model | `lumo-max` | `lumo-max` |
+| Mid tier (sonnet-class) | `lumo-max` or `lumo-lite` (your cost call) | `lumo-max` |
+| Fast / cheap tier (haiku-class) | `lumo-lite` | `lumo-max` |
+| Offline | `lumo-local` | none (needs the local llama.cpp server) |
+| Any `claude-*` name the client insists on | leave it | `lumo-max` (`"*"` wildcard; `*haiku*` names go to `lumo-lite`) |
+
+The constraint worth repeating: send a model ID the gateway knows. A harness that
+defaults to a `claude-*` name still works (it falls through to `lumo-max`, or
+`lumo-lite` when the name contains `haiku`, see
+[The contract](#the-contract)), but set the client's model to `lumo-max` when you can,
+so routing is explicit instead of accidental. If the harness cannot be configured
+at all, aliasing still saves the request; only a harness that also rewrites the
+protocol needs the launcher treatment LearnHarness got.
