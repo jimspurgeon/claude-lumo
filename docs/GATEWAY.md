@@ -30,10 +30,12 @@ as a secret: never copy its contents into a settings file, a script, or a bug re
 
 The full route table, including timeouts, lives in [`gateway/litellm.yaml`](../gateway/litellm.yaml).
 Send a model ID the gateway knows. Unknown names, including `claude-*` names a harness
-might default to, do not fail: they fall through the `"*"` wildcard route to `lumo-max`,
-and parameters the upstream does not understand (an Anthropic `thinking` block among
-them) are translated or dropped (`drop_params`). This is a fallback, so prefer sending
-an explicit ID; `gateway/interop.test.mjs` locks the behavior in.
+might default to, do not fail: they fall through to `lumo-max` via the `"*"` wildcard
+route, except names containing `haiku` (e.g. `claude-3-5-haiku-20241022`), which match
+the `"*haiku*"` route first and go to `lumo-lite`. Parameters the upstream does not
+understand (an Anthropic `thinking` block among them) are translated or dropped
+(`drop_params`). This is a fallback, so prefer sending an explicit ID;
+`gateway/interop.test.mjs` locks the behavior in.
 
 **Streaming:** both `/v1/messages` and `/v1/chat/completions` accept `"stream": true`
 and answer with SSE.
@@ -288,7 +290,8 @@ install; the values are always these:
 If gg-coder is configured to send an Anthropic `thinking` block
 (`{type: "enabled", budget_tokens: N}`) or a `claude-*` model name, do not work around
 it client-side: both are accepted. The thinking block is translated to a reasoning
-effort for the upstream, and unknown model names fall through to `lumo-max` (see
+effort for the upstream, and unknown model names fall through to `lumo-max` (or
+`lumo-lite` when the name contains `haiku`; see
 [The contract](#the-contract)).
 
 ## Adding a new harness
@@ -308,10 +311,11 @@ mapping claude-lumo's own launcher uses):
 | Mid tier (sonnet-class) | `lumo-max` or `lumo-lite` (your cost call) | `lumo-max` |
 | Fast / cheap tier (haiku-class) | `lumo-lite` | `lumo-max` |
 | Offline | `lumo-local` | none (needs the local llama.cpp server) |
-| Any `claude-*` name the client insists on | leave it | `lumo-max` (wildcard route) |
+| Any `claude-*` name the client insists on | leave it | `lumo-max` (`"*"` wildcard; `*haiku*` names go to `lumo-lite`) |
 
 The constraint worth repeating: send a model ID the gateway knows. A harness that
-defaults to a `claude-*` name still works (it falls through to `lumo-max`, see
+defaults to a `claude-*` name still works (it falls through to `lumo-max`, or
+`lumo-lite` when the name contains `haiku`, see
 [The contract](#the-contract)), but set the client's model to `lumo-max` when you can,
 so routing is explicit instead of accidental. If the harness cannot be configured
 at all, aliasing still saves the request; only a harness that also rewrites the
