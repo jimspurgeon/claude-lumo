@@ -296,11 +296,34 @@ effort for the upstream, and unknown model names fall through to `lumo-max` (or
 
 ## Adding a new harness
 
-Any client needs exactly three facts, all on this page:
+Any client that speaks either protocol works. It needs exactly three facts:
 
-1. Base URL: `http://127.0.0.1:4000`, protocol Anthropic or OpenAI, endpoints above.
-2. Key source: `~/.claude-lumo/master.key` (bearer credential).
-3. Model ID: one of `lumo-max`, `lumo-lite`, `lumo-local`.
+1. **Base URL:** `http://127.0.0.1:4000`. Anthropic clients call `/v1/messages`;
+   OpenAI clients call `/v1/chat/completions` (and `/v1/models` to list).
+2. **API key:** the contents of `~/.claude-lumo/master.key`, sent as the bearer
+   credential. Print it on demand, without pasting it into a config file, with:
+   `python gateway/api-key.py ~/.claude-lumo`
+3. **Model ID:** one of `lumo-max`, `lumo-lite`, `lumo-local` (table above).
+
+A client with model discovery can skip fact 3 entirely: `GET /v1/models` on the
+base URL lists the IDs, so a picker that reads it shows them automatically.
+
+Generic configuration for an Anthropic-protocol client (SDK or settings form):
+
+```
+base_url = http://127.0.0.1:4000
+apiKey   = <read from ~/.claude-lumo/master.key, e.g. via gateway/api-key.py>
+model    = lumo-max
+```
+
+Generic configuration for an OpenAI-protocol client:
+
+```
+base_url = http://127.0.0.1:4000/v1
+chat completions path = /chat/completions
+apiKey   = <read from ~/.claude-lumo/master.key, e.g. via gateway/api-key.py>
+model    = lumo-max
+```
 
 When a client's model slots have tier-like names, alias them like this (the same
 mapping claude-lumo's own launcher uses):
