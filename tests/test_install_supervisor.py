@@ -337,5 +337,70 @@ class TestInstallMode(unittest.TestCase):
                         "elevation gate must run before the key read")
 
 
+@unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
+class TestConnectCard(unittest.TestCase):
+    """The "Connect any harness" card prints after a successful -Install (and in
+    the offline banner mode), giving every fact another tool needs: base URL,
+    endpoints, model ids, key file location, api-key.py, GATEWAY.md. The key
+    VALUE never appears in the output."""
+
+    def _install_offline(self, services_dir, state_dir):
+        env = dict(os.environ, LUMO_INSTALL_SUPERVISOR_TEST="1",
+                   LUMO_SERVICES_DIR=services_dir,
+                   CLAUDE_LUMO_STATE_DIR=state_dir)
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", SCRIPT, "-Install"],
+            capture_output=True, text=True, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout, env
+
+    def test_install_output_contains_connect_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = os.path.join(tmp, "state dir with spaces")
+            services = os.path.join(tmp, "services")
+            stdout, _env = self._install_offline(services, state_dir)
+            # The card's facts, all on the -Install path (test-mode exit carries
+            # the same card as the real success path).
+            self.assertIn("Connect any harness", stdout)
+            self.assertIn("http://127.0.0.1:4000", stdout)
+            self.assertIn("/v1/messages", stdout)
+            self.assertIn("/v1/chat/completions", stdout)
+            self.assertIn("lumo-max", stdout)
+            self.assertIn("lumo-lite", stdout)
+            self.assertIn("lumo-local", stdout)
+            self.assertIn("unknown claude-", stdout)
+            self.assertIn("haiku", stdout)
+            self.assertIn(os.path.join(state_dir, "master.key"), stdout)
+            self.assertIn("api-key.py", stdout)
+            self.assertIn("docs\\GATEWAY.md", stdout)
+
+    def test_install_output_never_prints_the_key_value(self):
+        """The card names the key FILE; the placeholder key value stays out."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = os.path.join(tmp, "state")
+            services = os.path.join(tmp, "services")
+            stdout, env = self._install_offline(services, state_dir)
+            # Test mode bakes PLACEHOLDER-TEST-KEY into the XML; that value
+            # proves what WOULD leak if the card printed the key. Card + banners
+            # must never contain it, nor a line of bare key material.
+            self.assertNotIn("PLACEHOLDER-TEST-KEY", stdout)
+            self.assertNotIn("sk-lumo-", stdout)
+
+    def test_banner_mode_prints_connect_card_too(self):
+        """The offline generator (no -Install) shows the same card."""
+        env = dict(os.environ, CLAUDE_LUMO_STATE_DIR=os.path.join(
+            tempfile.gettempdir(), "lumo-card-banner-state"))
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", SCRIPT],
+            capture_output=True, text=True, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Connect any harness", proc.stdout)
+        self.assertIn("http://127.0.0.1:4000", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

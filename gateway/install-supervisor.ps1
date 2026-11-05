@@ -177,6 +177,25 @@ $envXml
 "@
 }
 
+# "Connect any harness" card: the three facts any Anthropic- or OpenAI-protocol
+# client needs (base URL, key, model ids). Plain ASCII so it survives any console.
+# NEVER print the key value: $MasterKeyFile is a path, and the card points at
+# gateway/api-key.py as the way to get the value without echoing it here.
+function Show-ConnectCard {
+    $RepoRoot = Split-Path $ProxyDir -Parent
+    Write-Output ""
+    Write-Output "=== Connect any harness (per-harness recipes: docs/GATEWAY.md) ==="
+    Write-Output "Base URL:      http://127.0.0.1:4000"
+    Write-Output "Endpoints:     /v1/messages                          (Anthropic protocol)"
+    Write-Output "               /v1/chat/completions, /v1/models      (OpenAI protocol)"
+    Write-Output "Models:        lumo-max, lumo-lite, lumo-local"
+    Write-Output "Routing:       unknown claude-* names go to lumo-max;"
+    Write-Output "               names containing haiku go to lumo-lite"
+    Write-Output "API key file:  $MasterKeyFile (the key value is never printed here)"
+    Write-Output "Print the key: python `"$ProxyDir\api-key.py`" `"$StateDir`""
+    Write-Output "Docs:          $(Join-Path $RepoRoot 'docs\GATEWAY.md')"
+}
+
 # --- Uninstall -----------------------------------------------------------------
 if ($Uninstall) {
     foreach ($id in $SvcIds) {
@@ -252,6 +271,7 @@ if ($Install) {
     }
     if ($TestMode) {
         Write-Output "LUMO_INSTALL_SUPERVISOR_TEST=1: stopping before download/install/start."
+        Show-ConnectCard
         exit 0
     }
 
@@ -294,6 +314,7 @@ if ($Install) {
         }
     }
     Write-Output "Done. Both services are installed and started; they come back at next boot."
+    Show-ConnectCard
     exit 0
 }
 
@@ -376,6 +397,7 @@ if ($WriteConfigs) {
     Write-Output "Wrote $file"
 }
 
+Show-ConnectCard
 Write-Output ""
 Write-Output "Nothing was installed. Run -Install, or the commands above, when ready (issues #132, #183)."
 exit 0
