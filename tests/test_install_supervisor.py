@@ -369,7 +369,6 @@ class TestConnectCard(unittest.TestCase):
             self.assertIn("/v1/chat/completions", stdout)
             self.assertIn("lumo-max", stdout)
             self.assertIn("lumo-lite", stdout)
-            self.assertIn("lumo-local", stdout)
             self.assertIn("unknown claude-", stdout)
             self.assertIn("haiku", stdout)
             self.assertIn(os.path.join(state_dir, "master.key"), stdout)

@@ -3,7 +3,8 @@
   "fallbackModel": [],
   "modelPicker": {
     "options": [
-      { "model": "lumo-local", "label": "lumo-local (llama.cpp local)", "description": "Local LFM 2.5 24B via llama-server on port 8080" }
+      { "model": "lumo-max", "label": "lumo-max", "description": "Hosted Lumo, full strength" },
+      { "model": "lumo-lite", "label": "lumo-lite", "description": "Hosted Lumo, smaller tier" }
     ]
   },
   "autoCompactWindow": {{AUTO_COMPACT_WINDOW}},

@@ -12,7 +12,7 @@
 //
 // Hermetic: never touches the live stack. It binds its own two test ports
 // (LUMO_TEST_PORT, default 18123, and the next port for a mock OpenAI upstream;
-// 4000/8790/8080 are refused outright), writes its own litellm.yaml into a temp dir
+// 4000/8790 are refused outright), writes its own litellm.yaml into a temp dir
 // with a throwaway master key (the real master.key is never read), spawns LiteLLM on
 // the test port against the mock, and kills every process it started.
 //
@@ -30,9 +30,9 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
-// Live-stack ports (LiteLLM :4000, proxy :8790, llama.cpp :8080). A test that forgot
+// Live-stack ports (LiteLLM :4000, proxy :8790). A test that forgot
 // its env override must fail loudly here, not shadow a running service (#71 again).
-const FORBIDDEN = new Set([4000, 8790, 8080]);
+const FORBIDDEN = new Set([4000, 8790]);
 const PORT = Number(process.env.LUMO_TEST_PORT || 18123);
 const MOCK_PORT = Number(process.env.LUMO_MOCK_PORT || PORT + 1);
 for (const p of [PORT, MOCK_PORT]) {

@@ -19,21 +19,12 @@ import yaml
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 YAML_PATH = os.path.join(ROOT, "gateway", "litellm.yaml")
 
-EXPECTED_DEPLOYMENTS = 5  # lumo-lite, *haiku*, lumo-max, lumo-local, *
+EXPECTED_DEPLOYMENTS = 4  # lumo-lite, *haiku*, lumo-max, *
 SPEC_RANGES = {
     "stream_timeout": (60, 120),  # stream call timeout, seconds
     "timeout": (30, 60),  # whole non-streaming call, seconds
     "num_retries": (1, 2),  # router retries per deployment
 }
-# lumo-local (issue #150): the local llama.cpp backend. A local model can take minutes per
-# reply under GPU pressure, so its timeouts are deliberately generous (outside the hosted
-# SPEC_RANGES above), with the same single retry as hosted.
-LOCAL_SPEC_RANGES = {
-    "stream_timeout": (600, None),
-    "timeout": (600, None),
-    "num_retries": (1, 2),
-}
-
 HAS_LITELLM = importlib.util.find_spec("litellm") is not None
 
 requires_litellm = pytest.mark.skipif(
@@ -51,16 +42,14 @@ def test_every_deployment_carries_the_timeout_and_retry_keys():
     assert len(model_list) == EXPECTED_DEPLOYMENTS
     for entry in model_list:
         params = entry["litellm_params"]
-        spec = LOCAL_SPEC_RANGES if entry["model_name"] == "lumo-local" else SPEC_RANGES
-        for key in spec:
+        for key in SPEC_RANGES:
             assert key in params, f"deployment {entry['model_name']!r} missing {key}"
 
 
 def test_key_values_are_within_the_spec_ranges():
     for entry in _config()["model_list"]:
         params = entry["litellm_params"]
-        spec = LOCAL_SPEC_RANGES if entry["model_name"] == "lumo-local" else SPEC_RANGES
-        for key, (low, high) in spec.items():
+        for key, (low, high) in SPEC_RANGES.items():
             value = params[key]
             assert isinstance(value, int), f"{key} should be an int, got {value!r}"
             assert value >= low, f"{key}={value} below {low}"
@@ -69,12 +58,9 @@ def test_key_values_are_within_the_spec_ranges():
 
 
 def test_all_deployments_share_the_same_settings():
-    """One value per key across the hosted deployments keeps behaviour predictable;
-    lumo-local (#150) intentionally differs with its generous timeouts."""
+    """One value per key across the deployments keeps behaviour predictable."""
     for key in SPEC_RANGES:
-        values = {entry["litellm_params"][key]
-                  for entry in _config()["model_list"]
-                  if entry["model_name"] != "lumo-local"}
+        values = {entry["litellm_params"][key] for entry in _config()["model_list"]}
         assert len(values) == 1, f"{key} differs across hosted deployments: {values}"
 
 

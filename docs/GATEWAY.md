@@ -3,7 +3,7 @@
 The models behind claude-lumo sit behind a local gateway that speaks both the Anthropic
 protocol and the OpenAI protocol on one port. Any tool that can be pointed at a
 compatible endpoint can use them. This page is the whole contract: one base URL, one
-key file, three model IDs.
+key file, two model IDs.
 
 ## The contract
 
@@ -26,7 +26,6 @@ as a secret: never copy its contents into a settings file, a script, or a bug re
 |----|-----------|----------|
 | `lumo-max` | Hosted Lumo, full strength | Default. Real work. |
 | `lumo-lite` | Hosted Lumo, smaller tier | Quick and mechanical tasks, background agents |
-| `lumo-local` | Local llama.cpp server on 127.0.0.1:8080 (LFM 2.5 24B) | Offline use. Can take minutes per reply, since it runs on the local GPU. |
 
 The full route table, including timeouts, lives in [`gateway/litellm.yaml`](../gateway/litellm.yaml).
 Send a model ID the gateway knows. Unknown names, including `claude-*` names a harness
@@ -95,8 +94,7 @@ does not expand `~`.
   "modelPicker": {
     "options": [
       { "model": "lumo-max", "label": "lumo-max", "description": "Hosted Lumo, full strength" },
-      { "model": "lumo-lite", "label": "lumo-lite", "description": "Hosted Lumo, smaller tier" },
-      { "model": "lumo-local", "label": "lumo-local (llama.cpp local)", "description": "Local LFM 2.5 24B via llama-server on port 8080" }
+      { "model": "lumo-lite", "label": "lumo-lite", "description": "Hosted Lumo, smaller tier" }
     ]
   }
 }
@@ -305,7 +303,7 @@ Any client that speaks either protocol works. It needs exactly three facts:
 2. **API key:** the contents of `~/.claude-lumo/master.key`, sent as the bearer
    credential. Print it on demand, without pasting it into a config file, with:
    `python gateway/api-key.py ~/.claude-lumo`
-3. **Model ID:** one of `lumo-max`, `lumo-lite`, `lumo-local` (table above).
+3. **Model ID:** one of `lumo-max`, `lumo-lite` (table above).
 
 A client with model discovery can skip fact 3 entirely: `GET /v1/models` on the
 base URL lists the IDs, so a picker that reads it shows them automatically.
@@ -335,7 +333,6 @@ mapping claude-lumo's own launcher uses):
 | Main / full-strength model | `lumo-max` | `lumo-max` |
 | Mid tier (sonnet-class) | `lumo-max` or `lumo-lite` (your cost call) | `lumo-max` |
 | Fast / cheap tier (haiku-class) | `lumo-lite` | `lumo-max` |
-| Offline | `lumo-local` | none (needs the local llama.cpp server) |
 | Any `claude-*` name the client insists on | leave it | `lumo-max` (`"*"` wildcard; `*haiku*` names go to `lumo-lite`) |
 
 The constraint worth repeating: send a model ID the gateway knows. A harness that
