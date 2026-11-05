@@ -13,9 +13,10 @@
 #   -Install      Write both service XMLs, get WinSW (reuse an existing copy,
 #                 download 2.12.0 otherwise), install and start both services.
 #                 Needs an elevated PowerShell (registering services talks to
-#                 the Windows service manager). Aborts before touching the
-#                 service manager if something already listens on :4000 or
-#                 :8790, so it can never fight a live gateway.
+#                 the Windows service manager); refuses to run otherwise,
+#                 before the key is read. Aborts before touching the service
+#                 manager if something already listens on :4000 or :8790, so
+#                 it can never fight a live gateway.
 #   -Uninstall    Stop and remove both services; an absent service is
 #                 reported and skipped. Also needs elevation.
 #   (no mode)     The old offline generator (#132): print the configs and the
@@ -195,6 +196,21 @@ if ($Uninstall) {
 
 # --- Install -------------------------------------------------------------------
 if ($Install) {
+    # Elevation pre-check: -Install registers LocalSystem services, which an
+    # unelevated shell cannot do. Refuse before anything is probed or read,
+    # so an unelevated run never even touches master.key (let alone prints a
+    # false "Done"). Skipped in test mode, which installs nothing.
+    if (-not $TestMode) {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        $elevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if (-not $elevated) {
+            Write-Output "ABORT: this PowerShell is not elevated."
+            Write-Output "Re-run -Install from an elevated PowerShell (Run as administrator)."
+            exit 1
+        }
+    }
+
     # Preflight: never touch a live gateway. Abort before the service manager
     # sees anything if :4000 or :8790 already answers.
     if (-not $TestMode) {
@@ -257,15 +273,27 @@ if ($Install) {
         Copy-Item -Force (Join-Path $ServicesRoot "$id\$id.xml") (Join-Path $ServicesRoot "$id\WinSW.xml")
     }
 
-    # Install and start. WinSW needs elevation; say so plainly if refused.
+    # Install and start. WinSW is a native exe, so & $exe sets
+    # $LASTEXITCODE; check it after every call and bail out on the first
+    # failure rather than printing a false "Done" (#192).
     foreach ($id in $SvcIds) {
         $exe = Join-Path $ServicesRoot "$id\WinSW.exe"
         Write-Output "Installing service $id ..."
         & $exe install 2>&1 | Write-Output
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "ABORT: WinSW failed to install service $id (exit code $LASTEXITCODE)."
+            Write-Output "Fix the cause and re-run -Install; already-installed services are replaced."
+            exit 1
+        }
         Write-Output "Starting service $id ..."
         & $exe start 2>&1 | Write-Output
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "ABORT: WinSW failed to start service $id (exit code $LASTEXITCODE)."
+            Write-Output "Check the service's log under $(Join-Path $ServicesRoot "$id\logs"), then re-run -Install."
+            exit 1
+        }
     }
-    Write-Output "Done. Both services are installed and started; they come back at next logon."
+    Write-Output "Done. Both services are installed and started; they come back at next boot."
     exit 0
 }
 

@@ -298,6 +298,44 @@ class TestInstallMode(unittest.TestCase):
             for root, _dirs, files in os.walk(services):
                 self.assertNotIn("WinSW.exe", files)
 
+    def test_install_mode_checks_winsw_exit_codes_and_boot_wording(self):
+        """-Install checks & $exe exit codes and says "boot", not "logon" (#192).
+
+        The test seam exits before any WinSW call, so the failure paths cannot
+        be driven at runtime; these prove the checks and the corrected wording
+        are in the -Install flow, next to the calls they guard.
+        """
+        with open(SCRIPT, encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn('& $exe install 2>&1 | Write-Output', src)
+        self.assertIn('& $exe start 2>&1 | Write-Output', src)
+        # Each call is followed by an exit-code check that names the service
+        # and the operation, and exits non-zero before the next step.
+        self.assertIn('if ($LASTEXITCODE -ne 0) {', src)
+        self.assertGreaterEqual(src.count("if ($LASTEXITCODE -ne 0) {"), 2)
+        self.assertIn("WinSW failed to install service $id (exit code $LASTEXITCODE)", src)
+        self.assertIn("WinSW failed to start service $id (exit code $LASTEXITCODE)", src)
+        # startmode Automatic under LocalSystem means at BOOT (#192).
+        self.assertNotIn("next logon", src)
+        self.assertIn("they come back at next boot", src)
+
+    def test_install_mode_has_elevation_precheck_before_key_read(self):
+        """-Install refuses to run unelevated before reading master.key (#192).
+
+        Unelevated runs cannot be simulated offline (the elevation gate is
+        skipped in test mode), so this proves the check exists in the
+        -Install flow and sits ahead of the key read.
+        """
+        with open(SCRIPT, encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn(
+            "[Security.Principal.WindowsBuiltInRole]::Administrator", src)
+        self.assertIn("ABORT: this PowerShell is not elevated", src)
+        gate_pos = src.index("if (-not $elevated) {")
+        key_read_pos = src.index("$MasterKeyValue = ")
+        self.assertLess(gate_pos, key_read_pos,
+                        "elevation gate must run before the key read")
+
 
 if __name__ == "__main__":
     unittest.main()
