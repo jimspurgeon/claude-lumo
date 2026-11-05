@@ -294,12 +294,15 @@ if [ "$OS" = "windows" ]; then
 fi
 
 # Point at the always-on services: the gateway can run without the launcher
-# handling startup, and other harnesses can use it too.
+# handling startup, and other harnesses can use it too. The printed command
+# must paste-run in PowerShell, where ~ does NOT expand after -File (verified
+# live), so bake in the absolute Windows path to the installed checkout.
 if [ "$OS" = "windows" ]; then
+  WIN_PS1="$(cygpath -w "$D/gateway/install-supervisor.ps1" 2>/dev/null || echo "$D\\gateway\\install-supervisor.ps1")"
   echo ""
   echo "The gateway can also run as always-on Windows services, so any harness can"
   echo "connect at any time. Install them from an elevated PowerShell with:"
-  echo "  powershell -File ~/.claude/lumo/gateway/install-supervisor.ps1 -Install"
+  echo "  powershell -File \"$WIN_PS1\" -Install"
   echo "Details and the connection facts for other tools: docs/GATEWAY.md in this checkout."
 else
   echo ""

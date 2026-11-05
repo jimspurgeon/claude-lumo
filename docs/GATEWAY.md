@@ -49,8 +49,10 @@ credential caveat: the services run as the LocalSystem account, which cannot rea
 Chromium cookie stores, so Chrome users must fall back to the `login.json` file
 described in the
 [README](../README.md) (Firefox users need nothing extra). To set them
-up, run `powershell -File gateway/install-supervisor.ps1 -Install` from a checkout of
-this repo and sign out and back in once if asked; to tear them down again, run
+up, run this from an elevated PowerShell (from the standard install location;
+adjust the path if you cloned elsewhere):
+`powershell -File "$env:USERPROFILE\.claude\lumo\gateway\install-supervisor.ps1" -Install`,
+and sign out and back in once if asked; to tear them down again, run
 `uninstall.sh` (or pass `-Uninstall` to the same script), which stops and removes both
 services. Linux and macOS have no installer, but the same two services can be set up
 by hand from the recipes below: [systemd](#always-on-on-linux-systemd) on Linux,
