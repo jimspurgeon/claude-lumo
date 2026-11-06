@@ -80,7 +80,7 @@ def test_fact_sheet_order_and_content(scratch):
     r = call(scratch, "facts_print_sheet",
              extra_env={"FACTS_CONFIG": ROOT / "gateway" / "litellm.yaml"})
     assert r.returncode == 0, r.stdout + r.stderr
-    out = r.stdout
+    out = r.stdout + r.stderr   # sentinel must appear in NEITHER stream
     order = [out.index(s) for s in
              ("Base URL:", "Protocols:", "Models:", "Master key:", "Services:")]
     assert order == sorted(order), out

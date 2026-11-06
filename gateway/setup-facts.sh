@@ -39,6 +39,7 @@ facts_parse_models() {
   # Tolerate CRLF files (a yaml saved on Windows) as well as LF.
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line%$'\r'}"
+    case "$line" in \#*) continue;; esac   # comments are not model entries
     case "$line" in
       *model_name:*)
         _facts_emit
@@ -121,7 +122,7 @@ facts_install_cmd() {
     ps1="$(cygpath -w "$root/gateway/install-supervisor.ps1" 2>/dev/null || echo "$root\\gateway\\install-supervisor.ps1")"
     printf 'powershell -File "%s" -Install' "$ps1"
   else
-    printf 'see docs/GATEWAY.md in the checkout (%s) for the systemd/launchd recipes' "$root"
+    printf 'set up the systemd/launchd units per docs/GATEWAY.md ("Always-on on Linux (systemd)") in the checkout (%s)' "$root"
   fi
 }
 
@@ -181,8 +182,8 @@ facts_print_sheet() {
   echo "Wiring it up:"
   echo "  - Any OpenAI-compatible client: point it at $BASE_URL (OpenAI SDK"
   echo "    base_url, LiteLLM SDK, curl, etc.)."
-  echo "  - As a LiteLLM provider specifically: model id litellm/lumo-max (config.yml"
-  echo "    modelRoles), api_base $BASE_URL/v1, key from the path above."
+  echo "  - As a LiteLLM provider specifically: model id litellm/lumo-max,"
+  echo "    api_base $BASE_URL/v1, key from the path above."
   echo ""
   echo "Check with: lumo-gateway status"
 }
