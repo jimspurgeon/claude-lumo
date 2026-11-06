@@ -50,7 +50,7 @@ fi
 # Scan the transcript stores; collect "mtime<TAB>engine<TAB>path" rows.
 dirs=()
 [ -n "${CLAUDE_CONFIG_DIR:-}" ] && dirs+=("$CLAUDE_CONFIG_DIR")
-dirs+=("$HOME/.claude" "$HOME/.claude-lumo/config")
+dirs+=("$HOME/.claude" "${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}/config")
 rows=""
 _nl=$'\n'
 _seen=$_nl

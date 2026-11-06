@@ -59,7 +59,8 @@ function claude {
         # $env:HOME mirrors the bash twin; PowerShell's automatic $HOME ignores it.
         $homeDir = $HOME
         if ($env:HOME) { $homeDir = $env:HOME }
-        $dirs = @("$homeDir\.claude", "$homeDir\.claude-lumo\config")
+        $stateDir = if ($env:CLAUDE_LUMO_STATE_DIR) { $env:CLAUDE_LUMO_STATE_DIR } else { "$homeDir\.claude-lumo" }
+        $dirs = @("$homeDir\.claude", "$stateDir\config")
         if ($env:CLAUDE_CONFIG_DIR) { $dirs = @($env:CLAUDE_CONFIG_DIR) + $dirs }
         foreach ($d in ($dirs | Select-Object -Unique)) {
             $t = Get-ChildItem -Path "$d\projects\*\$id.jsonl" -ErrorAction SilentlyContinue | Select-Object -First 1

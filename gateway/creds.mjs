@@ -2,7 +2,7 @@
 //
 // Supported, in priority order:
 //   1. LUMO_TOKEN + LUMO_UID environment variables
-//   2. ~/.claude-lumo/login.json  (manual fallback: paste the cookie once, any browser)
+//   2. <CLAUDE_LUMO_STATE_DIR>/login.json (default ~/.claude-lumo; manual fallback)
 //   3. Firefox / LibreWolf — cookie store is plaintext SQLite
 //   4. Chrome / Edge / Brave / Vivaldi / Opera — encrypted SQLite, decrypted locally
 //
@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createDecipheriv, pbkdf2Sync } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { platform } from "node:process";
 
@@ -229,8 +229,12 @@ export function readLumoCredentials(opts = {}) {
   if (process.env.LUMO_TOKEN && process.env.LUMO_UID)
     return { uid: process.env.LUMO_UID, token: process.env.LUMO_TOKEN, source: "env" };
 
-  // 2. Manual fallback: ~/.claude-lumo/login.json (any browser, see README)
-  const manual = join(homedir(), ".claude-lumo", "login.json");
+  // 2. Manual fallback: login.json in the Lumo state dir, CLAUDE_LUMO_STATE_DIR
+  // or the default ~/.claude-lumo (any browser, see README) (#96)
+  const stateDir = process.env.CLAUDE_LUMO_STATE_DIR
+    ? resolve(process.env.CLAUDE_LUMO_STATE_DIR)
+    : join(homedir(), ".claude-lumo");
+  const manual = join(stateDir, "login.json");
   try {
     const j = JSON.parse(readFileSync(manual, "utf8"));
     if (j.uid && j.token) return { uid: j.uid, token: j.token, source: manual };

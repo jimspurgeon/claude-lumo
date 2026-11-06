@@ -65,7 +65,7 @@ claude() {
         return $?
     fi
     if [ -n "$id" ] && [[ "$id" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-        local dirs=("$HOME/.claude" "$HOME/.claude-lumo/config")
+        local dirs=("$HOME/.claude" "${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}/config")
         [ -n "$CLAUDE_CONFIG_DIR" ] && dirs=("$CLAUDE_CONFIG_DIR" "${dirs[@]}")
         for d in "${dirs[@]}"; do
             for t in "$d"/projects/*/"$id.jsonl"; do

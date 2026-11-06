@@ -33,8 +33,15 @@ import sys
 import time
 from datetime import datetime, timezone
 
-MARKER_FILE = "~/.claude-lumo/.audit-last"
-SUGGEST_MARKER_FILE = "~/.claude-lumo/.audit-suggest-last"
+def resolve_state_dir():
+    """Lumo state folder: CLAUDE_LUMO_STATE_DIR if set, else ~/.claude-lumo (#96)."""
+    env_dir = os.environ.get("CLAUDE_LUMO_STATE_DIR")
+    return os.path.abspath(os.path.expanduser(env_dir or "~/.claude-lumo"))
+
+
+# Marker files live in the state dir; expanduser keeps working on absolute paths (#96).
+MARKER_FILE = os.path.join(resolve_state_dir(), ".audit-last")
+SUGGEST_MARKER_FILE = os.path.join(resolve_state_dir(), ".audit-suggest-last")
 SUGGEST_INTERVAL_DAYS = 7  # suggest weekly
 
 

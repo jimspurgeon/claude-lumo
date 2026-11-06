@@ -480,7 +480,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_common(p):
-        p.add_argument("--config-dir", default=str(Path.home() / ".claude-lumo" / "data"))
+        p.add_argument("--config-dir", default=str(
+            Path(os.environ.get("CLAUDE_LUMO_STATE_DIR") or Path.home() / ".claude-lumo") / "data"))
         p.add_argument("--shared", default=str(Path.home() / ".claude"))
 
     setup_p = sub.add_parser("setup", help="Build/repair the link layout")

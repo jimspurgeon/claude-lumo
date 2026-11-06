@@ -59,7 +59,8 @@ if ([Console]::IsInputRedirected -and $env:RESUME_PICKER_FORCE_MENU -ne '1') {
 # $HOME ignores it, which would scan the real profile even when HOME is overridden.
 $homeDir = $HOME
 if ($env:HOME) { $homeDir = $env:HOME }
-$dirs = @("$homeDir\.claude", "$homeDir\.claude-lumo\config")
+$stateDir = if ($env:CLAUDE_LUMO_STATE_DIR) { $env:CLAUDE_LUMO_STATE_DIR } else { "$homeDir\.claude-lumo" }
+$dirs = @("$homeDir\.claude", "$stateDir\config")
 if ($env:CLAUDE_CONFIG_DIR) { $dirs = @($env:CLAUDE_CONFIG_DIR) + $dirs }
 
 $rows = @()
