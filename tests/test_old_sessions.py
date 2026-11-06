@@ -47,10 +47,13 @@ def ids(plan):
 def test_old_sessions_of_a_live_project_are_candidates(live_project):
     cfg, _ = live_project
     plans = wipe.collect_candidates(str(cfg), 30, None)
-    assert len(plans) == 1 and plans[0]["partial"]
-    assert ids(plans[0]) == {"old-own", "old-script"}
-    assert plans[0]["reasons"] == ["1 automation session(s) older than 1 day(s)",
-                                   "1 session(s) older than 7 day(s)"]
+    # #105: a project mixing scripted and personal old sessions splits into
+    # a scripted plan (REMOVE-classifiable) and a personal plan (ASK).
+    assert len(plans) == 2 and all(p["partial"] for p in plans)
+    assert ids(plans[0]) == {"old-script"}
+    assert plans[0]["reasons"] == ["1 automation session(s) older than 1 day(s)"]
+    assert ids(plans[1]) == {"old-own"}
+    assert plans[1]["reasons"] == ["1 session(s) older than 7 day(s)"]
 
 
 def test_thresholds_are_adjustable(live_project):
@@ -70,9 +73,12 @@ def test_active_and_young_sessions_are_never_picked(live_project):
 
 def test_classification(live_project):
     cfg, _ = live_project
-    plan = wipe.collect_candidates(str(cfg), 30, None)[0]
-    assert wipe.classify_candidate(plan, str(cfg))[0] == "ASK"
-    scripted_only = dict(plan, reasons=["3 automation session(s) older than 1 day(s)"])
+    plans = wipe.collect_candidates(str(cfg), 30, None)
+    # #105: the scripted half classifies REMOVE on its own; the personal half stays ASK.
+    assert wipe.classify_candidate(plans[0], str(cfg)) == (
+        "REMOVE", "scripted sessions that finished a while ago")
+    assert wipe.classify_candidate(plans[1], str(cfg))[0] == "ASK"
+    scripted_only = dict(plans[0], reasons=["3 automation session(s) older than 1 day(s)"])
     assert wipe.classify_candidate(scripted_only, str(cfg))[0] == "REMOVE"
 
 
@@ -118,7 +124,7 @@ def test_long_plans_list_a_few_paths(live_project, capsys):
 
 def test_history_line_counts_real_entries(live_project, capsys):
     cfg, _ = live_project
-    plan = dict(wipe.collect_candidates(str(cfg), 30, None)[0], store={"path": str(cfg)})
+    plan = dict(wipe.collect_candidates(str(cfg), 30, None)[1], store={"path": str(cfg)})
     group = {"store": {"path": str(cfg), "current": True}, "plans": [plan], "store_paths": []}
     wipe.print_report([group], [], [])
     assert "[history.jsonl]" not in capsys.readouterr().out  # no history.jsonl at all
@@ -138,5 +144,9 @@ def test_unattended_yes_keeps_own_old_sessions(live_project, monkeypatch, capsys
     monkeypatch.setattr(wipe, "stale_lumo_logs", lambda *a: [])
     monkeypatch.setattr(sys, "stdin", io.StringIO())
     wipe.main(["--yes"])
-    assert "--project proj --old-sessions" in capsys.readouterr().out
-    assert files["old-own"].exists() and files["old-script"].exists()
+    out = capsys.readouterr().out
+    # #105: an unattended run still never deletes the user's own old sessions ...
+    assert files["old-own"].exists()
+    assert "--project proj --old-sessions" in out
+    # ... but the scripted half of the mixed project now clears (#105).
+    assert not files["old-script"].exists()

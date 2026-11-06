@@ -1047,8 +1047,7 @@ class TestPlanForNamedProject:
         os.utime(str(projects_dir / "s1.jsonl"), (old_mtime, old_mtime))
 
         result = plan_for_named_project(str(config_dir), "my-project")
-        assert result is not None
-        assert result["project"] == "my-project"
+        assert len(result) == 1 and result[0]["project"] == "my-project"
 
     def test_by_path(self, tmp_path):
         config_dir = tmp_path
@@ -1063,8 +1062,7 @@ class TestPlanForNamedProject:
         os.utime(str(projects_dir / "s1.jsonl"), (old_mtime, old_mtime))
 
         result = plan_for_named_project(str(config_dir), str(fake_cwd))
-        assert result is not None
-        assert result["project"] == "path-project"
+        assert len(result) == 1 and result[0]["project"] == "path-project"
 
     def test_active_project_rejected(self, tmp_path):
         config_dir = tmp_path
@@ -1089,8 +1087,7 @@ class TestPlanForNamedProject:
         os.utime(str(projects_dir / "s1.jsonl"), (old_mtime, old_mtime))
 
         result = plan_for_named_project(str(config_dir), "old-project")
-        assert result is not None
-        assert result["project"] == "old-project"
+        assert len(result) == 1 and result[0]["project"] == "old-project"
 
     def test_project_traversal_rejected(self, tmp_path):
         # Regression for the path traversal fix: path-like project names must
@@ -1108,7 +1105,7 @@ class TestPlanForNamedProject:
         marker.write_text("survivor", encoding="utf-8")
 
         result = plan_for_named_project(str(config_dir), "..")
-        assert result is None
+        assert result == []
         assert marker.read_text(encoding="utf-8") == "survivor"
 
     def test_project_absolute_path_not_treated_as_name(self, tmp_path):
@@ -1123,7 +1120,7 @@ class TestPlanForNamedProject:
 
         # "C:/no/such/dir" is path-like but matches no project: None, no error.
         result = plan_for_named_project(str(config_dir), os.path.join("no", "such", "dir"))
-        assert result is None
+        assert result == []
 
 
 class TestDescribeOrca:
@@ -1419,7 +1416,7 @@ class TestConfirmDeletion:
         wipe.resolve_config_dir = lambda: str(config_dir)
 
         try:
-            plan = plan_for_named_project(str(config_dir), "old")
+            plan = plan_for_named_project(str(config_dir), "old")[0]
             deleted_results = delete_all(plan["paths"])
             assert all(r[1] for r in deleted_results if r[0] != "not found")
             assert not test_file.exists()
@@ -1448,7 +1445,7 @@ class TestConfirmDeletion:
         wipe.resolve_config_dir = lambda: str(config_dir)
 
         try:
-            plan = plan_for_named_project(str(config_dir), "old")
+            plan = plan_for_named_project(str(config_dir), "old")[0]
             # Ensure settings not in wipe paths
             paths_str = " ".join(r[1] for r in plan["paths"])
             assert str(settings_file) not in paths_str

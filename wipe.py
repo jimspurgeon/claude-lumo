@@ -43,6 +43,7 @@ import os
 import shutil
 import stat
 import subprocess
+import signal
 import sys
 import time
 from datetime import datetime, timezone
@@ -506,12 +507,13 @@ def project_wipe_plan(config_dir, project_info):
     return paths, session_ids
 
 
-def history_matches(history_file, session_ids):
-    """Count history.jsonl lines whose sessionId is in the set (read-only, same match as
-    history_rewrite). A missing or unreadable file counts as 0."""
-    if not session_ids or not os.path.isfile(history_file):
-        return 0
-    count = 0
+def history_match_counts(history_file, id_sets):
+    """Counts of history.jsonl lines matching each set of session ids, in ONE pass
+    over the file (#107): print_report rereads history.jsonl once per plan otherwise.
+    A missing or unreadable file counts as 0 for every set."""
+    counts = [0] * len(id_sets)
+    if not id_sets or not os.path.isfile(history_file):
+        return counts
     try:
         with open(history_file, encoding="utf-8", newline="") as f:
             for line in f:
@@ -520,11 +522,20 @@ def history_matches(history_file, session_ids):
                 except ValueError:
                     continue
                 sid = entry.get("sessionId") if isinstance(entry, dict) else None
-                if sid and sid in session_ids:
-                    count += 1
+                if not sid:
+                    continue
+                for i, ids in enumerate(id_sets):
+                    if sid in ids:
+                        counts[i] += 1
     except OSError:
-        return 0
-    return count
+        return [0] * len(id_sets)
+    return counts
+
+
+def history_matches(history_file, session_ids):
+    """Count history.jsonl lines whose sessionId is in the set (read-only, same match as
+    history_rewrite). A missing or unreadable file counts as 0."""
+    return history_match_counts(history_file, [set(session_ids)])[0]
 
 
 def history_rewrite(history_file, drop_session_ids):
@@ -589,6 +600,73 @@ def stale_lumo_logs(days):
             except OSError:
                 pass
     return out
+
+
+def stop_watchdog(state_dir=None, wait_seconds=3, out=print):
+    """Stop the watchdog holding the state dir's pidfile, if any (#174).
+    Sends TERM (its exit trap removes the pidfile), waits briefly, and KILLs
+    when it ignores TERM. Never fails when no watchdog is running; returns the
+    pid stopped, or None. It must never kill anything else: only the pid named
+    in the pidfile."""
+    state = state_dir or resolve_state_dir()
+    pidfile = os.path.join(state, "watchdog.pid")
+    try:
+        with open(pidfile, encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        try:
+            os.remove(pidfile)
+        except OSError:
+            pass
+        return None
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        # Stale pidfile naming a dead process: remove it so a later singleton
+        # takeover does not trip over it.
+        try:
+            os.remove(pidfile)
+        except OSError:
+            pass
+        return None
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        out(f"claude-lumo: could not stop the watchdog (pid {pid}): {e}")
+        return None
+    for _ in range(wait_seconds * 10):
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return pid
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    return pid
+
+
+def stop_stale_watchdog(log_paths, state_dir=None, out=print):
+    """Stop a watchdog whose own log this wipe is deleting (#174): the watchdog writes
+    a heartbeat line on every backoff change and every failure, so a log untouched for
+    --days while a pidfile names a live watchdog means the install is gone and the
+    watchdog is a zombie probing deleted paths. Stopping it lets its pidfile and log
+    be reclaimed. Returns the pid stopped, or None."""
+    state = state_dir or resolve_state_dir()
+    log = os.path.join(state, "logs", "watchdog.log")
+    if not any(os.path.normcase(p) == os.path.normcase(log) for _, p in log_paths):
+        return None
+    pidfile = os.path.join(state, "watchdog.pid")
+    try:
+        with open(pidfile, encoding="utf-8") as f:
+            int(f.read().strip())  # a live-looking pidfile is required to bother
+    except (OSError, ValueError):
+        return None
+    stopped = stop_watchdog(state, out=out)
+    if stopped:
+        out(f"claude-lumo: stopped the stale watchdog (pid {stopped}); its log is being wiped.")
+    return stopped
 
 
 def stale_debug_dumps(days, repo_root=None):
@@ -674,11 +752,12 @@ def session_file_paths(config_dir, project_info, session):
     return paths
 
 
-def old_sessions_plan(config_dir, project_info, session_days=SESSION_DAYS,
-                      automation_days=AUTOMATION_DAYS):
-    """Single old sessions in a project that is not finished as a whole: scripted ones older
-    than automation_days, others older than session_days. Active sessions are never picked.
-    Returns a plan marked "partial", or None when no session qualifies."""
+def old_session_split_plan(config_dir, project_info, session_days=SESSION_DAYS,
+                           automation_days=AUTOMATION_DAYS):
+    """Old-sessions candidates of one project, split into a scripted plan and a personal
+    plan (#105): a project mixing the two classified ASK as a whole, so an unattended
+    --yes run never cleared its scripted sessions. Splitting puts the scripted half in a
+    REMOVE-classifiable plan. Returns (scripted_plan, personal_plan), each maybe None."""
     now = time.time()
     scripted, other = [], []
     for s in project_info["sessions"]:
@@ -689,25 +768,39 @@ def old_sessions_plan(config_dir, project_info, session_days=SESSION_DAYS,
             scripted.append(s)
         elif age_days >= session_days:
             other.append(s)
-    picked = scripted + other
-    if not picked:
-        return None
-    reasons = []
-    if scripted:
-        reasons.append(f"{len(scripted)} automation session(s) older than {automation_days} day(s)")
-    if other:
-        reasons.append(f"{len(other)} session(s) older than {session_days} day(s)")
-    paths = [p for s in picked for p in session_file_paths(config_dir, project_info, s)]
-    return {
-        "project": project_info["name"],
-        "reasons": reasons,
-        "sessions": [s["id"] for s in picked],
-        "session_ids": {s["id"] for s in picked},
-        "paths": paths,
-        "size": sum(tree_size(p) for _, p in paths),
-        "last_activity": max(s["mtime"] for s in picked),
-        "partial": True,
-    }
+
+    def build(sessions, reasons):
+        paths = [p for s in sessions for p in session_file_paths(config_dir, project_info, s)]
+        return {
+            "project": project_info["name"],
+            "reasons": reasons,
+            "sessions": [s["id"] for s in sessions],
+            "session_ids": {s["id"] for s in sessions},
+            "paths": paths,
+            "size": sum(tree_size(p) for _, p in paths),
+            "last_activity": max(s["mtime"] for s in sessions),
+            "partial": True,
+        }
+
+    scripted_plan = scripted and build(
+        scripted, [f"{len(scripted)} automation session(s) older than {automation_days} day(s)"])
+    personal_plan = other and build(
+        other, [f"{len(other)} session(s) older than {session_days} day(s)"])
+    return scripted_plan, personal_plan
+
+
+def old_sessions_plan(config_dir, project_info, session_days=SESSION_DAYS,
+                     automation_days=AUTOMATION_DAYS):
+    """Single old sessions in a project that is not finished as a whole: scripted ones older
+    than automation_days, others older than session_days. Active sessions are never picked.
+    Returns a list of plans (empty when no session qualifies). A project that mixes
+    scripted and personal old sessions yields TWO plans (scripted first, personal second),
+    so the scripted half can classify REMOVE in an unattended run (#105)."""
+    scripted_plan, personal_plan = old_session_split_plan(
+        config_dir, project_info, session_days, automation_days)
+    if scripted_plan and personal_plan:
+        return [scripted_plan, personal_plan]
+    return [p for p in (scripted_plan, personal_plan) if p]
 
 
 def collect_candidates(config_dir, days, allowlist_path, session_days=SESSION_DAYS,
@@ -745,8 +838,7 @@ def collect_candidates(config_dir, days, allowlist_path, session_days=SESSION_DA
                 "last_activity": last_activity(info),
             })
         elif allowlist is None:
-            plan = old_sessions_plan(config_dir, info, session_days, automation_days)
-            if plan:
+            for plan in old_sessions_plan(config_dir, info, session_days, automation_days):
                 candidates.append(plan)
     return candidates
 
@@ -790,7 +882,9 @@ def plan_for_named_project(config_dir, name, old_sessions=False, session_days=SE
                            automation_days=AUTOMATION_DAYS, restrict_to_thresholds=False):
     """--project mode: accept the encoded folder name or a real path. With old_sessions, only
     that project's old single sessions (see old_sessions_plan); active ones are skipped, not
-    refused, so a project in use can be cleaned.
+    refused, so a project in use can be cleaned. Returns a LIST of plans (empty when no
+    project matches or nothing qualifies); a mixed project's scripted/personal halves arrive
+    as two plans (#105).
 
     A project with an active session is never wiped wholesale; its old single sessions can
     still be wiped (automatic fallback). A plain project wipe with explicit
@@ -821,26 +915,28 @@ def plan_for_named_project(config_dir, name, old_sessions=False, session_days=SE
             if project:
                 break
     if project is None:
-        return None
+        return []
     info = collect_project(config_dir, project)
     if old_sessions or restrict_to_thresholds:
-        # Only the project's old single sessions, not the project itself.
-        plan = old_sessions_plan(config_dir, info, session_days, automation_days)
-        if plan:
-            plan["reasons"] = ["selected by project"] + plan["reasons"]
-        return plan
+        # Only the project's old single sessions, not the project itself. A project
+        # mixing scripted and personal old sessions yields two plans (#105).
+        plans = old_sessions_plan(config_dir, info, session_days, automation_days)
+        for p in plans:
+            p["reasons"] = ["selected by project"] + p["reasons"]
+        return plans
     if any(s["active"] for s in info["sessions"]):
         # Never wipe a project with an active session wholesale; fall back to
         # its old single sessions (refuse only when none are old enough).
-        plan = old_sessions_plan(config_dir, info, session_days, automation_days)
-        if plan is None:
+        plans = old_sessions_plan(config_dir, info, session_days, automation_days)
+        if not plans:
             print("Error: this project has a session that looks active, refusing.", file=sys.stderr)
             sys.exit(1)
-        plan["reasons"] = ["selected by project",
-                           "active session present; only its old sessions can be wiped"] + plan["reasons"]
-        return plan
+        for p in plans:
+            p["reasons"] = ["selected by project",
+                           "active session present; only its old sessions can be wiped"] + p["reasons"]
+        return plans
     paths, session_ids = project_wipe_plan(config_dir, info)
-    return {
+    return [{
         "project": project,
         "reasons": ["selected by project"],
         "sessions": [s["id"] for s in info["sessions"]],
@@ -848,7 +944,7 @@ def plan_for_named_project(config_dir, name, old_sessions=False, session_days=SE
         "paths": paths,
         "size": sum(tree_size(p) for _, p in paths),
         "last_activity": last_activity(info),
-    }
+    }]
 
 
 def describe_orca(orca_dir):
@@ -876,6 +972,47 @@ def print_orca_section(found):
     print("Manual cleanup: close Orca terminals you no longer need, then delete their folders")
     print("under terminal-history yourself. Orca's Claude session list rebuilds from the")
     print("transcript files, so wiping above already removes the sessions from that list.")
+
+def resolve_lumoservices_dir():
+    """WinSW service configs directory (#183): ~/.lumoservices unless
+    CLAUDE_LUMO_SERVICE_DIR overrides it (tests). It can hold a copy of the master
+    key, so the wipe report always names it when it survives."""
+    return os.path.abspath(os.path.expanduser(
+        os.environ.get("CLAUDE_LUMO_SERVICE_DIR") or "~/.lumoservices"))
+
+
+def describe_lumoservices():
+    """Surviving WinSW service trees, report-only (#191): wipe never deletes
+    ~/.lumoservices itself. Its services may still be running, and stopping and
+    unregistering them is what uninstall.sh does before removing the folder."""
+    root = resolve_lumoservices_dir()
+    if not os.path.isdir(root) or is_any_link(root):
+        return []
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        return []
+    found = []
+    for name in entries:
+        path = os.path.join(root, name)
+        if os.path.exists(path) and not is_any_link(path):
+            found.append(("WinSW service config", path, tree_size(path)))
+    return found
+
+
+def print_lumoservices_section(found):
+    """Show WinSW service trees that survive this wipe (#191)."""
+    if not found:
+        return
+    total = sum(size for _, _, size in found)
+    print(f"\nWinSW service configs at {resolve_lumoservices_dir()} survive this wipe "
+          f"({format_size(total)}):")
+    for label, path, size in found:
+        print(f"  {label}: {path}  ({format_size(size)})")
+    print("They reference this install and can embed a copy of the master key; services kept")
+    print("running keep serving from deleted paths. Stop them first when they are no longer")
+    print("wanted: `claude-lumo uninstall` stops and unregisters the services and removes")
+    print("the folder. Wiping here never deletes ~/.lumoservices itself.")
 
 
 def delete_all(target_groups, store_root=None):
@@ -927,7 +1064,13 @@ def print_report(store_groups, temp_paths, log_paths, dump_paths=()):
         label = f"Store: {g['store']['path']}"
         if g["store"].get("current"):
             label += " [current store]"
+        # One read of history.jsonl per store covers every plan's ids (#107).
+        match_counts = history_match_counts(
+            os.path.join(g["store"]["path"], "history.jsonl"),
+            [set(c["session_ids"]) for c in candidates])
+        index = 0
         print(f"\n{label}")
+
         for c in candidates:
             when = ""
             if c["last_activity"]:
@@ -939,8 +1082,8 @@ def print_report(store_groups, temp_paths, log_paths, dump_paths=()):
             hidden = len(c["paths"]) - LISTED_PATHS_PER_PLAN
             if hidden > 0:
                 print(f"  ... and {hidden} more path(s), {format_size(c['size'])} in all")
-            entries = history_matches(os.path.join(g["store"]["path"], "history.jsonl"),
-                                      set(c["session_ids"]))
+            entries = match_counts[index]
+            index += 1
             if entries:
                 print(f"  [history.jsonl] {entries} entr{'y' if entries == 1 else 'ies'}")
         if store_paths:
@@ -1189,10 +1332,10 @@ def main(argv=None):
         temp_paths, log_paths, dump_paths = [], [], []
     elif args.project:
         for store in stores:
-            plan = plan_for_named_project(store["path"], args.project, args.old_sessions,
-                                          args.session_days, args.automation_days,
-                                          restrict_to_thresholds=restrict)
-            if plan is not None:
+            got = plan_for_named_project(store["path"], args.project, args.old_sessions,
+                                         args.session_days, args.automation_days,
+                                         restrict_to_thresholds=restrict)
+            for plan in got:
                 plan["store"] = store
                 plans.append(plan)
         if not plans and (args.old_sessions or restrict):
@@ -1237,11 +1380,11 @@ def main(argv=None):
 
     print_report(store_groups, temp_paths, log_paths, dump_paths)
     print_orca_section(describe_orca(resolve_orca_dir()))
+    print_lumoservices_section(describe_lumoservices())
 
     if args.dry_run:
         print("\nDry run: nothing was deleted. Re-run without --dry-run to delete.")
         return
-
     if mode == "agent":
         mode = choose_mode()
         if mode == "agent":
@@ -1354,6 +1497,10 @@ def main(argv=None):
                 _, reason = plan["_classification"]
                 print(f"  {plan.get('project', 'unknown')}: {reason}")
 
+        # Same approval covers stopping a watchdog whose stale log is among these (#174).
+        if approved:
+            stop_stale_watchdog(log_paths)
+
         # Temp scratch, logs and debug dumps ride on the same confirmation as the REMOVE items.
         for group in temp_paths, log_paths, dump_paths:
             if not group or not approved:
@@ -1400,6 +1547,8 @@ def main(argv=None):
         if not confirm():
             print("Aborted, nothing was deleted.")
             return
+    # The confirmed wipe includes stopping a watchdog whose stale log is being deleted (#174).
+    stop_stale_watchdog(log_paths)
 
     deleted, failed, freed = 0, 0, 0
     for group in store_groups:
