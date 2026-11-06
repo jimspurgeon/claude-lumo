@@ -152,11 +152,14 @@ Either clone the repo:
 
 ```bash
 git clone https://github.com/jimspurgeon/claude-lumo ~/.claude/lumo
-bash ~/.claude/lumo/install.sh
+bash ~/.claude/lumo/lumo-gateway setup
 ```
 
-Or download the ZIP from this repo's Releases page, unzip it, and run
-`bash install.sh` from that folder.
+`lumo-gateway setup` is the gateway-only path: it installs the gateway services
+recipe, LiteLLM, the master key, and the `lumo-gateway` CLI, without touching
+Claude Code. For the full Claude Code integration, run `bash install.sh` from the
+same folder (add `--dry-run` to either to preview). Or download the ZIP from this
+repo's Releases page, unzip it, and run `bash lumo-gateway setup` from that folder.
 
 ## Updating and reverting
 

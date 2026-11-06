@@ -358,3 +358,33 @@ defaults to a `claude-*` name still works (it falls through to `lumo-max`, or
 so routing is explicit instead of accidental. If the harness cannot be configured
 at all, aliasing still saves the request; only a harness that also rewrites the
 protocol needs the launcher treatment LearnHarness got.
+
+## The `lumo-gateway` CLI
+
+`lumo-gateway` is the control-plane command for the gateway itself (as opposed to
+`claude-lumo`, which drives Claude Code through the gateway). It ships at the repo
+root and is put on PATH by `install.sh` (both modes). Gateway-only machines — boxes
+that serve other harnesses and never run Claude Code — install it with:
+
+```bash
+git clone https://github.com/jimspurgeon/claude-lumo ~/.lumo-gateway
+bash ~/.lumo-gateway/install.sh --gateway-only
+```
+
+That installs only: the repo checkout (`~/.lumo-gateway`), the LiteLLM virtualenv,
+the master key, and the `lumo-gateway` CLI. It never touches `~/.claude`, Node.js,
+or Claude Code. Preview it with `--dry-run`.
+
+| Command | What it does |
+| --- | --- |
+| `setup` | Gateway-only install (runs `install.sh --gateway-only`); safe to re-run |
+| `update` | Move to a newer release — not implemented yet (exit 2) |
+| `revert` | Roll back to the previous release — not implemented yet (exit 2) |
+| `uninstall` | Stop/remove the services and files — not implemented yet (exit 2) |
+| `api-key` | Prints the base URL (`http://127.0.0.1:4000`) and the master key **file path** — never the key value |
+| `status` | `LumoGatewayLiteLLM` service state + a `:4000` health check |
+| `help` | Full command reference |
+
+Exit codes: `0` success, `1` bad/missing command, `2` placeholder ("not implemented
+yet"). Read the key with `cat "$(lumo-gateway api-key | awk '{print $3}')"` — by
+design no subcommand ever prints it.
