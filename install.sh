@@ -12,11 +12,21 @@ _self="${BASH_SOURCE[0]:-}"
 if [ -n "$_self" ] && [ -f "$(dirname "$_self")/claude-lumo.sh" ]; then
   SRC="$(cd "$(dirname "$_self")" && pwd)"
 fi
+# Flags:
+#   --gateway-only  install ONLY the gateway (repo checkout + LiteLLM venv + master key +
+#                   the lumo-gateway CLI on PATH). Skips Claude Code entirely: no ~/.claude
+#                   writes, no claude-lumo wrapper, no hooks, no data separation.
+#   --dry-run       list everything that would be installed/changed, then exit 0 without
+#                   writing anything anywhere. Composable with --gateway-only.
+GATEWAY_ONLY=0
+DRY_RUN=0
 # Opt-in extras: --resume-shim also installs the resume shim (see README, "Resume shim").
 # Accept the PowerShell-style spelling too, since install.ps1 forwards its own args verbatim.
 EXTRA_RESUME_SHIM=0
 for _arg in "$@"; do
   case "$_arg" in
+    --gateway-only|-GatewayOnly) GATEWAY_ONLY=1;;
+    --dry-run|-DryRun)           DRY_RUN=1;;
     --resume-shim|-ResumeShim) EXTRA_RESUME_SHIM=1;;
   esac
 done
@@ -38,11 +48,50 @@ case "$OS" in
   linux)   BIN="$HOME/.local/bin";      VP="$VENV/bin/python";    LITELLM="$VENV/bin/litellm";;
 esac
 
-mkdir -p "$S" "$BIN"
-# Put our own bin dir on PATH for the rest of this script: the Claude Code installer drops
-# its binary in ~/.local/bin on Linux, and without this the check right after it would
-# report "still not on PATH" for an install that actually worked.
+# Directories are created lazily after the dry-run check so a dry run mutates nothing.
+# Our bin dir goes on PATH ahead of that for the PATH check below.
 case ":$PATH:" in *":$BIN:"*) ;; *) PATH="$BIN:$PATH"; export PATH;; esac
+
+# Dry-run: print everything this script would install or change, then exit.
+# Nothing has been written — all directory creation is deferred until after this block.
+if [ "$DRY_RUN" = "1" ]; then
+  echo "install.sh dry run — nothing will be changed."
+  echo ""
+  if [ "$GATEWAY_ONLY" = "1" ]; then
+    echo "Gateway-only mode. Would:"
+    echo "  - install repo files into:        $HOME/.lumo-gateway"
+    echo "  - create LiteLLM venv:            $VENV (hash-locked requirements.txt)"
+    echo "  - generate master key if missing: $S/master.key"
+    echo "  - put lumo-gateway CLI on PATH:   $BIN/lumo-gateway"
+    if [ "$OS" = "windows" ]; then
+      echo "    (+ $BIN/lumo-gateway.cmd for cmd.exe/PowerShell)"
+    fi
+    echo "NOT touched in gateway-only mode: ~/.claude (no claude-lumo wrapper, no"
+    echo "hooks, no data separation), Node.js, Claude Code."
+    echo "Services (LumoGatewayLiteLLM + LumoGatewayProxy) are installed separately"
+    echo "via gateway/install-supervisor.ps1 -Install (elevated) on Windows, or the"
+    echo "systemd/launchd recipes in docs/GATEWAY.md elsewhere."
+  else
+    echo "Full install. Would:"
+    echo "  - check/auto-install prerequisites (git, Node 22+, Python 3.12+, Claude Code)"
+    echo "  - install repo files into:        $D"
+    echo "  - create LiteLLM venv:             $VENV (hash-locked requirements.txt)"
+    echo "  - generate master key if missing:  $S/master.key"
+    echo "  - put claude-lumo on PATH:         $BIN/claude-lumo"
+    if [ "$OS" = "windows" ]; then
+      echo "    (+ $BIN/claude-lumo.cmd and $BIN/lumo-gateway(.cmd))"
+    fi
+    echo "  - opt-in extras only when their flags are given (--separate-data,"
+    echo "    --resume-shim, CLAUDE_LUMO_PLAIN_OFFER=1)"
+  fi
+  echo ""
+  echo "Next action: re-run without --dry-run to install, or use:"
+  echo "  lumo-gateway setup   (gateway-only)"
+  exit 0
+fi
+
+# Deferred (post-dry-run) directory creation: state dir and bin dir.
+mkdir -p "$S" "$BIN"
 
 # === Linux helper functions =============================================================
 # Many Linux environments the one-liner is piped into differ from the Ubuntu-with-sudo
@@ -109,6 +158,19 @@ node_install_linux() {
 # =========================================================================================
 
 # === Prerequisites checks with auto-install ===
+# Gateway-only mode needs neither Node nor Claude Code (the services run LiteLLM and
+# the Node proxy via the supervisor install; nothing here touches ~/.claude).
+if [ "$GATEWAY_ONLY" = "1" ]; then
+  echo "Checking prerequisites (gateway-only mode)..."
+  if ! command -v git >/dev/null 2>&1; then
+    echo "ERROR: git is required. Install it, then re-run." >&2; exit 1
+  fi
+  if ! command -v "$PY" >/dev/null 2>&1; then
+    echo "ERROR: Python 3.12+ is required (as 'python' or 'python3')." >&2; exit 1
+  fi
+  echo "Prerequisites check complete."
+else
+
 echo "Checking prerequisites..."
 
 # Git
@@ -196,9 +258,16 @@ fi
 
 echo "Prerequisites check complete."
 
-mkdir -p "$S" "$BIN"
+fi
 
-# Get the files into ~/.claude/lumo. The recommended install is a git clone there, so
+
+# --gateway-only keeps the repo files out of ~/.claude entirely (gateway machines may
+# have no Claude Code at all): install the checkout to ~/.lumo-gateway instead.
+if [ "$GATEWAY_ONLY" = "1" ]; then
+  D="$HOME/.lumo-gateway"
+fi
+
+# Get the files into "$D". The recommended install is a git clone there, so
 # re-running this script updates it to the latest release tag.
 # Channel: CLAUDE_LUMO_CHANNEL=release (default) checks out the newest v* tag; =master
 # follows the master branch (for development).
@@ -241,7 +310,7 @@ fi
 # every shell script we just installed so `bash\r` never happens again. (The check is
 # done with grep, not cmp: minimal Fedora images ship no diffutils, and a failing cmp
 # would invert the test and rewrite every file.)
-for f in "$D"/*.sh "$D"/scripts/*.sh; do
+for f in "$D"/*.sh "$D"/lumo-gateway "$D"/scripts/*.sh; do
   [ -f "$f" ] || continue
   if grep -q $'\r' "$f" 2>/dev/null; then
     tr -d "\r" < "$f" > "$f.tmp" && mv "$f.tmp" "$f"
@@ -284,13 +353,30 @@ fi
 # No per-machine edits to tracked files: claude-lumo.sh fills in this machine's paths at launch
 # (into ~/.claude-lumo/settings.json), so a git clone stays clean and updates keep working.
 
-# Put claude-lumo on PATH. In a bash shell:
-printf '#!/bin/sh\nexec bash "$HOME/.claude/lumo/claude-lumo.sh" "$@"\n' > "$BIN/claude-lumo"
-chmod +x "$BIN/claude-lumo"
-
-# Windows also needs a .cmd wrapper for cmd.exe / PowerShell.
+# Put the gateway CLI on PATH (both modes): a tiny sh wrapper over the checkout's
+# lumo-gateway, plus a .cmd twin for cmd.exe/PowerShell on Windows.
+_D_FWD="$(cygpath -m "$D" 2>/dev/null || echo "$D")"
+printf '#!/bin/sh\nexec bash "%s/lumo-gateway" "$@"\n' "$_D_FWD" > "$BIN/lumo-gateway"
+chmod +x "$BIN/lumo-gateway"
 if [ "$OS" = "windows" ]; then
-  printf '@echo off\r\n"C:\\Program Files\\Git\\bin\\bash.exe" "%%USERPROFILE%%\\.claude\\lumo\\claude-lumo.sh" %%*\r\n' > "$BIN/claude-lumo.cmd"
+  _HOME_FWD="$(cygpath -m "$HOME" 2>/dev/null || echo "$HOME")"
+  _D_REL="${_D_FWD#$_HOME_FWD/}"
+  if [ "$_D_REL" = "$_D_FWD" ]; then
+    _D_BASH="$_D_FWD"      # D outside HOME: bake the absolute path
+  else
+    _D_BASH="%%USERPROFILE%%\\${_D_REL//\//\\}"
+  fi
+  printf '@echo off\r\n"C:\\Program Files\\Git\\bin\\bash.exe" "%s\\lumo-gateway" %%*\r\n' "$_D_BASH" > "$BIN/lumo-gateway.cmd"
+fi
+
+if [ "$GATEWAY_ONLY" = "0" ]; then
+  # The full install also puts the claude-lumo launcher on PATH. In a bash shell:
+  printf '#!/bin/sh\nexec bash "$HOME/.claude/lumo/claude-lumo.sh" "$@"\n' > "$BIN/claude-lumo"
+  chmod +x "$BIN/claude-lumo"
+  # Windows also needs a .cmd wrapper for cmd.exe / PowerShell.
+  if [ "$OS" = "windows" ]; then
+    printf '@echo off\r\n"C:\\Program Files\\Git\\bin\\bash.exe" "%%USERPROFILE%%\\.claude\\lumo\\claude-lumo.sh" %%*\r\n' > "$BIN/claude-lumo.cmd"
+  fi
 fi
 
 # Point at the always-on services: the gateway can run without the launcher
@@ -357,6 +443,30 @@ with open(path, "w", encoding="utf-8") as f:
 EOF
     echo "Added the wipe-offer SessionStart hook to ~/.claude/settings.json (backup: settings.json.bak-wipe-offer)."
   fi
+fi
+
+# Gateway-only stop: everything below serves the Claude Code integration
+# (--separate-data, resume shim, wipe-offer hook, statusline cache), none of which
+# applies to a gateway-only machine.
+if [ "$GATEWAY_ONLY" = "1" ]; then
+  echo ""
+  echo "Gateway-only install complete:"
+  echo "  - Repo files:   $D"
+  echo "  - LiteLLM venv: $VENV"
+  echo "  - Master key:   $S/master.key"
+  echo "  - CLI on PATH:  $BIN/lumo-gateway (reopen the terminal if not found)"
+  echo ""
+  if [ "$OS" = "windows" ]; then
+    WIN_PS1="$(cygpath -w "$D/gateway/install-supervisor.ps1" 2>/dev/null || echo "$D\\gateway\\install-supervisor.ps1")"
+    echo "Next action: install the LumoGatewayLiteLLM + LumoGatewayProxy services from"
+    echo "an elevated PowerShell with:"
+    echo "  powershell -File "$WIN_PS1" -Install"
+  else
+    echo "Next action: set up the LumoGatewayLiteLLM/Proxy services (systemd/launchd"
+    echo "recipes: docs/GATEWAY.md in this checkout)."
+  fi
+  echo "Then check with: lumo-gateway status"
+  exit 0
 fi
 
 # Fresh version probe: statusline.py caches the git tag for an hour, so a stale

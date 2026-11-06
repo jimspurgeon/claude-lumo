@@ -1,0 +1,146 @@
+#!/bin/bash
+# lumo-gateway: control-plane CLI for the lumo gateway.
+# The gateway is two always-on services (LumoGatewayLiteLLM = LiteLLM on :4000,
+# LumoGatewayProxy = the Node proxy) plus litellm.yaml and the master key.
+# This command manages the gateway only; it never touches Claude Code config.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STATE_DIR="${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}"
+BASE_URL="http://127.0.0.1:4000"
+KEY_PATH="$STATE_DIR/master.key"
+INSTALL_SH="$SCRIPT_DIR/install.sh"
+
+usage() {
+  cat >&2 <<'EOF'
+usage: lumo-gateway <command> [args]
+
+Commands:
+  setup      Install the gateway (services recipe, litellm.yaml, master key, CLI)
+  update     Update the gateway to the latest release (placeholder)
+  revert     Go back to the previously installed gateway release (placeholder)
+  uninstall  Remove the gateway services and files (placeholder)
+  api-key    Show the base URL and where the master key lives (never the key)
+  status     Service state + gateway health check on :4000
+  help       Show this help
+
+Run 'lumo-gateway help' for details.
+EOF
+}
+
+cmd_help() {
+  cat <<'EOF'
+lumo-gateway — control plane for the lumo gateway
+
+The gateway serves any OpenAI-compatible client at http://127.0.0.1:4000 and
+consists of the LiteLLM service (LumoGatewayLiteLLM), the proxy service
+(LumoGatewayProxy), litellm.yaml, and a generated master key.
+
+Commands:
+
+  setup
+      Install only the gateway: repo files, LiteLLM virtualenv, master key,
+      and this CLI on PATH. Runs install.sh --gateway-only; never touches
+      ~/.claude or Claude Code. Safe to re-run.
+
+  update
+      Not implemented yet (exit 2). Will move the installed gateway to a
+      newer release tag.
+
+  revert
+      Not implemented yet (exit 2). Will roll the installed gateway back to
+      the previous release.
+
+  uninstall
+      Not implemented yet (exit 2). Will stop the services and remove the
+      gateway files.
+
+  api-key
+      Prints the base URL and the master key file path. The key value is
+      never printed to the terminal — read it with:
+        cat "<key file path>"
+      and give it to clients as the bearer token / API key.
+
+  status
+      Reports whether LumoGatewayLiteLLM is running (Windows service state
+      or process probe) and whether the gateway answers on :4000.
+
+  help
+      This text.
+EOF
+}
+
+placeholder() {
+  echo "lumo-gateway $1: not implemented yet" >&2
+  echo "This command lands in a later release of the gateway work." >&2
+  exit 2
+}
+
+cmd_setup() {
+  if [ ! -f "$INSTALL_SH" ]; then
+    echo "lumo-gateway: install.sh not found next to this script ($SCRIPT_DIR)." >&2
+    echo "Clone the repo, or re-run from the claude-lumo checkout." >&2
+    exit 1
+  fi
+  echo "Installing the gateway (gateway-only; ~/.claude untouched)..."
+  bash "$INSTALL_SH" --gateway-only "$@"
+}
+
+cmd_api_key() {
+  echo "Base URL:     $BASE_URL"
+  echo "Master key:   $KEY_PATH"
+  if [ -s "$KEY_PATH" ]; then
+    echo "The key exists. View it with:  cat \"$KEY_PATH\""
+  else
+    echo "No key yet — run 'lumo-gateway setup' to generate it."
+  fi
+}
+
+cmd_status() {
+  echo "Gateway services:"
+  local svc_state="unknown"
+  if command -v powershell.exe >/dev/null 2>&1; then
+    svc_state="$(powershell.exe -NoProfile -Command \
+      '(Get-Service -Name LumoGatewayLiteLLM -ErrorAction SilentlyContinue).Status' \
+      2>/dev/null | tr -d '\r')" || svc_state="not installed"
+    [ -n "$svc_state" ] || svc_state="not installed"
+  elif command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user is-active lumo-gateway-litellm.service >/dev/null 2>&1; then
+      svc_state="active"
+    else
+      svc_state="inactive (systemd unit lumo-gateway-litellm.service)"
+    fi
+  else
+    if command -v sc >/dev/null 2>&1 && sc query LumoGatewayLiteLLM >/dev/null 2>&1; then
+      svc_state="installed (see sc query LumoGatewayLiteLLM)"
+    fi
+  fi
+  echo "  LumoGatewayLiteLLM: $svc_state"
+
+  echo "Gateway health check:"
+  local health_path="/health/liveliness"
+  local body
+  if body="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$BASE_URL$health_path" 2>/dev/null)"; then
+    if [ "$body" = "200" ]; then
+      echo "  $BASE_URL$health_path -> HTTP $body (gateway is up)"
+    else
+      echo "  $BASE_URL$health_path -> HTTP $body (answered but not healthy)"
+    fi
+  else
+    echo "  $BASE_URL$health_path -> no answer (gateway is down; run 'lumo-gateway setup')"
+  fi
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  setup)    cmd_setup "$@";;
+  update)   placeholder "update";;
+  revert)   placeholder "revert";;
+  uninstall) placeholder "uninstall";;
+  api-key)  cmd_api_key;;
+  status)   cmd_status;;
+  help|--help|-h) cmd_help;;
+  "")  usage; exit 1;;
+  *)   echo "lumo-gateway: unknown command '$cmd'" >&2; usage; exit 1;;
+esac
