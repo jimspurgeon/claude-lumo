@@ -57,6 +57,36 @@ if ! git -C "$D" checkout -q "$LATEST"; then
   echo "claude-lumo: checkout failed; nothing changed."
   exit 1
 fi
+# Stop the watchdog before the swap (#175): bash keeps the old script in memory, so an
+# update never reaches a running loop otherwise. It removes its own pidfile on TERM.
+WD_PIDFILE="$S/watchdog.pid"
+stop_watchdog() {
+  [ -f "$WD_PIDFILE" ] || return 0
+  local pid; pid="$(cat "$WD_PIDFILE" 2>/dev/null || true)"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || { rm -f "$WD_PIDFILE"; return 0; }
+  kill "$pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.3
+  done
+  kill -9 "$pid" 2>/dev/null || true
+  rm -f "$WD_PIDFILE"
+}
+start_watchdog() {
+  [ -f "$D/scripts/watchdog.sh" ] || return 0
+  if [ -n "$(command -v "$PY")" ]; then
+    "$PY" "$D/service_restart.py" --install-dir "$D" --spawn-watchdog 2>/dev/null \
+      || echo "Warning: could not restart the watchdog; it will start at the next launch."
+  else
+    nohup bash "$D/scripts/watchdog.sh" >/dev/null 2>&1 &
+  fi
+}
+WAS_WATCHDOG=0
+if [ -f "$WD_PIDFILE" ] && kill -0 "$(cat "$WD_PIDFILE" 2>/dev/null)" 2>/dev/null; then
+  WAS_WATCHDOG=1
+fi
+if [ "$WAS_WATCHDOG" = "1" ]; then stop_watchdog; fi
+
 
 # Clear the pending notice and the status line's cached version right after the checkout, before
 # the slow installer rerun: statusline.py caches the git tag for an hour, so a cache left behind by
@@ -74,6 +104,13 @@ else
 fi
 
 echo "Updated to $LATEST. Open claude-lumo sessions keep the old files until they are restarted."
+
+# Restart the watchdog only when one was running before the update, so the new
+# scripts/watchdog.sh logic takes effect (#175). Never started for installs
+# that ran without one.
+if [ "$WAS_WATCHDOG" = "1" ]; then
+  start_watchdog
+fi
 
 # Offer to restart sessions
 if [ -f "$D/session-restart.py" ] && [ -t 1 ]; then
