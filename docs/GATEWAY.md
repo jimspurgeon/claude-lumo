@@ -83,7 +83,8 @@ The claude-lumo launcher remains as a fallback: if it finds the services already
 answering on :4000 and :8790 it just uses them; otherwise it starts the gateway itself
 the old way, so a machine without the services still works (see
 [How it works](../README.md#how-it-works)). When the services are present, the watchdog
-stops relaunching processes and only reports problems in its log.
+stops relaunching processes and only reports problems in its log. The watchdog has no
+401/cookie-expiry logic — that re-auth-and-retry path lives in `gateway/upstream.mjs` (#190).
 
 ## Plain Claude Code
 

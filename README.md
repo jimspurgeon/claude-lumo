@@ -68,7 +68,9 @@ services alive: it probes `:8790` and `:4000` every 30 seconds and relaunches wh
 died, the same way the launcher does, with exponential backoff so a crash-looping
 service cannot hammer the machine (#171). It never kills or restarts a healthy
 service, and it only ever probes those two ports. Events go to
-`~/.claude-lumo/logs/watchdog.log` (rotated at 10 MB). Disable it for a session by
+`~/.claude-lumo/logs/watchdog.log` (rotated at 10 MB). The watchdog has no
+401/cookie-expiry logic: that re-auth-and-retry path lives in the proxy itself
+(`gateway/upstream.mjs`, #190). Disable the watchdog for a session by
 setting `CLAUDE_LUMO_WATCHDOG=0`.
 
 ## Install
