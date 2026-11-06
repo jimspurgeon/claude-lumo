@@ -155,11 +155,13 @@ git clone https://github.com/jimspurgeon/claude-lumo ~/.claude/lumo
 bash ~/.claude/lumo/lumo-gateway setup
 ```
 
-`lumo-gateway setup` is the gateway-only path: it installs the gateway services
-recipe, LiteLLM, the master key, and the `lumo-gateway` CLI, without touching
-Claude Code. For the full Claude Code integration, run `bash install.sh` from the
-same folder (add `--dry-run` to either to preview). Or download the ZIP from this
-repo's Releases page, unzip it, and run `bash lumo-gateway setup` from that folder.
+`lumo-gateway setup` is the gateway-only path: it installs LiteLLM, the master
+key, and the `lumo-gateway` CLI, without touching Claude Code. Installing the
+Windows services (or systemd/launchd equivalents) is a separate elevated step —
+setup prints the exact next command. For the full Claude Code integration, run
+`bash install.sh` from the same folder (add `--dry-run` to either to preview). Or
+download the ZIP from this repo's Releases page, unzip it, and run `bash
+lumo-gateway setup` from that folder.
 
 ## Updating and reverting
 

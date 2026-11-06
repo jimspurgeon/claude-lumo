@@ -48,14 +48,12 @@ case "$OS" in
   linux)   BIN="$HOME/.local/bin";      VP="$VENV/bin/python";    LITELLM="$VENV/bin/litellm";;
 esac
 
-mkdir -p "$S" "$BIN"
-# Put our own bin dir on PATH for the rest of this script: the Claude Code installer drops
-# its binary in ~/.local/bin on Linux, and without this the check right after it would
-# report "still not on PATH" for an install that actually worked.
+# Directories are created lazily after the dry-run check so a dry run mutates nothing.
+# Our bin dir goes on PATH ahead of that for the PATH check below.
 case ":$PATH:" in *":$BIN:"*) ;; *) PATH="$BIN:$PATH"; export PATH;; esac
 
-# Dry-run: print everything this script would install or change, then exit. Only
-# `mkdir -p "$S" "$BIN"` above has run — nothing else is written.
+# Dry-run: print everything this script would install or change, then exit.
+# Nothing has been written — all directory creation is deferred until after this block.
 if [ "$DRY_RUN" = "1" ]; then
   echo "install.sh dry run — nothing will be changed."
   echo ""
@@ -91,6 +89,9 @@ if [ "$DRY_RUN" = "1" ]; then
   echo "  lumo-gateway setup   (gateway-only)"
   exit 0
 fi
+
+# Deferred (post-dry-run) directory creation: state dir and bin dir.
+mkdir -p "$S" "$BIN"
 
 # === Linux helper functions =============================================================
 # Many Linux environments the one-liner is piped into differ from the Ubuntu-with-sudo
@@ -259,7 +260,6 @@ echo "Prerequisites check complete."
 
 fi
 
-mkdir -p "$S" "$BIN"
 
 # --gateway-only keeps the repo files out of ~/.claude entirely (gateway machines may
 # have no Claude Code at all): install the checkout to ~/.lumo-gateway instead.

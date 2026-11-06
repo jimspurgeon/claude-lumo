@@ -377,7 +377,7 @@ or Claude Code. Preview it with `--dry-run`.
 
 | Command | What it does |
 | --- | --- |
-| `setup` | Gateway-only install (runs `install.sh --gateway-only`); safe to re-run |
+| `setup` | Gateway-only install (runs `install.sh --gateway-only`): checkout, LiteLLM venv, master key, CLI — service installation stays a separate elevated step (printed next); safe to re-run |
 | `update` | Move to a newer release — not implemented yet (exit 2) |
 | `revert` | Roll back to the previous release — not implemented yet (exit 2) |
 | `uninstall` | Stop/remove the services and files — not implemented yet (exit 2) |
