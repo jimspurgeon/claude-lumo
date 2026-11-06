@@ -23,6 +23,7 @@ Commands:
   uninstall  Remove the gateway services and files (placeholder)
   api-key    Show the base URL and where the master key lives (never the key)
   status     Service state + gateway health check on :4000
+  omp        One-command full install for the omp harness (gateway + omp + wiring + config sync)
   help       Show this help
 
 Run 'lumo-gateway help' for details.
@@ -61,6 +62,12 @@ Commands:
       never printed to the terminal — read it with:
         cat "<key file path>"
       and give it to clients as the bearer token / API key.
+
+  omp
+      Full install for the omp harness in one command: gateway setup, the
+      official omp installer, wiring (models.yml + credential, key value
+      never printed), and a sync of jimspurgeon/omp-config. Runs
+      install-omp-full.sh from this checkout; safe to re-run.
 
   status
       Reports whether LumoGatewayLiteLLM is running (Windows service state
@@ -136,6 +143,16 @@ cmd_status() {
   fi
 }
 
+cmd_omp() {
+  if [ ! -f "$SCRIPT_DIR/install-omp-full.sh" ]; then
+    echo "lumo-gateway: install-omp-full.sh not found next to this script ($SCRIPT_DIR)." >&2
+    echo "Clone the repo, or re-run from the claude-lumo checkout." >&2
+    exit 1
+  fi
+  echo "Full install for omp (gateway + omp + wiring + config sync)..."
+  bash "$SCRIPT_DIR/install-omp-full.sh" "$@"
+}
+
 cmd="${1:-}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
@@ -146,6 +163,7 @@ case "$cmd" in
   api-key)  cmd_api_key;;
   status)   cmd_status;;
   help|--help|-h) cmd_help;;
+  omp)      cmd_omp "$@";;
   "")  usage; exit 1;;
   *)   echo "lumo-gateway: unknown command '$cmd'" >&2; usage; exit 1;;
 esac

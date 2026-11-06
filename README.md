@@ -163,6 +163,29 @@ setup prints the exact next command. For the full Claude Code integration, run
 download the ZIP from this repo's Releases page, unzip it, and run `bash
 lumo-gateway setup` from that folder.
 
+### omp in one command (all OSes)
+
+The same gateway can drive the [omp](https://omp.sh) harness instead of Claude Code.
+One command installs everything: gateway, omp, the wiring, and your synced config.
+
+Windows (PowerShell; needs Git for Windows):
+
+```powershell
+irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install-omp-full.ps1 | iex
+```
+
+macOS / Linux (any terminal):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install-omp-full.sh | bash
+```
+
+Each stage is idempotent and prints its progress: gateway setup, the official omp
+installer, wiring (`models.yml` provider, credential import, default role), and a
+sync from the private `jimspurgeon/omp-config` repo. The master-key value is never
+printed or stored in a config file. Already installed from a clone? The same flow
+runs as `lumo-gateway omp`. Details in [docs/GATEWAY.md](docs/GATEWAY.md).
+
 ## Updating and reverting
 
 ```bash

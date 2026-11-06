@@ -45,3 +45,128 @@ jobs:
         run: python -m pytest -q
       - name: Proxy tests
         run: node --test gateway/*.test.mjs
+
+  # Fresh-Linux acceptance for the omp one-command integration: scratch HOME, all four
+  # stages, idempotent re-run, and the sentinel check that the master-key value never
+  # appears in any captured output. The omp-config clone needs a private-repo token;
+  # when the secret is absent that stage must self-skip (and the job still pass).
+  # NOTE for maintainers: add the repository secret OMP_CONFIG_TOKEN (GitHub PAT with
+  # read access to jimspurgeon/omp-config) after merge to exercise the real config sync.
+  omp-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: bash -n + shellcheck the scripts
+        run: |
+          set -euo pipefail
+          bash -n install-omp-full.sh
+          bash -n lumo-gateway
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning install-omp-full.sh lumo-gateway
+          # PowerShell wrapper parses cleanly.
+          pwsh -NoProfile -Command '$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("install-omp-full.ps1", [ref]$null, [ref]$e); if ($e.Count) { $e; exit 1 }'
+      - name: Fresh-machine run 1 (clone -> install-omp-full.sh, scratch HOME)
+        env:
+          OMP_CONFIG_TOKEN: ${{ secrets.OMP_CONFIG_TOKEN }}
+        run: |
+          set -euo pipefail
+          SB="$RUNNER_TEMP/omp-sim"
+          mkdir -p "$SB/home"
+          # Pin to the PR HEAD SHA, not github.sha: on pull_request events
+          # github.sha is the ephemeral merge ref, which GitHub garbage-collects
+          # once the head moves — breaking re-runs of old runs (exit 128:
+          # "unable to read tree"). The head SHA is immutable.
+          git clone -q "https://github.com/${{ github.repository }}.git" "$SB/src"
+          git -C "$SB/src" checkout -q "${{ github.event.pull_request.head.sha || github.sha }}"
+          # Seed a deterministic master key: the gateway install would generate one,
+          # but a known sentinel makes the leak check exact.
+          export HOME="$SB/home"
+          export CLAUDE_LUMO_STATE_DIR="$SB/state"
+          mkdir -p "$CLAUDE_LUMO_STATE_DIR"
+          echo 'sk-lumo-CISENTINELDoNotPrint0001' > "$CLAUDE_LUMO_STATE_DIR/master.key"
+          export PATH="$HOME/.local/bin:$PATH"
+
+          OUT="$SB/run1.log"
+          if bash "$SB/src/install-omp-full.sh" < /dev/null > "$OUT" 2>&1; then
+            echo "run 1: exit 0"
+          else
+            echo "run 1 FAILED; full log follows:"; cat "$OUT"; exit 1
+          fi
+          echo "--- run 1 log ---"; cat "$OUT"
+
+          # Stage assertions — each names itself on failure (no silent grep deaths).
+          assert_in() { grep -q "$1" "$2" || { echo "ASSERT FAILED: '$1' not found in $2"; exit 1; }; }
+          assert_in "Stage 1/4: gateway" "$OUT"
+          assert_in "Stage 2/4: install omp" "$OUT"
+          assert_in "Stage 3/4: wire omp" "$OUT"
+          assert_in "Stage 4/4: sync omp config" "$OUT"
+          assert_in "All-in-one omp install complete" "$OUT"
+
+          # models.yml: litellm provider, correct baseUrl, no key material.
+          MY="$HOME/.omp/agent/models.yml"
+          assert_in "litellm" "$MY"
+          assert_in "baseUrl: http://127.0.0.1:4000/v1" "$MY"
+          if grep -qi "api[_-]key" "$MY"; then
+            echo "ASSERT FAILED: models.yml contains api_key/apiKey material"; exit 1
+          fi
+
+          # Credential made it into omp's store (real omp; scratch HOME isolates it).
+          omp auth export > "$SB/auth.json" || { echo "ASSERT FAILED: omp auth export exited $?"; exit 1; }
+          assert_in '"provider": *"litellm"' "$SB/auth.json"
+          assert_in "$(<"$CLAUDE_LUMO_STATE_DIR/master.key")" "$SB/auth.json"
+
+          # Sentinel: the key value never appears in any captured output.
+          MATCHES="$(grep -c 'sk-lumo-CISENTINELDoNotPrint0001' "$OUT" || true)"
+          [ "$MATCHES" = "0" ] || { echo "FAIL: key value leaked into output ($MATCHES matches)"; exit 1; }
+
+          # Config-sync stage outcome is environment-dependent; both endings are valid:
+          grep -Eq "Config sync complete|Self-skipping this stage|Skipped \(" "$OUT" \
+            || { echo "ASSERT FAILED: no config-sync stage outcome line in run log"; exit 1; }
+          if grep -q "Self-skipping this stage" "$OUT"; then
+            echo "omp-config sync self-skipped (secret OMP_CONFIG_TOKEN not set or no SSH)."
+          else
+            grep -q "Config sync complete\|Skipped (" "$OUT" \
+              || { echo "ASSERT FAILED: no 'Config sync complete' line in run log"; exit 1; }
+          fi
+      - name: Re-run (already-done per stage, exit 0)
+        env:
+          OMP_CONFIG_TOKEN: ${{ secrets.OMP_CONFIG_TOKEN }}
+        run: |
+          set -euo pipefail
+          SB="$RUNNER_TEMP/omp-sim"
+          export HOME="$SB/home"
+          export CLAUDE_LUMO_STATE_DIR="$SB/state"
+          export PATH="$HOME/.local/bin:$PATH"
+          OUT="$SB/run2.log"
+          if bash "$SB/src/install-omp-full.sh" < /dev/null > "$OUT" 2>&1; then
+            echo "re-run: exit 0"
+          else
+            echo "re-run FAILED; full log follows:"; cat "$OUT"; exit 1
+          fi
+          echo "--- re-run log ---"; cat "$OUT"
+          grep -q "Stage 2/4" "$OUT" && grep -E "Already installed|Skipping" "$OUT" >/dev/null
+          grep -q "already wired to the gateway" "$OUT" || grep -q "No changes" "$OUT"
+          MATCHES="$(grep -c 'sk-lumo-CISENTINELDoNotPrint0001' "$OUT" || true)"
+          [ "$MATCHES" = "0" ] || { echo "FAIL: key value leaked on re-run"; exit 1; }
+      - name: lumo-gateway omp dispatch
+        run: |
+          set -euo pipefail
+          SB="$RUNNER_TEMP/omp-sim"
+          export HOME="$SB/home"
+          export CLAUDE_LUMO_STATE_DIR="$SB/state"
+          export PATH="$HOME/.local/bin:$PATH"
+          # The subcommand dispatches to the same script and its stages complete.
+          bash "$SB/src/lumo-gateway" help | grep -q "omp"
+          OUT="$SB/dispatch.log"
+          bash "$SB/src/lumo-gateway" omp < /dev/null > "$OUT" 2>&1
+          grep -q "Stage 4/4" "$OUT"
+          MATCHES="$(grep -c 'sk-lumo-CISENTINELDoNotPrint0001' "$OUT" || true)"
+          [ "$MATCHES" = "0" ] || { echo "FAIL: key value leaked via dispatch"; exit 1; }
