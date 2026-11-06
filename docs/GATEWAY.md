@@ -375,9 +375,34 @@ That installs only: the repo checkout (`~/.lumo-gateway`), the LiteLLM virtualen
 the master key, and the `lumo-gateway` CLI. It never touches `~/.claude`, Node.js,
 or Claude Code. Preview it with `--dry-run`.
 
+### What `setup` prints
+
+When `setup` finishes it prints a fact sheet — everything a client needs on one
+screen — and then handles the two credentials through the clipboard, so nothing
+secret ever lands in the terminal or a scrollback buffer:
+
+- **Base URL** `http://127.0.0.1:4000` — copied to the clipboard automatically
+  (clip.exe on Windows, pbcopy on macOS, wl-copy/xclip/xsel on Linux; if none is
+  present the URL is simply printed).
+- **Protocols**: OpenAI-compatible (`/v1/chat/completions`, `/v1/models`) and
+  Anthropic Messages (`/v1/messages`).
+- **Models**: one line per model read from `gateway/litellm.yaml` at runtime,
+  with its token limits — not a hardcoded list, so adding a model to the yaml
+  is all it takes to see it here.
+- **Master key path** (`~/.claude-lumo/master.key`) — the key value is never
+  printed. On the prompt "press Enter to copy the API key", one Enter puts the
+  key straight on the clipboard; in a non-interactive session the step is
+  skipped and the key path is printed instead.
+- **Services**: whether `LumoGatewayLiteLLM` is running, and if not, the exact
+  command to install the always-on services.
+- **Wiring**: two generic bullets — point any OpenAI-compatible client at the
+  base URL, or register the gateway as a LiteLLM provider specifically (model
+  id `litellm/lumo-max`, `api_base http://127.0.0.1:4000/v1`). No per-harness
+  recipes; the tables above cover individual tools.
+
 | Command | What it does |
 | --- | --- |
-| `setup` | Gateway-only install (runs `install.sh --gateway-only`): checkout, LiteLLM venv, master key, CLI — service installation stays a separate elevated step (printed next); safe to re-run |
+| `setup` | Gateway-only install (runs `install.sh --gateway-only`): checkout, LiteLLM venv, master key, CLI — then prints the fact sheet and walks the clipboard (URL auto-copied, key on Enter; value never printed). Service installation stays a separate elevated step (printed when absent); safe to re-run |
 | `update` | Move to a newer release — not implemented yet (exit 2) |
 | `revert` | Roll back to the previous release — not implemented yet (exit 2) |
 | `uninstall` | Stop/remove the services and files — not implemented yet (exit 2) |

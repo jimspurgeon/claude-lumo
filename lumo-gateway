@@ -10,6 +10,7 @@ STATE_DIR="${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}"
 BASE_URL="http://127.0.0.1:4000"
 KEY_PATH="$STATE_DIR/master.key"
 INSTALL_SH="$SCRIPT_DIR/install.sh"
+FACTS_SH="$SCRIPT_DIR/gateway/setup-facts.sh"
 
 usage() {
   cat >&2 <<'EOF'
@@ -84,6 +85,10 @@ cmd_setup() {
   fi
   echo "Installing the gateway (gateway-only; ~/.claude untouched)..."
   bash "$INSTALL_SH" --gateway-only "$@"
+  # Setup UX (fact sheet + clipboard flow) lives in gateway/setup-facts.sh.
+  # shellcheck source=/dev/null  # shipped next to this script; path varies per install
+  . "$FACTS_SH"
+  facts_print_sheet
 }
 
 cmd_api_key() {
