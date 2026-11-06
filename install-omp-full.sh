@@ -64,7 +64,16 @@ resolve_py() {
   return 1
 }
 resolve_py || fail "python or python3 is required (models.yml yaml round-trip, gateway venv)."
-"$PY" -c 'import yaml' >/dev/null 2>&1 || fail "PyYAML is required (pip install pyyaml), then re-run."
+"$PY" -c 'import yaml' >/dev/null 2>&1 || {
+  echo "[install-omp-full] PyYAML missing — attempting bootstrap via pip..."
+  if ! "$PY" -m pip install --quiet pyyaml >/dev/null 2>&1; then
+    # Debian-family cripples system pip; use the user scheme.
+    "$PY" -m pip install --quiet --user pyyaml >/dev/null 2>&1 || \
+      "$PY" -m pip install --quiet --break-system-packages pyyaml >/dev/null 2>&1 || \
+      fail "Could not auto-install PyYAML. Run: $PY -m pip install pyyaml — then re-run."
+  fi
+  "$PY" -c 'import yaml' >/dev/null 2>&1 || fail "PyYAML install reported success but import still fails — install manually: $PY -m pip install pyyaml"
+}
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) OMP_EXE_HINT="Open a NEW terminal (PATH was updated) and retry.";;
