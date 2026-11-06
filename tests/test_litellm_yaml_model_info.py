@@ -135,6 +135,15 @@ def test_blank_prefix_never_passes(auth):
         auth.check_key("sk-rea", "sk-real")
 
 
+def test_non_ascii_key_is_rejected_not_raised(auth):
+    """Headers arrive latin-1-decoded, so a prober can send a bearer key like
+    "caf\xe9"; compare_digest raises TypeError against the ASCII master key,
+    and that must become AuthRejected (401), never an escaped 500."""
+    with pytest.raises(auth.AuthRejected):
+        auth.check_key("caf\xe9", "sk-real")
+    assert auth.is_master_key("caf\xe9", "sk-real") is False
+
+
 @requires_litellm
 def test_master_key_alias_matches_litellm_constant(auth):
     """The hook substitutes the alias instead of the raw key, exactly like the

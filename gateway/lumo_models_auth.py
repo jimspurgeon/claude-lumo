@@ -64,12 +64,19 @@ class AuthRejected(Exception):
 def is_master_key(api_key: Any, master_key: str | None) -> bool:
     """True only when api_key is exactly the configured master key.
 
-    Constant-time, and never true for a missing key or a missing master key
-    (compare_digest on non-ASCII-capable types raises, so types are checked
-    first, mirroring the native try/except at user_api_key_auth.py:2052)."""
+    Constant-time, and never true for a missing key or a missing master key.
+    Non-str types are screened out first, and compare_digest runs inside the
+    same catch-all the native path uses (user_api_key_auth.py:2052): headers
+    arrive latin-1-decoded, so a bearer key like ``caf\xe9`` reaches
+    compare_digest as non-ASCII text, which raises TypeError against the
+    ASCII master key — anything escaping here would surface as a 500, the
+    exact bug class this hook exists to kill, so every failure mode rejects."""
     if not isinstance(api_key, str) or not isinstance(master_key, str):
         return False
-    return secrets.compare_digest(api_key, master_key)
+    try:
+        return secrets.compare_digest(api_key, master_key)
+    except Exception:
+        return False
 
 
 def check_key(api_key: Any, master_key: str | None) -> None:

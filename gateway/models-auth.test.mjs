@@ -183,6 +183,13 @@ suite("wrong key gets a 401", async () => {
   assert.equal(status, 401, text);
 });
 
+// Headers arrive latin-1-decoded, so "caf\xe9" is exactly what the hook sees
+// from a fuzzer sending a non-ASCII bearer; it must reject, never 500.
+suite("non-ASCII key gets a 401, not a 500", async () => {
+  const { status, text } = await getJson(`${state.base}/v1/models`, "caf\xe9");
+  assert.equal(status, 401, `expected 401, got ${status}: ${text}`);
+});
+
 suite("master key lists models with their token limits", async () => {
   const { status, text, msg } = await getJson(`${state.base}/v1/models`, state.key);
   assert.equal(status, 200, text);
