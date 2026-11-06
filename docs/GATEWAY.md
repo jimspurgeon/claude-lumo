@@ -36,6 +36,19 @@ understand (an Anthropic `thinking` block among them) are translated or dropped
 (`drop_params`). This is a fallback, so prefer sending an explicit ID;
 `gateway/interop.test.mjs` locks the behavior in.
 
+**Reasoning effort:** how much the model reasons before answering. There is no
+way to advertise this through `/v1/models`, so enter it by hand where a client
+has a slot for it:
+
+| ID | Accepted values |
+|----|-----------------|
+| `lumo-max` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `lumo-lite` | (none; leave the field empty. The model has no reasoning stage.) |
+
+Send it the way your client expects (Anthropic `thinking`, or a
+`reasoning_effort`/`reasoning` parameter). The gateway translates or passes it
+through; an unrecognized value is dropped (`drop_params`), never fatal.
+
 **Streaming:** both `/v1/messages` and `/v1/chat/completions` accept `"stream": true`
 and answer with SSE.
 
@@ -306,7 +319,10 @@ Any client that speaks either protocol works. It needs exactly three facts:
 3. **Model ID:** one of `lumo-max`, `lumo-lite` (table above).
 
 A client with model discovery can skip fact 3 entirely: `GET /v1/models` on the
-base URL lists the IDs, so a picker that reads it shows them automatically.
+base URL lists the IDs, so a picker that reads it shows them automatically. It
+also reports each hosted model's context limits (`max_input_tokens` 131072,
+`max_output_tokens` 32768). The key is required: a request without it (or with a
+wrong one) gets a 401, so enter the key before probing for models.
 
 Generic configuration for an Anthropic-protocol client (SDK or settings form):
 

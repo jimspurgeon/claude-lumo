@@ -29,6 +29,13 @@ model_list:
       stream_timeout: 90
       timeout: 45
       num_retries: 1
+    # Served through /v1/models so clients with model discovery get real limits
+    # (#202): LiteLLM merges model_info into the /v1/models entry
+    # (create_model_info_response, litellm.proxy.utils). Lumo's context window
+    # is 131k prompt+reply shared, replies up to 32k.
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 32768
   - model_name: "*haiku*"
     litellm_params:
       model: hosted_vllm/lumo-lite
@@ -45,6 +52,9 @@ model_list:
       stream_timeout: 90
       timeout: 45
       num_retries: 1
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 32768
   - model_name: "*"
     litellm_params:
       model: hosted_vllm/lumo-max
@@ -66,3 +76,10 @@ router_settings:
   disable_cooldowns: true
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  # Issue #202: keyless or wrong-key requests must get a clean 401, not a 500
+  # (LiteLLM 1.104.2 raises a bare Exception for a missing key, which the
+  # generic handler reports as 500). The hook replaces the native key check:
+  # it enforces the master key and returns the same admin token for a valid
+  # one. Loaded from this file's directory, like the lumo_websearch callback
+  # above; see lumo_models_auth.py for the authorization-tradeoff note.
+  custom_auth: lumo_models_auth.user_api_key_auth
