@@ -349,6 +349,16 @@ if [ ! -x "$LITELLM" ]; then
   fi
 fi
 [ -s "$S/master.key" ] || "$PY" -c "import secrets;print('sk-lumo-'+secrets.token_hex(24))" > "$S/master.key"
+# #205: never leave a stray CR/LF in master.key (naive readers would send a
+# trailing \r upstream and get 400s); this also heals an existing bad file.
+"$PY" -c "
+import sys
+p = sys.argv[1]
+raw = open(p, 'rb').read()
+stripped = raw.rstrip(b'\r\n')
+if stripped != raw:
+    open(p, 'wb').write(stripped)
+" "$S/master.key"
 
 # No per-machine edits to tracked files: claude-lumo.sh fills in this machine's paths at launch
 # (into ~/.claude-lumo/settings.json), so a git clone stays clean and updates keep working.

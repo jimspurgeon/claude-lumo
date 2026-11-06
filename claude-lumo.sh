@@ -62,7 +62,7 @@ esac
 up() { curl -s -o /dev/null -m 2 -w '%{http_code}' "$1" 2>/dev/null | grep -q 200; }
 start_proxy() { (cd "$PROXY" && nohup node --no-warnings proxy.mjs >/dev/null 2>&1 &); }
 start_litellm() {
-  (LITELLM_MASTER_KEY="$(cat "$S/master.key")" PYTHONIOENCODING=utf-8 nohup "$LITELLM" \
+  (LITELLM_MASTER_KEY="$(tr -d '\r\n' < "$S/master.key")" PYTHONIOENCODING=utf-8 nohup "$LITELLM" \
     --config "$PROXY/litellm.yaml" --host 127.0.0.1 --port 4000 >> "$S/litellm.log" 2>&1 &)
 }
 # On Windows `nohup ... &` leaves the services attached to this terminal's console, so closing the
