@@ -24,24 +24,25 @@ if (-not $bashExe) {
   throw 'Git Bash not found. Install Git for Windows (https://git-scm.com), then re-run.'
 }
 
-$tmp = New-TemporaryFile
+$shPath = $null
 try {
-  Invoke-WebRequest -UseBasicParsing -Uri $bashScriptUrl -OutFile $tmp.FullName
-  # Save as .sh; the temp file (.tmp) would still run, but keep it obvious.
-  $shPath = "$($tmp.FullName).sh"
-  & $bashExe $shPath
-  $tmp = $null
+  # Download straight to a .sh path (the one we invoke); a New-TemporaryFile
+  # gives a .tmp file, which the previous version never renamed before use.
+  $shPath = Join-Path ([System.IO.Path]::GetTempPath()) ("install-omp-full-{0}.sh" -f ([guid]::NewGuid().ToString('N')))
+  Invoke-WebRequest -UseBasicParsing -Uri $bashScriptUrl -OutFile $shPath
 
   Write-Host "Running install-omp-full.sh under Git Bash (script: $shPath)..."
-  & $bashExe -lc "`"$shPath`""
+  # Single invocation, passing the Windows path as a direct argument (Git Bash
+  # converts it); a quoted `bash -lc "...$shPath..."` string loses backslashes
+  # in MSYS path handling.
+  & $bashExe $shPath
   if ($LASTEXITCODE -ne 0) {
     throw "install-omp-full.sh exited with code $LASTEXITCODE."
   }
   Write-Host 'Done.'
 }
 finally {
-  if ($tmp) { Remove-Item $tmp.FullName -ErrorAction SilentlyContinue }
-  if ((Test-Path variable:shPath) -and (Test-Path $shPath)) {
+  if ($shPath -and (Test-Path $shPath)) {
     Remove-Item $shPath -ErrorAction SilentlyContinue
   }
 }

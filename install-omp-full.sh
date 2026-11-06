@@ -337,11 +337,15 @@ else
     echo "  Everything else is fully installed and wired; only the personal"
     echo "  config sync (agents/extensions/RULES.md/config.yml) is missing."
   else
-    echo "  Restoring files into $AGENT_DIR (newer local files win; every decision printed):"
+    echo "  Restoring files into $AGENT_DIR (merge-critical files restored only when absent):"
     restore_tree() {
       local src="$1" dst="$2" f rel ds abs
       # Repo meta files are not agent config; only RULES.md, config.yml, agents/,
       # extensions/, skills/, agent/ (and future config dirs) are restored.
+      # Merge-critical files (user-editable config) are restored ONLY when absent
+      # locally — same "never clobber an existing choice" rule as stage 3c's
+      # modelRoles handling. Timestamps there meant a repo copy could silently
+      # revert local edits, so they are not consulted at all.
       # shellcheck disable=SC2044
       for f in $(cd "$src" && find . -type f ! -path './.git/*' ! -name 'README.md' ! -name 'install.sh' ! -name 'sync.sh' | sort); do
         rel="${f#./}"
@@ -351,10 +355,12 @@ else
         if [ ! -e "$ds" ]; then
           cp -p "$abs" "$ds"
           echo "    restored from repo: $rel (new file)"
-        elif [ "$ds" -nt "$abs" ]; then
-          echo "    kept local (newer): $rel"
+        elif [ "$rel" = "config.yml" ] || [ "$rel" = "RULES.md" ] || [[ "$rel" == agents/* ]]; then
+          echo "    kept local (merge-critical): $rel"
         elif cmp -s "$ds" "$abs"; then
           echo "    identical:          $rel"
+        elif [ "$ds" -nt "$abs" ]; then
+          echo "    kept local (newer): $rel"
         else
           cp -p "$abs" "$ds"
           echo "    restored from repo: $rel"
@@ -365,6 +371,44 @@ else
     # No post-processing beyond restore: plugins install via `omp plugin install`
     # on demand; omp loads RULES.md, agents/, extensions/, skills/ directly.
     echo "  Config sync complete."
+
+    # config.yml is merge-critical at the key level too: restore only keys/
+    # sections absent locally (never overwrite an existing value, including an
+    # existing modelRoles.default), via the same yaml round-trip as stage 3c.
+    if [ -f "$OMP_CONFIG_DIR/config.yml" ] && [ -f "$CONFIG_YML" ]; then
+      if ! "$PY" - "$OMP_CONFIG_DIR/config.yml" "$CONFIG_YML" <<'PYEOF'
+import sys
+
+import yaml
+
+
+def merge_missing(src, dst):
+    """Copy keys into dst only where absent; dicts merge recursively."""
+    changed = False
+    for k, v in src.items():
+        if k not in dst or dst[k] is None:
+            dst[k] = v
+            changed = True
+        elif isinstance(v, dict) and isinstance(dst[k], dict):
+            changed = merge_missing(v, dst[k]) or changed
+    return changed
+
+
+repo_path, user_path = sys.argv[1], sys.argv[2]
+with open(repo_path, encoding="utf-8") as f:
+    repo = yaml.safe_load(f) or {}
+with open(user_path, encoding="utf-8") as f:
+    user = yaml.safe_load(f) or {}
+if merge_missing(repo, user):
+    with open(user_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(user, f, sort_keys=False, allow_unicode=True)
+PYEOF
+      then
+        echo "  config.yml: could not merge; local file left untouched." >&2
+      else
+        echo "  config.yml: merged keys absent locally (existing choices kept)."
+      fi
+    fi
   fi
 fi
 
