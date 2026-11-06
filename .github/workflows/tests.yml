@@ -119,7 +119,7 @@ jobs:
           fi
 
           # Credential made it into omp's store (real omp; scratch HOME isolates it).
-          omp auth export > "$SB/auth.json"
+          omp auth export > "$SB/auth.json" || { echo "ASSERT FAILED: omp auth export exited $?"; exit 1; }
           assert_in '"provider": *"litellm"' "$SB/auth.json"
           assert_in "$(<"$CLAUDE_LUMO_STATE_DIR/master.key")" "$SB/auth.json"
 
