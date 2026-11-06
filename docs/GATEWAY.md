@@ -20,6 +20,15 @@ setting). The repo ships a helper, `gateway/api-key.py`, that prints the key; it
 so the key can reach clients without being pasted into config files. Treat the key file
 as a secret: never copy its contents into a settings file, a script, or a bug report.
 
+**LiteLLM version:** the gateway targets LiteLLM 1.104.2, the hash-pinned version in
+`requirements.txt` (regenerate with `pip-compile` after bumping the pin in
+`requirements.in`). Older versions are unsupported; newer ones should work but are
+untested. Note that `gateway/lumo_models_auth.py` (the `custom_auth` hook that turns
+keyless/wrong-key 500s into clean 401s, issue #202) is a workaround for a LiteLLM
+1.104.2 bug; if a future LiteLLM release returns 401 natively, the hook can be
+retired then — re-check on upgrade, and refresh the upstream line-number citations
+in its docstring, which drift between releases.
+
 **Model IDs:**
 
 | ID | Routes to | Good for |
@@ -211,6 +220,12 @@ systemctl --user enable --now lumo-gateway-litellm.service lumo-gateway-proxy.se
 User units stop when your last session logs out unless lingering is enabled, so run
 `sudo loginctl enable-linger "$USER"` once for a truly always-on machine.
 
+Both units log to journald, which needs no extra configuration here (contrast the
+Windows services, which roll their own files at 10 MB × 2). Read live output with
+`journalctl --user -f -u lumo-gateway-litellm.service -u lumo-gateway-proxy.service`
+and past runs by dropping `-f`. The same caveat applies as for the Windows services:
+not tested on this machine.
+
 ## Always-on on macOS (launchd)
 
 The same two command lines as LaunchAgents. launchd has no environment-file
@@ -287,6 +302,18 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.lumo.proxy.plist
 ```
 
 To unload them again, replace `bootstrap` with `bootout` in each line.
+
+launchd, unlike systemd, captures nothing by default: without the keys below a crashed
+service leaves no trace. Add them to each plist's top-level `<dict>` (outside
+`EnvironmentVariables`), pointing wherever you want the logs; the Windows services'
+equivalent rolls at 10 MB and keeps 2, which launchd does not manage for you:
+
+```xml
+  <key>StandardOutPath</key><string>/tmp/ai.lumo.litellm.out.log</string>
+  <key>StandardErrorPath</key><string>/tmp/ai.lumo.litellm.err.log</string>
+```
+(same pair for the proxy plist). Check them with `log show`/`tail`. As above, this
+recipe was written from the Windows implementation and is not tested on this machine.
 
 ## gg-coder
 
