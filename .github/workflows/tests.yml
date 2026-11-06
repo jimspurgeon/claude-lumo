@@ -102,34 +102,39 @@ jobs:
           fi
           echo "--- run 1 log ---"; cat "$OUT"
 
-          # Stage assertions.
-          grep -q "Stage 1/4: gateway" "$OUT"
-          grep -q "Stage 2/4: install omp" "$OUT"
-          grep -q "Stage 3/4: wire omp" "$OUT"
-          grep -q "Stage 4/4: sync omp config" "$OUT"
-          grep -q "install-omp-full complete" "$OUT"
+          # Stage assertions — each names itself on failure (no silent grep deaths).
+          assert_in() { grep -q "$1" "$2" || { echo "ASSERT FAILED: '$1' not found in $2"; exit 1; }; }
+          assert_in "Stage 1/4: gateway" "$OUT"
+          assert_in "Stage 2/4: install omp" "$OUT"
+          assert_in "Stage 3/4: wire omp" "$OUT"
+          assert_in "Stage 4/4: sync omp config" "$OUT"
+          assert_in "All-in-one omp install complete" "$OUT"
 
           # models.yml: litellm provider, correct baseUrl, no key material.
           MY="$HOME/.omp/agent/models.yml"
-          grep -q "litellm" "$MY"
-          grep -q "baseUrl: http://127.0.0.1:4000/v1" "$MY"
-          ! grep -qi "api[_-]key" "$MY"
+          assert_in "litellm" "$MY"
+          assert_in "baseUrl: http://127.0.0.1:4000/v1" "$MY"
+          if grep -qi "api[_-]key" "$MY"; then
+            echo "ASSERT FAILED: models.yml contains api_key/apiKey material"; exit 1
+          fi
 
           # Credential made it into omp's store (real omp; scratch HOME isolates it).
           omp auth export > "$SB/auth.json"
-          grep -q '"provider": *"litellm"' "$SB/auth.json"
-          grep -q "$(<"$CLAUDE_LUMO_STATE_DIR/master.key")" "$SB/auth.json"
+          assert_in '"provider": *"litellm"' "$SB/auth.json"
+          assert_in "$(<"$CLAUDE_LUMO_STATE_DIR/master.key")" "$SB/auth.json"
 
           # Sentinel: the key value never appears in any captured output.
           MATCHES="$(grep -c 'sk-lumo-CISENTINELDoNotPrint0001' "$OUT" || true)"
           [ "$MATCHES" = "0" ] || { echo "FAIL: key value leaked into output ($MATCHES matches)"; exit 1; }
 
           # Config-sync stage outcome is environment-dependent; both endings are valid:
-          grep -Eq "Config sync complete|Self-skipping this stage|Skipped \(" "$OUT"
+          grep -Eq "Config sync complete|Self-skipping this stage|Skipped \(" "$OUT" \
+            || { echo "ASSERT FAILED: no config-sync stage outcome line in run log"; exit 1; }
           if grep -q "Self-skipping this stage" "$OUT"; then
             echo "omp-config sync self-skipped (secret OMP_CONFIG_TOKEN not set or no SSH)."
           else
-            grep -q "Config sync complete\|Skipped (" "$OUT"
+            grep -q "Config sync complete\|Skipped (" "$OUT" \
+              || { echo "ASSERT FAILED: no 'Config sync complete' line in run log"; exit 1; }
           fi
       - name: Re-run (already-done per stage, exit 0)
         env:
