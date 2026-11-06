@@ -5,7 +5,7 @@ LiteLLM's ``_user_api_key_auth_builder`` with ``api_key=None`` (every APIKeyHead
 scheme in the proxy uses ``auto_error=False``) and the builder raises a bare
 ``Exception("No api key passed in.")``. FastAPI's generic Exception handler turns
 that into 500 "Internal Server Error" (LiteLLM 1.104.2,
-proxy/auth/user_api_key_auth.py:1867 and proxy/proxy_server.py:1999). A keyless
+litellm.proxy.auth.user_api_key_auth.py:1867 and litellm.proxy.proxy_server.py:1999). A keyless
 model-list probe (DeepSeek Harness's "Fetch available models" step) reads that 500
 as a broken gateway.
 
@@ -33,7 +33,7 @@ to enforce; the key comparison in this module is the whole policy. Valid-key
 behavior is otherwise unchanged (gateway/models-auth.test.mjs locks it in).
 
 The pure functions below have no LiteLLM or FastAPI dependency, so they are
-unit-testable without the proxy installed (tests/test_lumo_models_auth.py).
+unit-testable without the proxy installed (tests/test_litellm_yaml_model_info.py).
 """
 
 from __future__ import annotations
