@@ -42,6 +42,20 @@ def warn(msg):
     print(f"claude-lumo: {msg}", file=sys.stderr)
 
 
+def confirm_prompt(prompt):
+    """Guarded input(): no console / no stdin means 'no', never a crash (#97).
+
+    Same class as the #38/#39 fixes: input() raises under pythonw
+    (RuntimeError when sys.stdin is None) or EOF without a tty.
+    """
+    try:
+        answer = input(prompt)
+    except (AttributeError, EOFError, OSError, RuntimeError):
+        print("no usable stdin; treating the answer as 'no'. Use --yes to skip the prompt.")
+        return False
+    return answer.strip().lower() == "yes"
+
+
 def info(msg):
     print(f"info: {msg}")
 
@@ -345,7 +359,7 @@ def migrate_sessions(config_dir, shared_dir, dry_run=False, confirm=False):
         info("nothing to migrate")
         return
     if not confirm:
-        if input("Proceed with migration? (yes/no): ").strip().lower() != "yes":
+        if not confirm_prompt("Proceed with migration? (yes/no): "):
             print("Migration cancelled")
             return
 
@@ -408,7 +422,7 @@ def revert_migration(config_dir, shared_dir, dry_run=False, confirm=False):
         info("nothing to revert")
         return
     if not confirm:
-        if input("Proceed with revert? (yes/no): ").strip().lower() != "yes":
+        if not confirm_prompt("Proceed with revert? (yes/no): "):
             print("Revert cancelled")
             return
 
