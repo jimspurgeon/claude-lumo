@@ -55,7 +55,7 @@ class TestPastedArguments(unittest.TestCase):
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", SCRIPT, "-Tool", tool],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True, encoding="utf-8", env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc.stdout
@@ -76,7 +76,7 @@ class TestPastedArguments(unittest.TestCase):
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", stub_ps1],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         with open(out_file, encoding="utf-8") as f:
@@ -170,7 +170,7 @@ class TestPastedArguments(unittest.TestCase):
             proc = subprocess.run(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                  "-File", stub_ps1],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8",
             )
             self.assertEqual(proc.returncode, 0,
                              "pasted block failed:\n%s\n%s" %
@@ -227,7 +227,7 @@ class TestInstallMode(unittest.TestCase):
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", SCRIPT, "-Install"],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True, encoding="utf-8", env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc.stdout
@@ -351,7 +351,7 @@ class TestConnectCard(unittest.TestCase):
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", SCRIPT, "-Install"],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True, encoding="utf-8", env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc.stdout, env
@@ -394,7 +394,7 @@ class TestConnectCard(unittest.TestCase):
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", SCRIPT],
-            capture_output=True, text=True, env=env,
+            capture_output=True, text=True, encoding="utf-8", env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("Connect any harness", proc.stdout)

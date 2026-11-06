@@ -45,7 +45,7 @@ ALLOWED_LINES = {
 def tracked_files():
     out = subprocess.run(
         ["git", "ls-files"],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8", check=True,
     ).stdout
     return [l for l in out.splitlines() if l.strip()]
 

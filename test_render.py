@@ -8,7 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def run_render(personal, state, *extra):
     return subprocess.run([sys.executable, os.path.join(HERE, "render.py"), HERE, state, personal, "python", *extra],
-                          capture_output=True, text=True, check=True)
+                          capture_output=True, text=True, encoding="utf-8", check=True)
 
 
 def run_script(path, args, env_extra=None, stdin="{}"):
@@ -77,7 +77,7 @@ class PersonalAgents(unittest.TestCase):
     def test_agents_limit_can_be_overridden_by_environment(self):
         # AGENTS_LIMIT is read at import time, so check it in a fresh interpreter with the variable set.
         out = subprocess.run([sys.executable, "-c", "import render; print(render.AGENTS_LIMIT)"],
-                              capture_output=True, text=True, check=True, cwd=HERE,
+                              capture_output=True, text=True, encoding="utf-8", check=True, cwd=HERE,
                               env={**os.environ, "LUMO_AGENTS_LIMIT": "4321"}).stdout.strip()
         self.assertEqual(out, "4321")
 
@@ -289,7 +289,7 @@ class PromptOverflow(unittest.TestCase):
         self.oversized()
         env = {**os.environ, **(env_extra or {})}
         return subprocess.run([sys.executable, os.path.join(HERE, "render.py"), HERE, self.state,
-                               self.personal, "python"], capture_output=True, text=True, env=env)
+                               self.personal, "python"], capture_output=True, text=True, encoding="utf-8", env=env)
 
     def parts(self):
         folder = os.path.join(self.state, "prompt-parts")

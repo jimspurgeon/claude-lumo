@@ -77,7 +77,7 @@ class Fixture:
 
     def clone_tag(self):
         r = subprocess.run(["git", "-C", self.clone_dir, "describe", "--tags",
-                            "--exact-match", "HEAD"], capture_output=True, text=True)
+                            "--exact-match", "HEAD"], capture_output=True, text=True, encoding="utf-8")
         return r.stdout.strip()
 
     def write_state_files(self):

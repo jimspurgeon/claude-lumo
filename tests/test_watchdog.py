@@ -40,7 +40,7 @@ def free_port():
 def run_bash(script, extra_env=None, timeout=60):
     env = dict(os.environ)
     env.update(extra_env or {})
-    return subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True,
+    return subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True, encoding="utf-8",
                           timeout=timeout, stdin=subprocess.DEVNULL)
 
 

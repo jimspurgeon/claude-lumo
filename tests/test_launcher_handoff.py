@@ -24,7 +24,7 @@ def test_exit_codes(tmp_path, command, rc, expected):
     env = dict(os.environ, HOME=str(tmp_path), CLAUDE_LUMO_STATE_DIR=str(tmp_path / "state"),
                FAKE_RC=str(rc))
     proc = subprocess.run([BASH, os.path.join(HERE, "claude-lumo.sh"), command], env=env,
-                          capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+                          capture_output=True, text=True, encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
     assert proc.returncode == expected, proc.stdout + proc.stderr
     if rc == 10:
         assert "agent prompt was not written" in proc.stderr

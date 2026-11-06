@@ -95,7 +95,7 @@ def latest_release_tag(repo_remote):
     try:
         result = subprocess.run(
             ["git", "ls-remote", "--tags", repo_remote, "refs/tags/v*"],
-            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+            capture_output=True, text=True, encoding="utf-8", timeout=TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
             return None
@@ -118,7 +118,7 @@ def installed_tag(repo):
     try:
         result = subprocess.run(
             ["git", "-C", repo, "describe", "--tags", "--exact-match", "HEAD"],
-            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+            capture_output=True, text=True, encoding="utf-8", timeout=TIMEOUT_SECONDS,
         )
         tag = result.stdout.strip() if result.returncode == 0 else ""
         return tag if VERSION_RE.match(tag) else None

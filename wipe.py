@@ -280,7 +280,7 @@ def discover_stores():
 def run_git(args, cwd):
     """Run a git command, return stdout on success, None on any failure."""
     try:
-        result = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True,
+        result = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
                                 timeout=GIT_TIMEOUT)
         return result.stdout if result.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):

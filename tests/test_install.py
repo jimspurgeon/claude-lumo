@@ -21,7 +21,7 @@ def to_posix(path):
     if not WINDOWS:
         return str(path)
     return subprocess.run([BASH, "-c", 'cygpath -u "$1"', "_", str(path)],
-                          capture_output=True, text=True, check=True).stdout.strip()
+                          capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()
 
 
 @pytest.fixture
@@ -52,17 +52,17 @@ def run_install(sb):
     env = dict(os.environ, HOME=str(sb["home"]), APPDATA=str(sb["appdata"]),
                CLAUDE_LUMO_STATE_DIR=str(sb["state"]), CLAUDE_LUMO_PLAIN_OFFER="1", LUMO_PATH=path)
     probe = subprocess.run([BASH, "-c", 'PATH="$LUMO_PATH"; command -v python'],
-                           env=env, capture_output=True, text=True)
+                           env=env, capture_output=True, text=True, encoding="utf-8")
     if probe.returncode == 0:
         pytest.skip(f"`python` is in a system directory ({probe.stdout.strip()}); cannot hide it")
     return subprocess.run([BASH, "-c", 'PATH="$LUMO_PATH"; exec bash "$1"', "_",
                            to_posix(ROOT / "install.sh")],
-                          env=env, capture_output=True, text=True, timeout=300)
+                          env=env, capture_output=True, text=True, encoding="utf-8", timeout=300)
 
 
 def node_major():
     try:
-        out = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=30).stdout
+        out = subprocess.run(["node", "--version"], capture_output=True, text=True, encoding="utf-8", timeout=30).stdout
         return int(out.strip().lstrip("v").split(".")[0])
     except (OSError, ValueError, subprocess.SubprocessError):
         return 0

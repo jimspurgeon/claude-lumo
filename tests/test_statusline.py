@@ -76,7 +76,7 @@ def run_install_version(state_dir: str, module_path: str) -> str:
         env=env,
         cwd=module_dir,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=10
     )
     if result.returncode != 0:
@@ -138,7 +138,7 @@ class TestExactTag:
                 env=env,
                 cwd=test_repo,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8",
                 timeout=10
             )
             if result.returncode != 0:
@@ -174,7 +174,7 @@ class TestNonRepoDir:
                 env=env,
                 cwd=stagedir,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8",
                 timeout=10
             )
             if result.returncode != 0:
@@ -277,7 +277,7 @@ def run_last_model(state_dir: str, module_path: str, transcript_path: str) -> st
     ]
     result = subprocess.run(
         cmd, env=env, cwd=str(Path(module_path).parent),
-        capture_output=True, text=True, timeout=10,
+        capture_output=True, text=True, encoding="utf-8", timeout=10,
         stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
@@ -292,7 +292,7 @@ def run_statusline(state_dir: str, module_path: str, payload: dict) -> str:
     env.pop("CLAUDE_LUMO", None)  # deterministic [CLAUDE] branch
     result = subprocess.run(
         ["python", module_path], env=env,
-        input=json.dumps(payload), capture_output=True, text=True, timeout=10,
+        input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", timeout=10,
     )
     if result.returncode != 0:
         raise RuntimeError(f"subprocess failed: {result.stderr}")
@@ -385,7 +385,7 @@ class TestLastTranscriptModel:
                    p, str(len(json.dumps(filler)))]
             result = subprocess.run(cmd, env=env,
                                     cwd=str(Path(statusline_module_path).parent),
-                                    capture_output=True, text=True, timeout=10,
+                                    capture_output=True, text=True, encoding="utf-8", timeout=10,
                                     stdin=subprocess.DEVNULL)
             assert result.returncode == 0, result.stderr
             assert result.stderr.strip() == "'lumo-max'"
@@ -405,7 +405,7 @@ class TestNormalization:
                f"sys.stderr.write(eval({code!r}) + chr(10))"]
         result = subprocess.run(
             cmd, env=env, cwd=str(Path(module_path).parent),
-            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, encoding="utf-8", timeout=10, stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             raise RuntimeError(f"subprocess failed: {result.stderr}")
@@ -557,7 +557,7 @@ def run_lumo_statusline(state_dir: str, module_path: str, payload: dict, extra_e
     env.update(extra_env or {})
     result = subprocess.run(
         ["python", module_path], env=env,
-        input=json.dumps(payload), capture_output=True, text=True, timeout=10,
+        input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", timeout=10,
     )
     if result.returncode != 0:
         raise RuntimeError(f"subprocess failed: {result.stderr}")

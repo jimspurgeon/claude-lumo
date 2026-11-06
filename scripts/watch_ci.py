@@ -301,7 +301,7 @@ def run_command(argv, cwd=None, timeout=None):
             argv,
             cwd=cwd,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             timeout=timeout,
             shell=False,
         )

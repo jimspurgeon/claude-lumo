@@ -1997,7 +1997,7 @@ class TestHookDisabled:
         import subprocess
         proc = subprocess.run(
             [sys.executable, self.HOOK_PATH],
-            input=stdin_text, capture_output=True, text=True, env=env, timeout=30)
+            input=stdin_text, capture_output=True, text=True, encoding="utf-8", env=env, timeout=30)
         assert proc.returncode == 0, proc.stderr
         return json.loads(proc.stdout)
 

@@ -261,7 +261,7 @@ class UpdateCommandTest(RepoFixture):
         self.assertIn("add feature", output)
         self.assertIn("Updated to v1.3.0", output)
         result = subprocess.run(["git", "-C", self.clone_dir, "describe", "--tags", "--exact-match", "HEAD"],
-                               capture_output=True, text=True, check=True)
+                               capture_output=True, text=True, encoding="utf-8", check=True)
         self.assertEqual(result.stdout.strip(), "v1.3.0")
 
     def test_version_cache_cleared_even_if_installer_is_interrupted(self):
@@ -276,7 +276,7 @@ class UpdateCommandTest(RepoFixture):
             f.write("v1.2.9")
         self.run_update(stdin=subprocess.DEVNULL)
         result = subprocess.run(["git", "-C", self.clone_dir, "describe", "--tags", "--exact-match", "HEAD"],
-                               capture_output=True, text=True, check=True)
+                               capture_output=True, text=True, encoding="utf-8", check=True)
         self.assertEqual(result.stdout.strip(), "v1.3.0")
         self.assertFalse(os.path.exists(cache))
 

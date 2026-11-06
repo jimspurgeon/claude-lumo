@@ -28,13 +28,13 @@ def install_version():
     try:
         r = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(__file__)),
                             "describe", "--tags", "--exact-match", "HEAD"],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, encoding="utf-8", timeout=5)
         tag = r.stdout.strip() if r.returncode == 0 else ""
         if not tag:
             # In a worktree .git is a pointer file, not a directory, so probe with git itself.
             p = subprocess.run(["git", "-C", os.path.dirname(os.path.abspath(__file__)),
                                  "rev-parse", "--git-dir"],
-                               capture_output=True, text=True, timeout=5)
+                               capture_output=True, text=True, encoding="utf-8", timeout=5)
             tag = "dev" if p.returncode == 0 else ""
     except Exception:  # noqa: BLE001 - the status line must never fail because of the version probe
         return ""

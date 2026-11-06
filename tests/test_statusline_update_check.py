@@ -140,7 +140,7 @@ class StatuslineUpdateCheck(unittest.TestCase):
         env.update(CLAUDE_LUMO="1", CLAUDE_LUMO_STATE_DIR=self.state, CLAUDE_LUMO_LOCAL=self.state)
         r = subprocess.run([sys.executable, os.path.join(ROOT, "statusline.py")],
                            input=json.dumps({"model": {"id": "lumo-max"}}), capture_output=True,
-                           text=True, env=env, timeout=30)
+                           text=True, encoding="utf-8", env=env, timeout=30)
         self.assertIn("v1.4.5 available", r.stdout)
         self.assertFalse(os.path.exists(self.stamp()))  # a fresh cache spawns nothing
 

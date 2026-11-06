@@ -23,7 +23,7 @@ def render(installed, started, lumo="1", notice=None):
             env["CLAUDE_LUMO_SESSION_VERSION"] = started
         stdin = json.dumps({"model": {"id": "lumo-max", "display_name": "lumo-max"}})
         r = subprocess.run([sys.executable, STATUSLINE], input=stdin, capture_output=True,
-                           text=True, env=env, timeout=30)
+                           text=True, encoding="utf-8", env=env, timeout=30)
         return r.stdout
 
 

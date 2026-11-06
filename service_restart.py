@@ -162,7 +162,7 @@ def stop_command(pid, plat):
 def run_command(argv):
     """(returncode, stdout) of a short command; (None, '') when it cannot run."""
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=20)
+        r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
         return r.returncode, r.stdout
     except (OSError, subprocess.TimeoutExpired):
         return None, ""

@@ -61,7 +61,7 @@ def check_encryption():
             drive = os.path.splitdrive(resolve_config_dir())[0] or "C:"
             result = subprocess.run(
                 ["Manage-BDE", "-status", drive],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
             )
             if result.returncode == 0:
                 if "Protection On" in result.stdout:
@@ -75,7 +75,7 @@ def check_encryption():
         try:
             result = subprocess.run(
                 ["fdesetup", "isactive"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, encoding="utf-8", timeout=5
             )
             if result.returncode == 0 and result.stdout.strip() == "true":
                 return "filevault-on"
@@ -87,7 +87,7 @@ def check_encryption():
     try:
         result = subprocess.run(
             ["lsblk", "-o", "NAME,MOUNTPOINT,FSTYPE", "--json"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, encoding="utf-8", timeout=5
         )
         if result.returncode == 0:
             data = json.loads(result.stdout)
@@ -147,7 +147,7 @@ def check_backup_system(config_dir):
         try:
             result = subprocess.run(
                 ["tmutil", "destinationinfo"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, encoding="utf-8", timeout=5
             )
             if result.returncode == 0 and "No destinations configured" not in result.stdout:
                 return "Time Machine", "tmutil reports configured destinations; " \
@@ -243,18 +243,18 @@ def check_update_status():
 
         result = subprocess.run(
             ["git", "-C", repo, "describe", "--tags", "--exact-match", "HEAD"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, encoding="utf-8", timeout=5
         )
         installed = result.stdout.strip() if result.returncode == 0 else None
 
         result = subprocess.run(
             ["git", "-C", repo, "fetch", "--quiet", "origin", "refs/tags/*:refs/tags/*"],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, encoding="utf-8", timeout=10
         )
 
         result = subprocess.run(
             ["git", "-C", repo, "tag", "-l"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, encoding="utf-8", timeout=5
         )
         tags = [t.strip() for t in result.stdout.splitlines()
                 if t.strip() and t.strip().startswith("v")]
@@ -264,7 +264,7 @@ def check_update_status():
         if installed and latest and installed != latest:
             result = subprocess.run(
                 ["git", "-C", repo, "rev-list", f"{installed}..{latest}", "--count"],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, encoding="utf-8", timeout=5
             )
             if result.returncode == 0:
                 behind = int(result.stdout.strip())

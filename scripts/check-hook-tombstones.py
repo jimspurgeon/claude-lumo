@@ -25,7 +25,7 @@ def main():
         ["git", "log", "-p", "--", SETTINGS_FILE],
         cwd=repo_root,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
     )
     if result.returncode != 0:
         print(f"git log failed (exit {result.returncode}):")

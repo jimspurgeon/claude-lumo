@@ -42,7 +42,7 @@ def test_windows_launcher_starts_services_detached(tmp_path):
     env = dict(os.environ, HOME=str(tmp_path), CLAUDE_LUMO_STATE_DIR=str(state), FAKE_STATE=str(state),
                PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], CLAUDE_LUMO_UPDATE_CHECK="0")
     proc = subprocess.run([BASH, os.path.join(HERE, "claude-lumo.sh")], env=env, capture_output=True,
-                          text=True, timeout=60, stdin=subprocess.DEVNULL)
+                          text=True, encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
     assert "render.py failed" in proc.stderr, proc.stdout + proc.stderr
     calls = (state / "calls.txt").read_text(encoding="utf-8").splitlines()
     assert [c.split()[-2:] for c in calls] == [["--start", "proxy"], ["--start", "litellm"]]
@@ -65,6 +65,6 @@ def test_windows_launcher_leaves_healthy_services_alone(tmp_path):
     env = dict(os.environ, HOME=str(tmp_path), CLAUDE_LUMO_STATE_DIR=str(state), FAKE_STATE=str(state),
                PATH=str(bin_dir) + os.pathsep + os.environ["PATH"], CLAUDE_LUMO_UPDATE_CHECK="0")
     proc = subprocess.run([BASH, os.path.join(HERE, "claude-lumo.sh")], env=env, capture_output=True,
-                          text=True, timeout=60, stdin=subprocess.DEVNULL)
+                          text=True, encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
     assert "render.py failed" in proc.stderr, proc.stdout + proc.stderr
     assert not (state / "calls.txt").exists()
