@@ -188,7 +188,7 @@ function Show-ConnectCard {
     Write-Output "Base URL:      http://127.0.0.1:4000"
     Write-Output "Endpoints:     /v1/messages                          (Anthropic protocol)"
     Write-Output "               /v1/chat/completions, /v1/models      (OpenAI protocol)"
-    Write-Output "Models:        lumo-max, lumo-lite, lumo-local"
+    Write-Output "Models:        lumo-max, lumo-lite"
     Write-Output "Routing:       unknown claude-* names go to lumo-max;"
     Write-Output "               names containing haiku go to lumo-lite"
     Write-Output "API key file:  $MasterKeyFile (the key value is never printed here)"
