@@ -10,6 +10,7 @@ space in its name (nssm) and paste-through stubs for the WinSW cmdlets.
 import os
 import subprocess
 import tempfile
+import shutil
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -210,6 +211,56 @@ class TestPastedArguments(unittest.TestCase):
                               "exe path not one arg: %r" % args)
         finally:
             import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_direct_winsw_exe_lines_survive_spaced_home(self):
+        """The four '& ... WinSW.exe install/start' paste lines run the real
+        exe as one executable token when $HOME contains a space (#145).
+
+        A copy of cmd.exe stands in for WinSW.exe at the (spaced) target path.
+        With the defect (unquoted path), PowerShell splits the command at the
+        first space and nothing under the spaced path runs at all.
+        """
+        temp_dir = tempfile.mkdtemp(suffix=" spaced direct")
+        try:
+            home_stub = os.path.join(temp_dir, "home dir with spaces")
+            stdout = self._generate(temp_dir, "winsw")
+            lines = [line.strip() for line in stdout.splitlines()
+                     if "WinSW.exe" in line and line.strip().startswith("&")]
+            self.assertEqual(len(lines), 4, "expected 4 paste lines: %r" % lines)
+
+            expected_order = ["install", "install", "start", "start"]
+            marker = os.path.join(temp_dir, "hit.txt")
+            for action, line in zip(expected_order, lines):
+                svc_dir = os.path.join(home_stub, ".lumoservices",
+                                       "LumoGatewayLiteLLM" if "LiteLLM" in line
+                                       else "LumoGatewayProxy")
+                os.makedirs(svc_dir, exist_ok=True)
+                stub_cmd = os.path.join(svc_dir, "WinSWStub.exe")
+                shutil.copyfile(os.path.join(os.environ["SystemRoot"], "System32",
+                                              "cmd.exe"), stub_cmd)
+                pasted = (line.replace("$HOME", home_stub)
+                              .replace("WinSW.exe", "WinSWStub.exe")
+                              .replace(action,
+                                       '/c echo RAN:%s >> "%s"'
+                                       % (action, marker)))
+                proc = subprocess.run(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                     "-Command", pasted],
+                    capture_output=True, text=True, encoding="utf-8",
+                )
+                self.assertEqual(
+                    proc.returncode, 0,
+                    "pasted line failed: %r\n%s\n%s" % (pasted, proc.stdout,
+                                                        proc.stderr))
+                with open(marker, encoding="utf-16") as f:
+                    hits = f.read().splitlines()
+                self.assertEqual(
+                    hits, ["RAN:%s" % action],
+                    "expected exactly one %s hit at %r: %r" % (action, svc_dir,
+                                                                hits))
+                os.remove(marker)
+        finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
