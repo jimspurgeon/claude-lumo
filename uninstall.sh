@@ -2,7 +2,8 @@
 # uninstall.sh: remove claude-lumo (macOS, Linux, and Windows via Git Bash).
 # Stops the local proxy/LiteLLM if running, stops and removes the WinSW
 # services when installed (gateway/install-supervisor.ps1 -Install, #183),
-# then deletes everything claude-lumo added: ~/.claude/lumo, ~/.claude-lumo,
+# then deletes everything claude-lumo added: ~/.claude/lumo, the state dir
+# ($CLAUDE_LUMO_STATE_DIR or ~/.claude-lumo),
 # ~/.lumoservices, and the PATH shims. Plain `claude` is untouched, as are
 # Claude Code settings and login. Removing Windows services needs an
 # elevated shell; without one the service removal lines are skipped with a
@@ -11,10 +12,26 @@
 # folders and the shim files it created.
 set -e
 
+S="${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}"
+
+# Stop the watchdog first (#174): TERM the pidfile's owner (it removes its own
+# pidfile), brief wait, never fail when it is already gone.
+WD_PIDFILE="$S/watchdog.pid"
+if [ -f "$WD_PIDFILE" ]; then
+  WD_PID="$(cat "$WD_PIDFILE" 2>/dev/null || true)"
+  if [ -n "$WD_PID" ] && kill -0 "$WD_PID" 2>/dev/null; then
+    echo "Stopping the claude-lumo watchdog (pid $WD_PID)..."
+    kill "$WD_PID" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$WD_PID" 2>/dev/null || break
+      sleep 0.3
+    done
+    kill -9 "$WD_PID" 2>/dev/null || true
+  fi
+  rm -f "$WD_PIDFILE"
+fi
+
 echo "Stopping claude-lumo background processes (proxy, LiteLLM)..."
-pkill -f "claude.lumo/proxy/proxy.mjs" 2>/dev/null || true
-pkill -f "claude.lumo/gateway/proxy.mjs" 2>/dev/null || true
-pkill -f "claude-lumo/litellm-venv" 2>/dev/null || true
 
 # Remove the WinSW services (gateway/install-supervisor.ps1 -Install, #183).
 # Preferred path: each service's own WinSW exe (stop + uninstall). Fallback
@@ -48,7 +65,7 @@ if [ -f "$HOME/.claude/lumo/scripts/resume-shim-setup.sh" ]; then
 fi
 
 echo "Removing files..."
-rm -rf "$HOME/.claude-lumo" "$HOME/.claude/lumo"
+rm -rf "$S" "$HOME/.claude/lumo"
 rm -f "$HOME/.local/bin/claude-lumo" "$HOME/.npm-global/bin/claude-lumo" \
       "$APPDATA/npm/claude-lumo" "$APPDATA/npm/claude-lumo.cmd" 2>/dev/null || true
 
