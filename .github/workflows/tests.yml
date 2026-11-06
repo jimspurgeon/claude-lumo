@@ -80,9 +80,12 @@ jobs:
           set -euo pipefail
           SB="$RUNNER_TEMP/omp-sim"
           mkdir -p "$SB/home"
-          # One-liner flow: clone the repo at THIS commit, then run its script.
+          # Pin to the PR HEAD SHA, not github.sha: on pull_request events
+          # github.sha is the ephemeral merge ref, which GitHub garbage-collects
+          # once the head moves — breaking re-runs of old runs (exit 128:
+          # "unable to read tree"). The head SHA is immutable.
           git clone -q "https://github.com/${{ github.repository }}.git" "$SB/src"
-          git -C "$SB/src" checkout -q "${{ github.sha }}"
+          git -C "$SB/src" checkout -q "${{ github.event.pull_request.head.sha || github.sha }}"
           # Seed a deterministic master key: the gateway install would generate one,
           # but a known sentinel makes the leak check exact.
           export HOME="$SB/home"
