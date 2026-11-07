@@ -99,15 +99,22 @@ mkdir -p "$S" "$BIN"
 # root with no sudo binary; Fedora/Bazzite-family systems have dnf, not apt. So the
 # prerequisite steps below go through these three helpers instead of `sudo apt-get`.
 # as_root CMD ARGS: run as root — directly when we already are root, else sudo, else su.
+# su -c takes a single command STRING, not an argv, so every argument must be quoted for it:
+# `as_root dnf install -y 'pak<space>gage'` would otherwise break apart inside `su -c "$*"`.
+# Eval-free and safe for any byte except a single quote, which shellQuote doubles ('"'"').
 # Package-manager invocations are always run with stdin closed and (on the deb family)
 # DEBIAN_FRONTEND=noninteractive: this script's own stdin is the install script itself
 # when piped (`curl ... | bash`), and apt/debconf will happily read and discard it as
 # prompt input, silently truncating the script mid-run ("half an install, exit 0").
+# shellQuote WORD: WORD quoted for shells, with single quotes doubled POSIX-style ("'"'"'").
+shellQuote() {
+  printf "'%s'" "${1//\'/\'\"\'\"\'}"
+}
 as_root() {
   local run
   if [ "$(id -u)" = "0" ]; then run=("$@")
   elif command -v sudo >/dev/null 2>&1; then run=(sudo "$@")
-  else run=(su -c "$*"); fi
+  else run=(su -c "$(for _a in "$@"; do printf %s "$(shellQuote "$_a") "; done)"); fi
   DEBIAN_FRONTEND=noninteractive "${run[@]}" </dev/null
 }
 # PM: the first package manager found on PATH ("" when none).

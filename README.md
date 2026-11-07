@@ -94,6 +94,10 @@ Python 3.12+, Claude Code itself), then set up claude-lumo into `~/.claude/lumo`
 put the `claude-lumo` command on your PATH. They are idempotent: safe to re-run any
 time, keeping existing pieces and filling in missing ones.
 
+On Linux the installer auto-installs prerequisites through whichever package manager your
+distribution provides — apt, dnf, yum, pacman, zypper or apk — running as root directly, or
+via sudo/su when available.
+
 Then test it:
 
 ```bash

@@ -46,9 +46,14 @@ jobs:
     name: ${{ matrix.image }}
     steps:
       - name: Resolve ref to pinned SHA
+        env:
+          # Inputs reach the shell only through env, never ${{ }} inside run: — a crafted
+          # input value is then just a string, never an expression to be evaluated.
+          REF_INPUT: ${{ inputs.ref || 'master' }}
+          IMAGE_INPUT: ${{ matrix.image }}
         run: |
           set -euo pipefail
-          REF="${{ inputs.ref || 'master' }}"
+          REF="$REF_INPUT"
           git clone --quiet --filter=blob:none --no-checkout \
             "https://github.com/${{ github.repository }}.git" /tmp/src
           # A clone only creates local refs for the default branch; fetch the ref we want
@@ -56,7 +61,11 @@ jobs:
           git -C /tmp/src fetch --quiet --depth=1 origin "$REF"
           SHA="$(git -C /tmp/src rev-parse "FETCH_HEAD^{commit}")"
           echo "SHA=$SHA" >> "$GITHUB_ENV"
-          echo "SAFE_IMAGE=$(echo '${{ matrix.image }}' | tr -c 'a-zA-Z0-9.-' '-')" >> "$GITHUB_ENV"
+          # A docker reference is [host/]repo[:tag]; anything else fails the pull below
+          # anyway. Validate early so junk never reaches docker or the log name, where
+          # the sanitizer below keeps SAFE_IMAGE to safe filename characters.
+          case "$IMAGE_INPUT" in ""|*[!a-zA-Z0-9./:@_-]*) echo "bad image: $IMAGE_INPUT" >&2; exit 1;; esac
+          echo "SAFE_IMAGE=$(printf '%s' "$IMAGE_INPUT" | tr -c 'a-zA-Z0-9.-' '-')" >> "$GITHUB_ENV"
           echo "resolved $REF -> $SHA"
 
       - name: Install one-liner + smoke test (single container)
@@ -64,9 +73,10 @@ jobs:
         env:
           SHA: ${{ env.SHA }}
           PRESEED: ${{ inputs.preseed || 'true' }}
+          IMAGE_INPUT: ${{ matrix.image }}
         run: |
           set -euo pipefail
-          IMAGE="${{ matrix.image }}"
+          IMAGE="$IMAGE_INPUT"
           INSTALL_URL="https://raw.githubusercontent.com/${{ github.repository }}/$SHA/install.sh"
           LOGDIR="$(mktemp -d)"
           echo "LOGDIR=$LOGDIR" >> "$GITHUB_ENV"

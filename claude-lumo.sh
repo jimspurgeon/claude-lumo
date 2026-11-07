@@ -75,14 +75,30 @@ fi
 if ! up http://127.0.0.1:8790/v1/health; then
   start_proxy
 fi
-if ! up http://127.0.0.1:4000/health/liveliness; then
-  # Crash evidence must survive relaunch (#171, #173): rotate an oversized log, then append
-  # (start_litellm, either path). wc -c works on Git Bash, macOS and Linux alike (stat's
-  # size flag differs per platform).
-  if [ -f "$S/litellm.log" ] && [ "$(wc -c < "$S/litellm.log" | tr -d '[:space:]')" -gt 10485760 ]; then
-    mv -f "$S/litellm.log" "$S/litellm.log.1"
+# Two sessions starting at once must not both decide LiteLLM is down and both spawn it (#165):
+# the first launch through this gate owns the start; the loser waits for it, then re-checks
+# health instead of racing its own spawn. mkdir is atomic everywhere, so the loser knows it
+# lost at once. A wedge is healed: after the winner finishes or dies, the lock goes, so this
+# loop does not hang a third session forever.
+if ! up http://127.0.0.1:4000/health/liveliness && mkdir "$S/start.lock" 2>/dev/null; then
+  trap 'rmdir "$S/start.lock" 2>/dev/null' EXIT INT TERM
+  # Won the lock: re-check under it (the earlier "down" verdict may predate the winner's
+  # spawn), then start LiteLLM and wait for health ourselves.
+  if ! up http://127.0.0.1:4000/health/liveliness; then
+    # Crash evidence must survive relaunch (#171, #173): rotate an oversized log, then append
+    # (start_litellm, either path). wc -c works on Git Bash, macOS and Linux alike (stat's
+    # size flag differs per platform).
+    if [ -f "$S/litellm.log" ] && [ "$(wc -c < "$S/litellm.log" | tr -d '[:space:]')" -gt 10485760 ]; then
+      mv -f "$S/litellm.log" "$S/litellm.log.1"
+    fi
+    start_litellm
+    for i in $(seq 1 45); do up http://127.0.0.1:4000/health/liveliness && break; sleep 1; done
+    up http://127.0.0.1:4000/health/liveliness || { echo "claude-lumo: LiteLLM did not start, see $S/litellm.log" >&2; exit 1; }
   fi
-  start_litellm
+  rmdir "$S/start.lock" 2>/dev/null; trap - EXIT INT TERM
+elif ! up http://127.0.0.1:4000/health/liveliness; then
+  # Lost the lock: another launch is starting LiteLLM right now. Wait for its health verdict
+  # (up to its own 45s budget) instead of stacking a second litellm on the same port.
   for i in $(seq 1 45); do up http://127.0.0.1:4000/health/liveliness && break; sleep 1; done
   up http://127.0.0.1:4000/health/liveliness || { echo "claude-lumo: LiteLLM did not start, see $S/litellm.log" >&2; exit 1; }
 fi
