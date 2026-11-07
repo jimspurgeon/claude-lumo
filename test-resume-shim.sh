@@ -104,8 +104,12 @@ HOME="$TMP/home" bash scripts/resume-shim-setup.sh install >/dev/null
 HOME="$TMP/home" bash scripts/resume-shim-setup.sh uninstall >/dev/null
 cmp -s "$PROF" "$PROF.orig2";                                            check "setup: profile without trailing newline restored byte-identically" "$?"
 
-# --- PowerShell shim (skip quietly where PowerShell is unavailable) ---
-PS_BIN="$(command -v powershell.exe || command -v pwsh || true)"
+# --- PowerShell shim (Windows Git Bash only: the ps1 shim resolves claude via
+# Get-Command -CommandType Application, which cannot find the extensionless
+# shell-script stubs under Linux pwsh; ubuntu runners do ship pwsh) ---
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) PS_OS=1 ;; *) PS_OS="" ;; esac
+PS_BIN=""
+[ -n "$PS_OS" ] && PS_BIN="$(command -v powershell.exe || command -v pwsh || true)"
 if [ -n "$PS_BIN" ]; then
   ps_call() { # ps_call <args...>: dot-source the ps1 shim with stubs first on PATH
     local quoted="" a
