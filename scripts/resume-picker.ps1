@@ -45,6 +45,22 @@ function Invoke-PlainClaudeThenExit {
     exit $LASTEXITCODE
 }
 
+$separateDataPy = Join-Path $PSScriptRoot 'separate_data.py'
+
+# Test-TranscriptIsLumo <file>: record-level Lumo check (a record's own "model"/"message.model"
+# names a lumo-* model), not a raw substring a quoted "model":"lumo- in tool text would trip
+# (issues #26, #93). Falls back to the substring only when no python exists.
+function Test-TranscriptIsLumo([string]$path) {
+    foreach ($py in @('python', 'python3', 'py')) {
+        if (Get-Command $py -ErrorAction SilentlyContinue) {
+            & $py $separateDataPy is-lumo $path
+            return ($LASTEXITCODE -eq 0)
+        }
+    }
+    return [bool](Select-String -Path $path -SimpleMatch '"model":"lumo-' -List -Quiet)
+}
+
+
 $origArgs = @()
 if ($args) { $origArgs = @($args | ForEach-Object { [string]$_ }) }
 
@@ -68,7 +84,7 @@ foreach ($d in ($dirs | Select-Object -Unique)) {
     $items = Get-ChildItem -Path "$d\projects\*\*.jsonl" -File -ErrorAction SilentlyContinue
     foreach ($t in $items) {
         $eng = 'claude'
-        if (Select-String -Path $t.FullName -SimpleMatch '"model":"lumo-' -List -Quiet) { $eng = 'lumo' }
+        if (Test-TranscriptIsLumo $t.FullName) { $eng = 'lumo' }
         $rows += [pscustomobject]@{ Time = $t.LastWriteTime; Engine = $eng; Path = $t.FullName }
     }
 }

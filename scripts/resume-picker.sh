@@ -40,6 +40,22 @@ fmt_time() { # fmt_time <epoch> -> readable local time ('?' on failure)
         || printf '?'
 }
 
+_picker_py=""
+for _d in python python3 py; do
+    command -v "$_d" >/dev/null 2>&1 && { _picker_py="$_d"; break; }
+done
+_picker_sep="$(dirname "$0")/separate_data.py"
+
+# is_lumo_t <file>: record-level Lumo check (issues #26, #93 - a quoted "model":"lumo-
+# inside tool text must not count). Substring fallback only when no python exists.
+is_lumo_t() {
+    if [ -n "$_picker_py" ]; then
+        "$_picker_py" "$_picker_sep" is-lumo "$1"
+        return $?
+    fi
+    grep -qF '"model":"lumo-' "$1"
+}
+
 # Non-interactive (stdin redirected): behave exactly like the old shim - plain claude,
 # original args - so scripts and pipelines are never stalled on a menu.
 if [ ! -t 0 ] && [ "${RESUME_PICKER_FORCE_MENU:-}" != "1" ]; then
@@ -60,7 +76,7 @@ for d in "${dirs[@]}"; do
     for t in "$d"/projects/*/*.jsonl; do
         [ -f "$t" ] || continue
         eng="claude"
-        grep -m1 -qF '"model":"lumo-' "$t" 2>/dev/null && eng="lumo"
+        is_lumo_t "$t" && eng="lumo"
         rows+="$(mtime_of "$t")"$'\t'"$eng"$'\t'"$t"$'\n'
     done
 done
