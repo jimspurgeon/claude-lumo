@@ -150,5 +150,56 @@ class ListOrcaTerminals(unittest.TestCase):
             self.assertEqual(session_restart.list_orca_terminals("orca"), [])
 
 
+class ExplicitUtf8Kwargs(unittest.TestCase):
+    """All three subprocess.run callers must pin encoding=utf-8/errors=replace (#170).
+
+    The #167 regression test pinned the kwargs only on list_orca_terminals;
+    is_pid_alive's tasklist call and list_tmux_panes share the same Windows
+    cp1252 hazard, so a refactor dropping their kwargs would previously pass
+    unnoticed. The ListOrcaTerminals recording-fake pattern, parametrized.
+    """
+
+    # Bytes that break the Windows default decode: U+0090 (C2 90) and an é
+    # whose cp1252 round-trip would differ; guards the guard like PAYLOAD above.
+    PAYLOAD = "path-\u00e9-\u0090-chars".encode("utf-8")
+
+    def fake_run(self, seen):
+        def run(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen.update(kwargs)
+            class R:
+                returncode = 0
+                stdout = self.PAYLOAD.decode(kwargs.get("encoding") or "utf-8",
+                                             kwargs.get("errors") or "strict")
+            return R()
+        return run
+
+    def test_payload_really_breaks_the_windows_default(self):
+        with self.assertRaises(UnicodeDecodeError):
+            self.PAYLOAD.decode("cp1252")
+
+    def test_utf8_kwargs_are_passed_on_every_subprocess_call(self):
+        calls = [
+            ("list_orca_terminals", lambda: session_restart.list_orca_terminals("orca"),
+             ["orca", "terminal", "list", "--json"]),
+            ("list_tmux_panes", session_restart.list_tmux_panes,
+             ["tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_path}"]),
+        ]
+        # tasklist only exists on Windows (is_pid_alive probes with os.kill on POSIX).
+        if os.name == "nt":
+            calls.insert(0, (
+                "is_pid_alive", lambda: session_restart.is_pid_alive(4242),
+                ["tasklist", "/FI", "PID eq 4242", "/NH"]))
+        for name, call, expected_cmd in calls:
+            with self.subTest(caller=name):
+                seen = {}
+                with mock.patch.object(session_restart.subprocess, "run",
+                                       self.fake_run(seen)):
+                    call()
+                self.assertEqual(seen.get("encoding"), "utf-8", name)
+                self.assertEqual(seen.get("errors"), "replace", name)
+                self.assertEqual(seen["cmd"], expected_cmd, name)
+
+
 if __name__ == "__main__":
     unittest.main()

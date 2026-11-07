@@ -388,6 +388,40 @@ class TestInstallMode(unittest.TestCase):
                         "elevation gate must run before the key read")
 
 
+    def test_uninstall_mode_checks_winsw_exit_codes(self):
+        """-Uninstall checks & $exe exit codes for stop/uninstall (#196).
+
+        Same seam limitation as #192: -Uninstall talks to the live service
+        manager, so the failure paths cannot be driven offline; these prove
+        the checks are in the -Uninstall flow, next to the calls they guard.
+        """
+        with open(SCRIPT, encoding="utf-8") as f:
+            src = f.read()
+        # The -Uninstall block runs before the -Install block; isolate it so
+        # the counting below is about uninstall's own checks.
+        install_pos = src.index("# --- Install ---")
+        uninstall_src = src[:install_pos]
+        self.assertIn('& $exe stop 2>&1 | Write-Output', uninstall_src)
+        self.assertIn('& $exe uninstall 2>&1 | Write-Output', uninstall_src)
+        self.assertGreaterEqual(
+            uninstall_src.count("if ($LASTEXITCODE -ne 0) {"), 2)
+        self.assertIn("WinSW failed to stop service $id (exit code $LASTEXITCODE)", uninstall_src)
+        self.assertIn("WinSW failed to uninstall service $id (exit code $LASTEXITCODE)", uninstall_src)
+
+    def test_uninstall_mode_has_elevation_precheck_before_winsw(self):
+        """-Uninstall refuses to run unelevated before invoking WinSW (#196)."""
+        with open(SCRIPT, encoding="utf-8") as f:
+            src = f.read()
+        install_pos = src.index("# --- Install ---")
+        uninstall_src = src[:install_pos]
+        self.assertIn(
+            "[Security.Principal.WindowsBuiltInRole]::Administrator", uninstall_src)
+        self.assertIn("ABORT: this PowerShell is not elevated", uninstall_src)
+        gate_pos = uninstall_src.index("if (-not $elevated) {")
+        winsw_pos = uninstall_src.index("& $exe stop")
+        self.assertLess(gate_pos, winsw_pos,
+                        "elevation gate must run before the first WinSW call")
+
 @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
 class TestConnectCard(unittest.TestCase):
     """The "Connect any harness" card prints after a successful -Install (and in

@@ -51,6 +51,50 @@ jobs:
       - name: Resume shim tests
         run: bash test-resume-shim.sh
 
+  # Live LiteLLM interop for gateway/interop.test.mjs (#197): the main matrix
+  # legs install only pytest/pyyaml, so the interop suite self-skips there.
+  # This leg builds the same litellm venv install.sh creates (hash-locked
+  # requirements.txt) once and caches it, so steady-state runs pay only the
+  # node --test boot (~1 min); cold runs pay one pip install (~3 min).
+  # Ubuntu-only: one live leg proves the tolerances; LiteLLM's behaviour
+  # under test is platform-neutral. The test honours LUMO_LITELLM_VENV, so
+  # this workflow change is all it takes.
+  interop-live:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Restore litellm venv from cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.claude-lumo/litellm-venv
+          key: litellm-venv-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+      - name: Create litellm venv (cache miss only)
+        run: |
+          set -euo pipefail
+          VENV="$HOME/.claude-lumo/litellm-venv"
+          if [ -x "$VENV/bin/litellm" ]; then
+            echo "cached venv hit: $VENV"
+          else
+            python -m venv "$VENV"
+            "$VENV/bin/python" -m pip install -q --require-hashes -r requirements.txt
+          fi
+      # Step-level env values are literal (no ~ expansion), so export the
+      # absolute path here; findLitellm() joins it as-is.
+      - name: Live interop tests (boots real LiteLLM)
+        run: |
+          export LUMO_LITELLM_VENV="$HOME/.claude-lumo/litellm-venv"
+          node --test gateway/interop.test.mjs
+
+
   # Fresh-Linux acceptance for the omp one-command integration: scratch HOME, all four
   # stages, idempotent re-run, and the sentinel check that the master-key value never
   # appears in any captured output. The omp-config clone needs a private-repo token;
