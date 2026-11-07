@@ -7,7 +7,7 @@ themselves (for example Orca); its output is ignored.
 `--lumo` (passed by settings-lumo.json) marks a claude-lumo session even when CLAUDE_LUMO is not in
 the environment, as in a session Claude Code re-hosted after the agents view (#77, #66).
 """
-import json, os, re, subprocess, sys
+import json, os, re, shutil, subprocess, sys
 from datetime import datetime
 
 LUMO = "--lumo" in sys.argv[1:] or os.environ.get("CLAUDE_LUMO") == "1"
@@ -301,7 +301,11 @@ local = os.environ.get("CLAUDE_LUMO_LOCAL") or os.path.join(os.path.expanduser("
 nxt = os.path.join(local, "statusline-next.sh")
 if os.path.isfile(nxt):
     try:
-        subprocess.run(["bash", nxt], input=raw, capture_output=True, timeout=5)
+        # Resolve bash the way tests do (#95): plain "bash" would find the System32 WSL
+        # launcher first on Windows PATH (#91), which silently does nothing. shutil.which
+        # prefers a real bash; fall back to "bash" unchanged where that is fine.
+        bash = shutil.which("bash") or "bash"
+        subprocess.run([bash, nxt], input=raw, capture_output=True, timeout=5)
     except Exception:  # noqa: BLE001 - the status line must never fail because of the chained command
         pass
 

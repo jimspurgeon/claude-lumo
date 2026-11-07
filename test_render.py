@@ -248,6 +248,8 @@ class RehostedSessions(unittest.TestCase):
                      "Read(~/Library/Application Support/**/Cookies)",
                      "Read(~/Library/Application Support/**/cookies.sqlite)",
                      "Read(~/.mozilla/**/cookies.sqlite)",
+                     "Read(~/.var/app/*/.mozilla/**/cookies.sqlite)",
+                     "Read(~/Library/Cookies/*.binarycookies)",
                      "Read(~/.librewolf/**/cookies.sqlite)",
                      "Read(~/.config/**/Cookies)"):
             self.assertIn(rule, deny)
