@@ -46,6 +46,10 @@ jobs:
         run: python -m pytest -q
       - name: Proxy tests
         run: node --test gateway/*.test.mjs
+      # The shim suite covers both twins: bash everywhere, PowerShell only on
+      # Windows (the picker twins self-skip where powershell.exe/pwsh is absent).
+      - name: Resume shim tests
+        run: bash test-resume-shim.sh
 
   # Fresh-Linux acceptance for the omp one-command integration: scratch HOME, all four
   # stages, idempotent re-run, and the sentinel check that the master-key value never
