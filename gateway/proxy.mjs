@@ -13,7 +13,7 @@
 //   retried once, else the turn ends with a visible message (see tool-guard.mjs, issue #11).
 // - Adds the closest real text to failed Edit results, so the retry copies it (see edit-hints.mjs).
 import http from "node:http";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { readLumoCredentials } from "./creds.mjs";
 import { createUpstream } from "./upstream.mjs";
@@ -24,6 +24,7 @@ import { createContextFit } from "./context-fit.mjs";
 import { chatResponse, isWebSearchRequest, runLumoSearch, webSearchUnavailable } from "./websearch-guard.mjs";
 import { resolveStatePaths, makeHousekeeper } from "./maintenance.mjs";
 
+const UPSTREAM_BASE = process.env.LUMO_UPSTREAM_BASE || "https://lumo.proton.me/api/ai/v1";
 const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 // Logs and dumps live under the Lumo state dir, not the repo checkout (#134).
 // LUMO_PROXY_LOG overrides the log path so tests can redirect fatal-crash
@@ -53,7 +54,7 @@ const credsRef = { current: readLumoCredentials() }; // mutable: upstream() refr
 housekeep(); // at startup: rotate the log to a single .1 generation, cap the dumps
 log(`start port=${PORT} creds=${credsRef.current ? "ok" : "MISSING"} state=${STATE_DIR}`);
 
-const upstream = createUpstream({ credsRef, log }); // test seam: fetch/readCreds/sleep/timeouts injectable (see upstream.mjs)
+const upstream = createUpstream({ credsRef, log, upstreamBase: UPSTREAM_BASE });
 
 // Lumo can stream several parallel tool calls in one SSE chunk. LiteLLM's OpenAI->Anthropic
 // translation reads only one tool call per chunk and glues the rest onto it ({..}{..}), which
@@ -180,4 +181,15 @@ server.once("error", (e) => {
   }
   log(`fatal: ${e.message}`); process.exit(1);
 });
-server.listen(PORT, "127.0.0.1", () => log("listening"));
+
+// Exported for integration tests (#50): importing proxy.mjs in-process used to bind port
+// 8790 at import time, so nothing could test the HTTP handler directly. Tests import the
+// module with LUMO_PROXY_PORT pointing at an ephemeral free port and LUMO_TOKEN/LUMO_UID set
+// (creds then come from the env, no browser store is touched), point upstream at a stub via
+// LUMO_UPSTREAM_BASE, and call startServer(). When proxy.mjs is run as the real entry point
+// (node proxy.mjs, the launcher, the supervisor), the server starts exactly as before.
+export function startServer(port = PORT) {
+  return new Promise((resolve) => server.listen(port, "127.0.0.1", () => { log("listening"); resolve(server); }));
+}
+
+if (process.argv[1] && import.meta.filename === realpathSync(process.argv[1])) startServer();
