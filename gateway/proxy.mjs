@@ -25,6 +25,7 @@ import { chatResponse, isWebSearchRequest, runLumoSearch, webSearchUnavailable }
 import { resolveStatePaths, makeHousekeeper } from "./maintenance.mjs";
 
 const UPSTREAM_BASE = process.env.LUMO_UPSTREAM_BASE || "https://lumo.proton.me/api/ai/v1";
+const PORT = Number(process.env.LUMO_PROXY_PORT || 8790);
 // Logs and dumps live under the Lumo state dir, not the repo checkout (#134).
 // LUMO_PROXY_LOG overrides the log path so tests can redirect fatal-crash
 // logging to a temp file (#132).
