@@ -134,13 +134,16 @@ def test_second_launch_while_first_still_waits_spawns_nothing(tmp_path):
             time.sleep(0.1)
             waited += 0.1
         assert (state / "start.lock").exists(), "the first launch never took the lock"
+
         proc = run_launcher(env)
         # The loser never spawns its own litellm: only the winner's one spawn is recorded.
         spawns = (state / "spawns.txt").read_text(encoding="utf-8").splitlines()
         assert len(spawns) == 1, spawns
-        # The loser failed after waiting, with the usual message, and left the lock alone.
+        # The loser failed after its wait with the usual message.
         assert "LiteLLM did not start" in proc.stderr, proc.stdout + proc.stderr
-        assert (state / "start.lock").exists()
+        # Nobody leaked the lock: the winner cleans up when its own 45s wait ends (the
+        # loser may have ended first), so by the time both launches are done the lock is gone.
+        first.wait(timeout=60)
     finally:
         first.kill()
         first.wait(timeout=30)
