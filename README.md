@@ -80,13 +80,13 @@ setting `CLAUDE_LUMO_WATCHDOG=0`.
 Windows (PowerShell; no bash or Git needed first):
 
 ```powershell
-irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/install.ps1 | iex
 ```
 
 macOS / Linux (any terminal):
 
 ```bash
-curl -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.sh | bash
+curl -sL https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/install.sh | bash
 ```
 
 Both installers check for and auto-install any missing prerequisite (Git, Node.js 22+,
@@ -153,7 +153,7 @@ databases.
 Either clone the repo:
 
 ```bash
-git clone https://github.com/jimspurgeon/claude-lumo ~/.claude/lumo
+git clone https://github.com/jimspurgeon/lumo-gateway ~/.claude/lumo
 bash ~/.claude/lumo/lumo-gateway setup
 ```
 
@@ -173,13 +173,13 @@ One command installs everything: gateway, omp, the wiring, and your synced confi
 Windows (PowerShell; needs Git for Windows):
 
 ```powershell
-irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install-omp-full.ps1 | iex
+irm https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/install-omp-full.ps1 | iex
 ```
 
 macOS / Linux (any terminal):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install-omp-full.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/install-omp-full.sh | bash
 ```
 
 Each stage is idempotent and prints its progress: gateway setup, the official omp
@@ -545,12 +545,12 @@ usual.
 ## Uninstall
 
 ```bash
-curl -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/uninstall.sh | bash
+curl -sL https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/uninstall.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/uninstall.ps1 | iex
 ```
 
 Or run `bash uninstall.sh` / `powershell -File uninstall.ps1` from a clone. Both stop

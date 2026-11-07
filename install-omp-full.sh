@@ -2,9 +2,9 @@
 # install-omp-full.sh: one command, full stack — lumo gateway + omp + wiring + config sync.
 #
 # Linux/macOS one-liner:
-#   curl -fsSL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install-omp-full.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/install-omp-full.sh | bash
 # Windows PowerShell one-liner (wrapper downloads and runs this script under Git Bash):
-#   irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install-omp-full.ps1 | iex
+#   irm https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/install-omp-full.ps1 | iex
 #
 # Stages (each idempotent — re-running prints "already done" and moves on):
 #   1. Gateway:    lumo-gateway setup (checkout ~/.lumo-gateway, LiteLLM venv, master key,
@@ -36,7 +36,7 @@
 #                         stage self-skips with a clear message instead of failing.
 set -euo pipefail
 
-RAW_BASE="https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master"
+RAW_BASE="https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master"
 GATEWAY_BASE_URL="http://127.0.0.1:4000"
 OMP_INSTALL_URL="https://omp.sh/install"
 OMP_CONFIG_REPO="jimspurgeon/omp-config"

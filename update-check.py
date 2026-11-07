@@ -29,7 +29,7 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-REPO_URL = "https://github.com/jimspurgeon/claude-lumo.git"
+REPO_URL = "https://github.com/jimspurgeon/lumo-gateway.git"
 VERSION_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 TIMEOUT_SECONDS = 5
 

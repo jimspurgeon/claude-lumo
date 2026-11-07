@@ -23,7 +23,7 @@ esac
 case "$1" in
   -h|--help|help)
     cat <<'EOF'
-claude-lumo: Claude Code running on Proton Lumo (https://github.com/jimspurgeon/claude-lumo)
+claude-lumo: Claude Code running on Proton Lumo (https://github.com/jimspurgeon/lumo-gateway)
 
 Usage: claude-lumo [claude-arguments...]
 

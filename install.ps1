@@ -40,7 +40,7 @@ if ($localSh -and (Test-Path $localSh)) {
   & $gitExe -lc '"$0" "$@"' $localSh "$args"
 } else {
   # Bootstrap the latest install.sh from GitHub (forward any args, e.g. --separate-data)
-  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install.sh | & $gitExe -s -- "$args"
+  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/install.sh | & $gitExe -s -- "$args"
 }
 
 Write-Host ''

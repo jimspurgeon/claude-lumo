@@ -127,7 +127,7 @@ def load_config(path):
 
     Shape:
         [[repos]]
-        repo = "jimspurgeon/claude-lumo"   # owner/name
+        repo = "jimspurgeon/lumo-gateway"   # owner/name
         branch = "master"                  # optional
         path = "C:/Users/Jim/orca/claude-lumo"  # local clone for worktrees
 

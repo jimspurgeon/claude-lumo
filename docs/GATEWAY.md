@@ -395,7 +395,7 @@ root and is put on PATH by `install.sh` (both modes). Gateway-only machines — 
 that serve other harnesses and never run Claude Code — install it with:
 
 ```bash
-git clone https://github.com/jimspurgeon/claude-lumo ~/.lumo-gateway
+git clone https://github.com/jimspurgeon/lumo-gateway ~/.lumo-gateway
 bash ~/.lumo-gateway/install.sh --gateway-only
 ```
 

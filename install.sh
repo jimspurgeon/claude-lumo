@@ -31,7 +31,7 @@ for _arg in "$@"; do
   esac
 done
 
-REPO_URL="https://github.com/jimspurgeon/claude-lumo"
+REPO_URL="https://github.com/jimspurgeon/lumo-gateway"
 D="$HOME/.claude/lumo"; S="${CLAUDE_LUMO_STATE_DIR:-$HOME/.claude-lumo}"; VENV="$S/litellm-venv"
 
 PY="python"

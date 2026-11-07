@@ -1,7 +1,7 @@
 # install-omp-full.ps1: Windows one-liner wrapper for install-omp-full.sh.
 #
 # PowerShell one-liner:
-#   irm https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/install-omp-full.ps1 | iex
+#   irm https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/install-omp-full.ps1 | iex
 #
 # Requirements: PowerShell + Git for Windows (Git Bash). Downloads the bash script from
 # this repo and runs it under Git Bash. Both URLs are printed before anything is executed.
@@ -9,7 +9,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$rawBase = 'https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master'
+$rawBase = 'https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master'
 $bashScriptUrl = "$rawBase/install-omp-full.sh"
 
 Write-Host '=== omp + lumo-gateway full install (Windows wrapper) ==='

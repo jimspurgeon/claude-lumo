@@ -32,7 +32,7 @@ $localSh = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'uninstall.sh' } else { 
 if ($localSh -and (Test-Path $localSh)) {
   & $gitExe -lc '"$0" "$@"' $localSh "$args"
 } else {
-  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/claude-lumo/master/uninstall.sh | & $gitExe -
+  curl.exe -sL https://raw.githubusercontent.com/jimspurgeon/lumo-gateway/master/uninstall.sh | & $gitExe -
 }
 
 Write-Host ''
