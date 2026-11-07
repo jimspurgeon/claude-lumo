@@ -15,7 +15,22 @@
 
 # Resolve the picker helper next to this shim (~/.claude/lumo is a junction to the repo, so
 # dot-sourcing ~/.claude/lumo/scripts/resume-shim.ps1 finds the repo's picker after updates).
+$separateDataPy = Join-Path $PSScriptRoot 'separate_data.py'
 $resumePickerPs1 = Join-Path $PSScriptRoot 'resume-picker.ps1'
+
+# Test-TranscriptIsLumo <file>: record-level Lumo check (a record's own "model"/"message.model"
+# names a lumo-* model), not a raw substring a quoted "model":"lumo- in tool text would trip
+# (issues #26, #93). Falls back to the substring only when no python exists.
+function Test-TranscriptIsLumo([string]$path) {
+    foreach ($py in @('python', 'python3', 'py')) {
+        if (Get-Command $py -ErrorAction SilentlyContinue) {
+            & $py $separateDataPy is-lumo $path
+            return ($LASTEXITCODE -eq 0)
+        }
+    }
+    return [bool](Select-String -Path $path -SimpleMatch '"model":"lumo-' -List -Quiet)
+}
+
 
 function claude {
     $id = $null
@@ -64,7 +79,7 @@ function claude {
         if ($env:CLAUDE_CONFIG_DIR) { $dirs = @($env:CLAUDE_CONFIG_DIR) + $dirs }
         foreach ($d in ($dirs | Select-Object -Unique)) {
             $t = Get-ChildItem -Path "$d\projects\*\$id.jsonl" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($t -and (Select-String -Path $t.FullName -SimpleMatch '"model":"lumo-' -List -Quiet)) {
+            if ($t -and (Test-TranscriptIsLumo $t.FullName)) {
                 & claude-lumo @args
                 return
             }

@@ -5,9 +5,11 @@
     python separate_data.py migrate [--dry-run] [--yes]
     python separate_data.py revert-migrate [--dry-run] [--yes]
     python separate_data.py status [--config-dir PATH] [--shared PATH]
+    python separate_data.py is-lumo <transcript.jsonl>
 
-Builds a separate data store in ~/.claude-lumo/data, linked from ~/.claude for shared config.
-Migrates Lumo sessions (transcripts with "model":"lumo-") between stores.
+Migrates Lumo sessions (transcripts with "model":"lumo-") between stores; `is-lumo` runs the
+record-level Lumo check (line_has_lumo_model) on one transcript, exit 0 for a Lumo session,
+and is used by the resume shims (issues #26, #93).
 All operations are idempotent and safe to re-run; they never touch non-Lumo sessions.
 """
 import argparse
@@ -183,6 +185,20 @@ def line_has_lumo_model(line):
     message = record.get("message")
     models = [record.get("model"), message.get("model") if isinstance(message, dict) else None]
     return any(isinstance(m, str) and m.startswith("lumo-") for m in models)
+
+def transcript_is_lumo(path):
+    """True when at least one record of one transcript names a lumo-* model itself (its own
+    "model" or "message.model"), not merely quotes the string (issues #26, #93). Exposed as
+    `python separate_data.py is-lumo <file>` for the resume shims; the substring prefilter
+    keeps pure-Claude transcripts cheap, exactly as in find_lumo_sessions."""
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if '"model":"lumo-' in line and line_has_lumo_model(line):
+                    return True
+    except OSError:
+        pass
+    return False
 
 
 def find_session_dirs(project_dir, session_id):
@@ -495,11 +511,15 @@ def main():
     rev_p = sub.add_parser("revert-migrate", help="Move sessions back to the shared store")
     add_common(rev_p)
     rev_p.add_argument("--dry-run", action="store_true")
-    rev_p.add_argument("--yes", action="store_true")
+
+    iso_p = sub.add_parser("is-lumo", help="Record-level Lumo check for one transcript (resume shims)")
+    iso_p.add_argument("transcript", help="Path to a session .jsonl transcript")
 
     args = parser.parse_args()
-    shared, config_dir = Path(args.shared), Path(args.config_dir)
+    if args.command == "is-lumo":
+        sys.exit(0 if transcript_is_lumo(args.transcript) else 1)
 
+    shared, config_dir = Path(args.shared), Path(args.config_dir)
     if args.command == "setup":
         setup_links(shared, config_dir)
     elif args.command == "migrate":

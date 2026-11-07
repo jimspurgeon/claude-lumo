@@ -28,6 +28,22 @@ case $ZSH_VERSION in
     *) _resume_self="${(%):-%x}" ;;
 esac
 _resume_picker_sh="$(dirname "$_resume_self")/resume-picker.sh"
+_resume_py=""
+for _d in python python3 py; do
+    command -v "$_d" >/dev/null 2>&1 && { _resume_py="$_d"; break; }
+done
+_resume_sep="$(dirname "$_resume_self")/separate_data.py"
+
+# _resume_is_lumo <transcript>: record-level check (a record's own "model"/"message.model"
+# names a lumo-* model), not a raw substring that a quoted "model":"lumo- in tool text would
+# trip (issues #26, #93). Falls back to the substring only when no python exists at all.
+_resume_is_lumo() {
+    if [ -n "$_resume_py" ]; then
+        "$_resume_py" "$_resume_sep" is-lumo "$1"
+        return $?
+    fi
+    grep -qF '"model":"lumo-' "$1"
+}
 
 claude() {
     local id="" bare=0 t d
@@ -70,7 +86,7 @@ claude() {
         for d in "${dirs[@]}"; do
             for t in "$d"/projects/*/"$id.jsonl"; do
                 [ -f "$t" ] || continue
-                if grep -qF '"model":"lumo-' "$t" 2>/dev/null; then
+                if _resume_is_lumo "$t"; then
                     command claude-lumo "$@"
                     return $?
                 fi

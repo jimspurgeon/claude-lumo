@@ -29,6 +29,10 @@ LUMO_ID="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 REG_ID="b2c3d4e5-f6a7-8901-bcde-f12345678901"
 printf '{"type":"assistant","message":{"content":"hi"}}\n{"model":"lumo-max"}\n' > "$TMP/config/projects/test/$LUMO_ID.jsonl"
 printf '{"type":"assistant","message":{"content":"hi"}}\n{"model":"claude-sonnet-5-5"}\n' > "$TMP/config/projects/test/$REG_ID.jsonl"
+# A plain transcript that merely QUOTES "model":"lumo- inside tool text: the record-level
+# check (#26, #93, same fix as #29) must not reroute it to claude-lumo.
+FAKE_ID="c3d4e5f6-a7b8-9012-cdef-234567890123"
+printf '{"type":"assistant","model":"claude-sonnet-5-5","message":{"role":"assistant"}}\n{"type":"user","message":{"content":"saw literal \\"model\\":\\"lumo-\\" in a file"}}\n' > "$TMP/config/projects/test/$FAKE_ID.jsonl"
 
 export CLAUDE_CONFIG_DIR="$TMP/config"
 
@@ -46,6 +50,9 @@ out="$(run_sh --version)";                                               check "
 out="$(run_sh -p "say hi" --flags "kept intact")";                       check "bash: no resume -> real claude, args intact" "$([ "$out" = "STUB claude -p say hi --flags kept intact" ]; echo $?)"
 run_sh --boom >/dev/null 2>&1;                                           check "bash: exit code preserved (7)" "$([ $? = 7 ]; echo $?)"
 out="$(CLAUDE_CONFIG_DIR= PATH="$TMP/bin:$PATH" bash -c '. scripts/resume-shim.sh; claude --resume "$1"' _ "$LUMO_ID")"; check "bash: id not in any store -> real claude" "$([ "${out#STUB claude --resume $LUMO_ID}" != "$out" ]; echo $?)"
+
+out="$(run_sh --resume "$FAKE_ID")";                                      check "bash: quoted lumo substring -> real claude" "$([ "${out#STUB claude --resume $FAKE_ID}" != "$out" ]; echo $?)"
+touch -d '2026-11-03 09:00' "$TMP/config/projects/test/$FAKE_ID.jsonl"
 
 # --- Bare `claude -r` (no id): resume-picker helper (bash) ---
 # The Bash shim runs "bash <repo>/scripts/resume-picker.sh" from the real repo checkout, and the

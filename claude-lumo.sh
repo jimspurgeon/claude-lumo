@@ -150,6 +150,11 @@ fi
 # and it is never missing. The key comes only from apiKeyHelper: a token in the environment
 # wins over it and makes Claude Code warn that both are set (#86), and an inherited one would send
 # the wrong credential to LiteLLM, so both variables are cleared.
+# Reverse risk of #77 (a plain session re-hosted under a daemon that a LUMO session started
+# would inherit Lumo routing env): contained because plain `claude` runs carry their own
+# --settings (or none) and Claude Code does not re-launch foreign sessions as bare children
+# of the lumo session's process; the exports below are identical to the settings env block,
+# so even a worst-case inheritance only re-states values that --settings would set anyway.
 unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
 # The release this session starts on: the status line asks for a restart once the install moves
 # past it (#35). A re-hosted session loses it and simply shows no hint.
