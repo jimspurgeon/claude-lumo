@@ -42,12 +42,13 @@ def live_project(tmp_path):
 def test_project_with_active_session_falls_back_to_old_sessions(live_project):
     """When a project has an active session, fall back to old sessions plan."""
     cfg, _ = live_project
-    plan = wipe.plan_for_named_project(str(cfg), "proj", False, 7, 1)
-    assert plan is not None
-    assert plan["partial"] is True
-    assert set(plan["sessions"]) == {"old-own", "old-script"}
-    assert any("active session present" in r for r in plan["reasons"])
-    assert "selected by project" in plan["reasons"]
+    plans = wipe.plan_for_named_project(str(cfg), "proj", False, 7, 1)
+    assert plans
+    assert all(p["partial"] is True for p in plans)
+    assert {s for p in plans for s in p["sessions"]} == {"old-own", "old-script"}
+    for p in plans:
+        assert any("active session present" in r for r in p["reasons"])
+        assert "selected by project" in p["reasons"]
 
 
 def test_project_fallback_refuses_when_no_old_sessions(tmp_path):
@@ -73,19 +74,19 @@ def test_project_env_lock_also_falls_back(tmp_path):
     (lock_dir / ".lock").touch()
     # Old session sibling
     add_session(cfg, "proj", "old-sibling", cwd, 10)
-    plan = wipe.plan_for_named_project(str(cfg), "proj", False, 7, 1)
-    assert plan is not None
-    assert plan["partial"] is True
-    assert set(plan["sessions"]) == {"old-sibling"}
+    plans = wipe.plan_for_named_project(str(cfg), "proj", False, 7, 1)
+    assert plans
+    assert all(p["partial"] is True for p in plans)
+    assert {s for p in plans for s in p["sessions"]} == {"old-sibling"}
 
 
 def test_explicit_thresholds_restrict_plain_project_wipe(live_project):
     """Explicit thresholds restrict a plain --project wipe."""
     cfg, _ = live_project
     # new-own is age 3 >= 2, so it qualifies; live/new-script excluded
-    plan = wipe.plan_for_named_project(
+    plans = wipe.plan_for_named_project(
         str(cfg), "proj", False, session_days=2, automation_days=1, restrict_to_thresholds=True)
-    assert set(plan["sessions"]) == {"old-own", "new-own", "old-script"}
+    assert {s for p in plans for s in p["sessions"]} == {"old-own", "new-own", "old-script"}
 
 
 def test_default_thresholds_keep_whole_project_behavior(tmp_path):
@@ -101,10 +102,10 @@ def test_default_thresholds_keep_whole_project_behavior(tmp_path):
         "s4": add_session(cfg, "proj", "s4", cwd, 40),
         "s5": add_session(cfg, "proj", "s5", cwd, 40),
     }
-    plan = wipe.plan_for_named_project(str(cfg), "proj", False)
-    assert plan is not None
-    assert not plan.get("partial")
-    assert set(plan["sessions"]) == {"s1", "s2", "s3", "s4", "s5"}
+    plans = wipe.plan_for_named_project(str(cfg), "proj", False)
+    assert len(plans) == 1
+    assert not plans[0].get("partial")
+    assert set(plans[0]["sessions"]) == {"s1", "s2", "s3", "s4", "s5"}
 
 
 def test_session_skip_active_flag(tmp_path, capsys):
