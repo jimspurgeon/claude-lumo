@@ -11,8 +11,10 @@ check() { # check <label> <condition-result>
   if [ "$2" = "0" ]; then echo "PASS: $1"; else echo "FAIL: $1"; FAILURES=$((FAILURES + 1)); fi
 }
 
-# Base the temp dir on $TEMP so it is a real Windows path PowerShell can also read.
-TMP="$(mktemp -d "${TEMP}/resume-shim-test.XXXXXX")"
+# Base the temp dir on $TEMP when set (Windows Git Bash: a real Windows path PowerShell
+# can also read); fall back to mktemp's default elsewhere (ubuntu runners have no $TEMP).
+TMP="${TEMP:+$(mktemp -d "${TEMP}/resume-shim-test.XXXXXX")}"
+TMP="${TMP:-$(mktemp -d -t resume-shim-test.XXXXXX)}"
 trap 'rm -rf "$TMP"' EXIT
 
 # --- Stubs: echo which launcher ran and the args; exit 7 when asked to fail ---
