@@ -18,7 +18,9 @@
 #                 manager if something already listens on :4000 or :8790, so
 #                 it can never fight a live gateway.
 #   -Uninstall    Stop and remove both services; an absent service is
-#                 reported and skipped. Also needs elevation.
+#                 reported and skipped. Also needs elevation, and refuses
+#                 to run otherwise; a WinSW failure aborts with a non-zero
+#                 exit instead of a false "Done" (#196).
 #   (no mode)     The old offline generator (#132): print the configs and the
 #                 manual commands, install nothing. -WriteConfigs writes the
 #                 XMLs to a directory; -Tool nssm prints the NSSM commands.
@@ -198,6 +200,24 @@ function Show-ConnectCard {
 
 # --- Uninstall -----------------------------------------------------------------
 if ($Uninstall) {
+    # Elevation pre-check, mirroring -Install (#192): stopping and removing
+    # services talks to the Windows service manager, which an unelevated
+    # shell cannot do. Refuse before WinSW is invoked so an unelevated run
+    # never prints a false "Done" (#196). Skipped in test mode, which
+    # removes nothing.
+    if (-not $TestMode) {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        $elevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if (-not $elevated) {
+            Write-Output "ABORT: this PowerShell is not elevated."
+            Write-Output "Re-run -Uninstall from an elevated PowerShell (Run as administrator)."
+            exit 1
+        }
+    }
+    # WinSW is a native exe, so & $exe sets $LASTEXITCODE; check it after
+    # every call and bail out on the first failure rather than printing a
+    # false "Done" (#196).
     foreach ($id in $SvcIds) {
         $exe = Join-Path $ServicesRoot "$id\WinSW.exe"
         if (-not (Test-Path $exe)) {
@@ -205,9 +225,19 @@ if ($Uninstall) {
             continue
         }
         Write-Output "Stopping service $id ..."
-        & $exe stop
+        & $exe stop 2>&1 | Write-Output
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "ABORT: WinSW failed to stop service $id (exit code $LASTEXITCODE)."
+            Write-Output "Stop it via services.msc, then re-run -Uninstall."
+            exit 1
+        }
         Write-Output "Removing service $id ..."
-        & $exe uninstall
+        & $exe uninstall 2>&1 | Write-Output
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "ABORT: WinSW failed to uninstall service $id (exit code $LASTEXITCODE)."
+            Write-Output "Check the service's state in services.msc, then re-run -Uninstall."
+            exit 1
+        }
     }
     Write-Output "Done. The $ServicesRoot tree and the state dir remain; delete them manually if wanted."
     exit 0
