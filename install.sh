@@ -110,11 +110,19 @@ mkdir -p "$S" "$BIN"
 shellQuote() {
   printf "'%s'" "${1//\'/\'\"\'\"\'}"
 }
+# suCommand ARGS...: the single command string `su -c` needs to run ARGS as root. su -c takes
+# one string, not an argv, so every argument must be shell-quoted or spaces/quotes/metachars
+# in an argument would break apart (#163). Extracted so tests can exercise the quoting alone.
+suCommand() {
+  local _out=""
+  for _a in "$@"; do _out="$_out$(shellQuote "$_a") "; done
+  printf '%s' "$_out"
+}
 as_root() {
   local run
   if [ "$(id -u)" = "0" ]; then run=("$@")
   elif command -v sudo >/dev/null 2>&1; then run=(sudo "$@")
-  else run=(su -c "$(for _a in "$@"; do printf %s "$(shellQuote "$_a") "; done)"); fi
+  else run=(su -c "$(suCommand "$@")"); fi
   DEBIAN_FRONTEND=noninteractive "${run[@]}" </dev/null
 }
 # PM: the first package manager found on PATH ("" when none).
