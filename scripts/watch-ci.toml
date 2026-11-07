@@ -3,7 +3,7 @@
 # Format: TOML (stdlib tomllib parses it; zero dependencies).
 
 [[repos]]
-repo = "jimspurgeon/claude-lumo"
+repo = "jimspurgeon/lumo-gateway"
 branch = "master"                          # optional: only watch this branch
 path = "C:/Users/Jim/orca/claude-lumo"     # local clone, used to create fix worktrees
 
